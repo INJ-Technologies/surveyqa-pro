@@ -60,6 +60,7 @@ app.get('/api', (req, res) => {
 
 // ─── Mount routes ─────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
+app.use('/api/projects', projectRoutes);
 
 // ─── 404 handler ─────────────────────────────────────────────────────────────
 app.use('/api/*', (req, res) => {
