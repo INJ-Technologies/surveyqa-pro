@@ -33,10 +33,11 @@ export default function Layout({ children, title }) {
         {/* Logo */}
         <div style={s.logo}>
           {open && (
-            <div>
-              <div style={s.logoTitle}>SurveyQA</div>
-              <div style={s.logoPro}>PRO</div>
-            </div>
+            <img
+              src="/logo.png"
+              alt="INJ Technologies"
+              style={s.logoImg}
+            />
           )}
           <button style={s.toggleBtn} onClick={() => setOpen(!open)}>
             {open ? <X size={18} /> : <Menu size={18} />}
