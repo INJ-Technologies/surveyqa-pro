@@ -1,0 +1,12 @@
+{
+  "name": "surveyqa-workers",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "bullmq": "^4.14.0",
+    "ioredis": "^5.3.2"
+  }
+}
