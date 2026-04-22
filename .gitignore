@@ -10,4 +10,3 @@ github_ssh_key.pub
 *.pem
 *.key
 *.crt
-*.pfx
