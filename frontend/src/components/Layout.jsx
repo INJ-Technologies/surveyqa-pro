@@ -113,7 +113,7 @@ const s = {
   shell:       { display: 'flex', height: '100vh', overflow: 'hidden', background: '#f0f4f8' },
   sidebar:     { background: '#1e3a5f', color: 'white', display: 'flex', flexDirection: 'column', transition: 'width 0.2s ease', overflow: 'hidden', flexShrink: 0 },
   logo:    { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)', minHeight: 70 },
-  logoImg: { height: 38, maxWidth: 150, objectFit: 'contain' },
+  logoImg: { height: 50, maxWidth: 150, objectFit: 'contain' },
   logoTitle:   { fontSize: '1.2rem', fontWeight: 700, color: 'white', whiteSpace: 'nowrap' },
   logoPro:     { fontSize: '0.6rem', fontWeight: 700, color: '#60A5FA', letterSpacing: 3, marginTop: 2 },
   toggleBtn:   { background: 'rgba(255,255,255,0.1)', border: 'none', color: 'white', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', display: 'flex', alignItems: 'center' },
