@@ -6,6 +6,13 @@ import {
   Clock, Users, Activity, AlertCircle
 } from 'lucide-react'
 
+// ─── Format option labels ─────────────────────────────────────────────────────
+const formatLabel = (str) =>
+  str
+    .split('_')
+    .map(word => word.toUpperCase() === 'AI' ? 'AI' : word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+
 // ─── Status badge ─────────────────────────────────────────────────────────────
 const STATUS_COLORS = {
   draft:     { bg: '#f1f5f9', text: '#64748b' },
@@ -26,10 +33,10 @@ function StatusBadge({ status }) {
 }
 
 // ─── Platform options ─────────────────────────────────────────────────────────
-const PLATFORMS = ['decipher', 'qualtrics', 'confirmit', 'alchemer', 'surveymonkey', 'custom', 'unknown']
+const PLATFORMS = ['decipher', 'qualtrics', 'confirmit', 'alchemer', 'survey_monkey', 'custom', 'unknown']
 const AI_MODES   = ['ai', 'human', 'predefined']
 const STRATEGIES = ['persona_true', 'quota_guided', 'stress_test']
-const PROVIDERS  = ['brightdata', 'oxylabs', 'smartproxy', 'iproyal', 'custom']
+const PROVIDERS  = ['bright_data', 'oxylabs', 'smartproxy', 'iproyal', 'custom']
 
 // ─── Create Project Modal ─────────────────────────────────────────────────────
 function CreateModal({ onClose, onCreated }) {
@@ -137,7 +144,7 @@ function CreateModal({ onClose, onCreated }) {
 
               <div style={s.field}>
                 <label style={s.label}>Reference ID</label>
-                <input style={s.input} placeholder="PRJ-2025-001"
+                <input style={s.input} placeholder="INJXXX0000"
                   value={form.referenceId} onChange={set('referenceId')} />
               </div>
 
@@ -150,7 +157,7 @@ function CreateModal({ onClose, onCreated }) {
               <div style={s.field}>
                 <label style={s.label}>Survey Platform</label>
                 <select style={s.input} value={form.surveyPlatform} onChange={set('surveyPlatform')}>
-                  {PLATFORMS.map(p => <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>)}
+                  {PLATFORMS.map(p =>  <option key={p} value={p}>{formatLabel(p)}</option>)}
                 </select>
               </div>
 
@@ -242,25 +249,25 @@ function CreateModal({ onClose, onCreated }) {
                 <div style={s.field}>
                   <label style={s.label}>Open-End Mode</label>
                   <select style={s.input} value={form.aiModeOpenend} onChange={set('aiModeOpenend')}>
-                    {AI_MODES.map(m => <option key={m} value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>)}
+                    {AI_MODES.map(m => <option key={m} value={m}>{formatLabel(m)}</option>)}
                   </select>
                 </div>
                 <div style={s.field}>
                   <label style={s.label}>Image Question Mode</label>
                   <select style={s.input} value={form.aiModeImage} onChange={set('aiModeImage')}>
-                    {AI_MODES.map(m => <option key={m} value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>)}
+                    {AI_MODES.map(m => <option key={m} value={m}>{formatLabel(m)}</option>)}
                   </select>
                 </div>
                 <div style={s.field}>
                   <label style={s.label}>AI Strategy</label>
                   <select style={s.input} value={form.aiStrategy} onChange={set('aiStrategy')}>
-                    {STRATEGIES.map(m => <option key={m} value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>)}
+                    {STRATEGIES.map(m => <option key={m} value={m}>{formatLabel(m)}</option>)}
                   </select>
                 </div>
                 <div style={s.field}>
                   <label style={s.label}>Proxy Provider</label>
                   <select style={s.input} value={form.proxyProvider} onChange={set('proxyProvider')}>
-                    {PROVIDERS.map(m => <option key={m} value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>)}
+                    {PROVIDERS.map(m =>  <option key={m} value={m}>{formatLabel(m)}</option>)}
                   </select>
                 </div>
                 <div style={s.field}>
