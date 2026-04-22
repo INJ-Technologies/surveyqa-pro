@@ -11,11 +11,11 @@ export default function Dashboard() {
 useEffect(() => {
   api.get('/projects/stats')
     .then(res => {
-      const d = res.data.stats
+      const d = res.data?.stats || {}
       setStats({
-        projects:  parseInt(d.total_projects)   || 0,
-        personas:  parseInt(d.total_personas)   || 0,
-        sessions:  parseInt(d.total_sessions)   || 0,
+        projects:  parseInt(d.total_projects)    || 0,
+        personas:  parseInt(d.total_personas)    || 0,
+        sessions:  parseInt(d.total_sessions)    || 0,
         completed: parseInt(d.completed_sessions)|| 0,
       })
     })
