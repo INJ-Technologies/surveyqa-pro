@@ -1,9 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Layout from "../components/Layout";
 import api from "../api";
 import {
-  Select,
-  Input,
   Textarea,
   NumberInput,
   FormGrid,
@@ -22,111 +20,121 @@ import {
   Search,
   ChevronUp,
   ChevronDown,
+  Pencil,
+  Copy,
 } from "lucide-react";
 
 const FONT =
   "'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 
 // ─── Options ──────────────────────────────────────────────────────────────────
-const GENDER_OPTIONS = [
-  { value: "male", label: "Male" },
-  { value: "female", label: "Female" },
-  { value: "non_binary", label: "Non-Binary" },
-  { value: "any", label: "Any" },
+const GENDER_LIST = ["Male", "Female", "Non-Binary", "Any"];
+const COUNTRY_LIST = [
+  "🇮🇳 India",
+  "🇺🇸 United States",
+  "🇬🇧 United Kingdom",
+  "🇦🇺 Australia",
+  "🇨🇦 Canada",
+  "🇩🇪 Germany",
+  "🇫🇷 France",
+  "🇸🇬 Singapore",
+  "🇦🇪 UAE",
+  "🇯🇵 Japan",
+  "🇧🇷 Brazil",
+  "🇲🇽 Mexico",
+  "🇿🇦 South Africa",
+  "🇳🇬 Nigeria",
+  "🇮🇩 Indonesia",
+  "🇵🇭 Philippines",
+  "🇲🇾 Malaysia",
+  "🇹🇭 Thailand",
+  "🇻🇳 Vietnam",
+  "🇰🇷 South Korea",
+  "🇨🇳 China",
 ];
-
-const COUNTRY_OPTIONS = [
-  { value: "IN", label: "🇮🇳 India" },
-  { value: "US", label: "🇺🇸 United States" },
-  { value: "GB", label: "🇬🇧 United Kingdom" },
-  { value: "AU", label: "🇦🇺 Australia" },
-  { value: "CA", label: "🇨🇦 Canada" },
-  { value: "DE", label: "🇩🇪 Germany" },
-  { value: "FR", label: "🇫🇷 France" },
-  { value: "SG", label: "🇸🇬 Singapore" },
-  { value: "AE", label: "🇦🇪 UAE" },
-  { value: "JP", label: "🇯🇵 Japan" },
-  { value: "BR", label: "🇧🇷 Brazil" },
-  { value: "MX", label: "🇲🇽 Mexico" },
-  { value: "ZA", label: "🇿🇦 South Africa" },
-  { value: "NG", label: "🇳🇬 Nigeria" },
-  { value: "ID", label: "🇮🇩 Indonesia" },
-  { value: "PH", label: "🇵🇭 Philippines" },
-  { value: "MY", label: "🇲🇾 Malaysia" },
-  { value: "TH", label: "🇹🇭 Thailand" },
-  { value: "VN", label: "🇻🇳 Vietnam" },
-  { value: "KR", label: "🇰🇷 South Korea" },
-  { value: "CN", label: "🇨🇳 China" },
+const LANGUAGE_LIST = [
+  "English",
+  "Hindi",
+  "German",
+  "French",
+  "Spanish",
+  "Portuguese",
+  "Arabic",
+  "Japanese",
+  "Chinese",
+  "Korean",
+  "Indonesian",
+  "Malay",
+  "Tamil",
+  "Telugu",
+  "Marathi",
 ];
-
-const LANGUAGE_OPTIONS = [
-  { value: "en", label: "English" },
-  { value: "hi", label: "Hindi" },
-  { value: "de", label: "German" },
-  { value: "fr", label: "French" },
-  { value: "es", label: "Spanish" },
-  { value: "pt", label: "Portuguese" },
-  { value: "ar", label: "Arabic" },
-  { value: "ja", label: "Japanese" },
-  { value: "zh", label: "Chinese" },
-  { value: "ko", label: "Korean" },
-  { value: "id", label: "Indonesian" },
-  { value: "ms", label: "Malay" },
+const DEPARTMENT_LIST = [
+  "IT / Technology",
+  "Finance / Accounting",
+  "HR / People",
+  "Marketing",
+  "Sales / Business Dev",
+  "Operations",
+  "Procurement / Sourcing",
+  "Legal / Compliance",
+  "C-Suite / Executive",
+  "Product / Design",
+  "Engineering / R&D",
+  "Customer Success",
+  "Other",
 ];
-
-const DEPARTMENT_OPTIONS = [
-  { value: "IT", label: "IT / Technology" },
-  { value: "Finance", label: "Finance / Accounting" },
-  { value: "HR", label: "HR / People" },
-  { value: "Marketing", label: "Marketing" },
-  { value: "Sales", label: "Sales / Business Dev" },
-  { value: "Operations", label: "Operations" },
-  { value: "Procurement", label: "Procurement / Sourcing" },
-  { value: "Legal", label: "Legal / Compliance" },
-  { value: "C-Suite", label: "C-Suite / Executive" },
-  { value: "Product", label: "Product / Design" },
-  { value: "Engineering", label: "Engineering / R&D" },
-  { value: "Other", label: "Other" },
+const INDUSTRY_LIST = [
+  "Technology / Software",
+  "Banking / Financial Svcs",
+  "Insurance",
+  "Healthcare / Pharma",
+  "Manufacturing",
+  "Retail / E-Commerce",
+  "FMCG / Consumer Goods",
+  "Automotive",
+  "Telecom / Media",
+  "Education",
+  "Real Estate / Construction",
+  "Logistics / Supply Chain",
+  "Energy / Utilities",
+  "Government / Public Sector",
+  "Hospitality / Travel",
+  "Agriculture",
+  "Professional Services",
+  "Other",
 ];
-
-const INDUSTRY_OPTIONS = [
-  { value: "Technology", label: "Technology / Software" },
-  { value: "Banking", label: "Banking / Financial Svcs" },
-  { value: "Insurance", label: "Insurance" },
-  { value: "Healthcare", label: "Healthcare / Pharma" },
-  { value: "Manufacturing", label: "Manufacturing" },
-  { value: "Retail", label: "Retail / E-Commerce" },
-  { value: "FMCG", label: "FMCG / Consumer Goods" },
-  { value: "Automotive", label: "Automotive" },
-  { value: "Telecom", label: "Telecom / Media" },
-  { value: "Education", label: "Education" },
-  { value: "RealEstate", label: "Real Estate / Construction" },
-  { value: "Logistics", label: "Logistics / Supply Chain" },
-  { value: "Energy", label: "Energy / Utilities" },
-  { value: "Government", label: "Government / Public Sector" },
-  { value: "Hospitality", label: "Hospitality / Travel" },
-  { value: "Agriculture", label: "Agriculture" },
-  { value: "Professional Svcs", label: "Professional Services" },
-  { value: "Other", label: "Other" },
+const REVENUE_LIST = [
+  "Under $1M",
+  "$1M – $10M",
+  "$10M – $50M",
+  "$50M – $500M",
+  "$500M – $1B",
+  "Over $1B",
 ];
-
-const REVENUE_OPTIONS = [
-  { value: "under_1m", label: "Under $1M" },
-  { value: "1m_10m", label: "$1M – $10M" },
-  { value: "10m_50m", label: "$10M – $50M" },
-  { value: "50m_500m", label: "$50M – $500M" },
-  { value: "500m_1b", label: "$500M – $1B" },
-  { value: "over_1b", label: "Over $1B" },
+const EMPLOYEE_LIST = [
+  "1 – 50",
+  "51 – 200",
+  "201 – 1,000",
+  "1,001 – 5,000",
+  "5,000+",
 ];
-
-const EMPLOYEE_OPTIONS = [
-  { value: "1_50", label: "1 – 50" },
-  { value: "51_200", label: "51 – 200" },
-  { value: "201_1000", label: "201 – 1,000" },
-  { value: "1001_5000", label: "1,001 – 5,000" },
-  { value: "5000_plus", label: "5,000+" },
+const BROWSER_LIST = ["Chrome", "Firefox", "Safari", "Edge", "Brave", "Opera"];
+const READING_LIST = [
+  "Slow — reads carefully",
+  "Normal — average pace",
+  "Fast — skims quickly",
 ];
-
+const RESPONSE_LIST = [
+  "Conservative — neutral, measured",
+  "Neutral — balanced",
+  "Expressive — detailed, opinionated",
+];
+const DEVICE_OS_MAP = {
+  desktop: ["Windows", "macOS", "Linux"],
+  mobile: ["Android", "iOS"],
+  tablet: ["Android", "iPadOS"],
+};
 const BEHAVIOURAL_TAGS = [
   "Online Shopper",
   "Brand Conscious",
@@ -146,42 +154,207 @@ const BEHAVIOURAL_TAGS = [
   "Decision Maker",
 ];
 
-const DEVICE_OS_MAP = {
-  desktop: [
-    { value: "windows", label: "Windows" },
-    { value: "macos", label: "macOS" },
-    { value: "linux", label: "Linux" },
-  ],
-  mobile: [
-    { value: "android", label: "Android" },
-    { value: "ios", label: "iOS" },
-  ],
-  tablet: [
-    { value: "android", label: "Android" },
-    { value: "ios", label: "iPadOS" },
-  ],
+// ─── CreatableSingle — type or pick one value ─────────────────────────────────
+function CreatableSingle({
+  value,
+  onChange,
+  suggestions,
+  placeholder,
+  label,
+  required,
+}) {
+  const [input, setInput] = useState(value || "");
+  const [open, setOpen] = useState(false);
+  const [hovered, setHovered] = useState(-1);
+  const ref = useRef(null);
+
+  // sync if external value changes (edit mode)
+  useEffect(() => {
+    setInput(value || "");
+  }, [value]);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const filtered = suggestions.filter((s) =>
+    s.toLowerCase().includes(input.toLowerCase()),
+  );
+
+  const select = (val) => {
+    setInput(val);
+    onChange(val);
+    setOpen(false);
+    setHovered(-1);
+  };
+
+  const handleKey = (e) => {
+    if (!open) {
+      setOpen(true);
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHovered((h) => Math.min(h + 1, filtered.length - 1));
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHovered((h) => Math.max(h - 1, 0));
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (hovered >= 0 && filtered[hovered]) select(filtered[hovered]);
+      else if (input.trim()) select(input.trim());
+    }
+    if (e.key === "Escape") setOpen(false);
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }} ref={ref}>
+      {label && (
+        <label style={cs.label}>
+          {label}
+          {required && <span style={cs.req}> *</span>}
+        </label>
+      )}
+      <div style={{ position: "relative" }}>
+        <input
+          style={cs.input}
+          value={input}
+          placeholder={placeholder || `Select or type ${label || ""}...`}
+          onChange={(e) => {
+            setInput(e.target.value);
+            onChange(e.target.value);
+            setOpen(true);
+            setHovered(-1);
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={handleKey}
+        />
+        {input && (
+          <button
+            style={cs.clearBtn}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              select("");
+            }}
+          >
+            <X size={13} />
+          </button>
+        )}
+      </div>
+      {open && (
+        <div style={cs.dropdown}>
+          {filtered.length === 0 && input.trim() ? (
+            <div style={cs.createRow} onMouseDown={() => select(input.trim())}>
+              <span style={cs.createLabel}>Create</span> "{input.trim()}"
+            </div>
+          ) : (
+            <>
+              {input.trim() &&
+                !suggestions.find(
+                  (s) => s.toLowerCase() === input.toLowerCase(),
+                ) && (
+                  <div
+                    style={cs.createRow}
+                    onMouseDown={() => select(input.trim())}
+                  >
+                    <span style={cs.createLabel}>Create</span> "{input.trim()}"
+                  </div>
+                )}
+              {filtered.map((s, i) => (
+                <div
+                  key={s}
+                  style={{
+                    ...cs.option,
+                    background: hovered === i ? "#f0f7ff" : "white",
+                  }}
+                  onMouseDown={() => select(s)}
+                  onMouseEnter={() => setHovered(i)}
+                >
+                  {s}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const cs = {
+  label: {
+    fontSize: "0.8rem",
+    fontWeight: 600,
+    color: "#374151",
+    fontFamily: FONT,
+  },
+  req: { color: "#ef4444" },
+  input: {
+    width: "100%",
+    padding: "10px 32px 10px 12px",
+    border: "1.5px solid #e2e8f0",
+    borderRadius: 8,
+    fontSize: "0.88rem",
+    outline: "none",
+    color: "#1e293b",
+    background: "white",
+    fontFamily: FONT,
+    boxSizing: "border-box",
+  },
+  clearBtn: {
+    position: "absolute",
+    right: 10,
+    top: "50%",
+    transform: "translateY(-50%)",
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    color: "#94a3b8",
+    display: "flex",
+    alignItems: "center",
+    padding: 2,
+  },
+  dropdown: {
+    position: "absolute",
+    top: "100%",
+    left: 0,
+    right: 0,
+    background: "white",
+    border: "1.5px solid #e2e8f0",
+    borderRadius: 8,
+    boxShadow: "0 8px 24px rgba(0,0,0,0.1)",
+    zIndex: 200,
+    maxHeight: 220,
+    overflowY: "auto",
+    marginTop: 4,
+  },
+  option: {
+    padding: "9px 14px",
+    fontSize: "0.88rem",
+    cursor: "pointer",
+    color: "#1e293b",
+    fontFamily: FONT,
+    transition: "background 0.1s",
+  },
+  createRow: {
+    padding: "9px 14px",
+    fontSize: "0.88rem",
+    cursor: "pointer",
+    color: "#1e3a5f",
+    fontFamily: FONT,
+    borderBottom: "1px solid #f1f5f9",
+    background: "#f8fafc",
+  },
+  createLabel: { fontWeight: 700, color: "#2563eb", marginRight: 4 },
 };
 
-const BROWSER_OPTIONS = [
-  { value: "chrome", label: "Chrome" },
-  { value: "firefox", label: "Firefox" },
-  { value: "safari", label: "Safari" },
-  { value: "edge", label: "Edge" },
-];
-
-const READING_SPEED_OPTIONS = [
-  { value: "slow", label: "Slow — reads carefully" },
-  { value: "normal", label: "Normal — average pace" },
-  { value: "fast", label: "Fast — skims quickly" },
-];
-
-const RESPONSE_STYLE_OPTIONS = [
-  { value: "conservative", label: "Conservative — neutral, measured" },
-  { value: "neutral", label: "Neutral — balanced" },
-  { value: "expressive", label: "Expressive — detailed, opinionated" },
-];
-
-// ─── Tag Input ────────────────────────────────────────────────────────────────
+// ─── Multi Tag Input (unchanged) ──────────────────────────────────────────────
 function TagInput({ value = [], onChange, placeholder, suggestions = [] }) {
   const [input, setInput] = useState("");
   const [showSug, setShowSug] = useState(false);
@@ -366,17 +539,17 @@ function DeviceSelector({ value, onChange }) {
   );
 }
 
-// ─── Create Persona Modal ─────────────────────────────────────────────────────
-function CreateModal({ onClose, onCreated }) {
+// ─── Persona Form (shared by Create & Edit) ───────────────────────────────────
+function PersonaForm({ initial, onSubmit, onClose, mode = "create" }) {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const [form, setForm] = useState({
+  const blank = {
     name: "",
     tags: [],
     country: "",
-    language: "en",
+    language: "English",
     ageMin: "",
     ageMax: "",
     gender: "",
@@ -389,11 +562,12 @@ function CreateModal({ onClose, onCreated }) {
     behaviouralTags: [],
     deviceType: "desktop",
     deviceOs: "",
-    browser: "chrome",
-    readingSpeed: "normal",
-    responseStyle: "neutral",
-  });
+    browser: "Chrome",
+    readingSpeed: "Normal — average pace",
+    responseStyle: "Neutral — balanced",
+  };
 
+  const [form, setForm] = useState(() => ({ ...blank, ...initial }));
   const setF = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const setFE = (k) => (e) => setF(k, e.target.value);
 
@@ -401,11 +575,10 @@ function CreateModal({ onClose, onCreated }) {
     setError("");
     setLoading(true);
     try {
-      const res = await api.post("/personas", form);
-      onCreated(res.data.persona);
+      await onSubmit(form);
       onClose();
     } catch (err) {
-      setError(err.response?.data?.error || "Failed to create persona");
+      setError(err.response?.data?.error || "Failed to save persona");
     } finally {
       setLoading(false);
     }
@@ -422,7 +595,9 @@ function CreateModal({ onClose, onCreated }) {
       <div style={s.modal}>
         <div style={s.modalHeader}>
           <div>
-            <h2 style={s.modalTitle}>New Persona</h2>
+            <h2 style={s.modalTitle}>
+              {mode === "edit" ? "Edit Persona" : "New Persona"}
+            </h2>
             <p style={s.modalSub}>
               Step {step} of 3 — {STEPS[step - 1]}
             </p>
@@ -480,21 +655,35 @@ function CreateModal({ onClose, onCreated }) {
               />
               <FormGrid>
                 <FullCol>
-                  <Input
-                    label="Persona Name"
-                    required
-                    placeholder='"Senior IT Manager — India" or "Urban Female Consumer — 25-34"'
-                    value={form.name}
-                    onChange={setFE("name")}
-                  />
+                  <div
+                    style={{ display: "flex", flexDirection: "column", gap: 6 }}
+                  >
+                    <label style={cs.label}>
+                      Persona Name <span style={cs.req}>*</span>
+                    </label>
+                    <input
+                      style={{ ...cs.input, paddingRight: 12 }}
+                      placeholder='"Senior IT Manager — India" or "Urban Female Consumer — 25-34"'
+                      value={form.name}
+                      onChange={setFE("name")}
+                    />
+                  </div>
                 </FullCol>
                 <FullCol>
                   <div
                     style={{ display: "flex", flexDirection: "column", gap: 6 }}
                   >
-                    <label style={s.label}>
+                    <label style={cs.label}>
                       Tags{" "}
-                      <span style={s.hint}>— for filtering in library</span>
+                      <span
+                        style={{
+                          fontSize: "0.75rem",
+                          color: "#94a3b8",
+                          fontWeight: 400,
+                        }}
+                      >
+                        — for filtering in library (multi-select)
+                      </span>
                     </label>
                     <TagInput
                       value={form.tags}
@@ -522,21 +711,22 @@ function CreateModal({ onClose, onCreated }) {
               <div style={s.divider} />
               <SectionHeader
                 title="Demographics"
-                subtitle="Fill what's relevant. Non-mandatory fields can be left blank for consumer personas."
+                subtitle="Fill what's relevant. Company fields can be left blank for consumer personas."
               />
               <FormGrid>
-                <Select
+                <CreatableSingle
                   label="Country"
-                  options={COUNTRY_OPTIONS}
                   value={form.country}
                   onChange={(v) => setF("country", v)}
-                  placeholder="Select country..."
+                  suggestions={COUNTRY_LIST}
+                  placeholder="Select or type country..."
                 />
-                <Select
+                <CreatableSingle
                   label="Language"
-                  options={LANGUAGE_OPTIONS}
                   value={form.language}
                   onChange={(v) => setF("language", v)}
+                  suggestions={LANGUAGE_LIST}
+                  placeholder="Select or type language..."
                 />
                 <NumberInput
                   label="Age Min"
@@ -554,19 +744,24 @@ function CreateModal({ onClose, onCreated }) {
                   value={form.ageMax}
                   onChange={setFE("ageMax")}
                 />
-                <Select
+                <CreatableSingle
                   label="Gender"
-                  options={GENDER_OPTIONS}
                   value={form.gender}
                   onChange={(v) => setF("gender", v)}
-                  placeholder="Select gender..."
+                  suggestions={GENDER_LIST}
+                  placeholder="Select or type gender..."
                 />
-                <Input
-                  label="Designation / Job Title"
-                  placeholder="e.g. IT Manager, CTO, Homemaker"
-                  value={form.designation}
-                  onChange={setFE("designation")}
-                />
+                <div
+                  style={{ display: "flex", flexDirection: "column", gap: 6 }}
+                >
+                  <label style={cs.label}>Designation / Job Title</label>
+                  <input
+                    style={{ ...cs.input, paddingRight: 12 }}
+                    placeholder="e.g. IT Manager, CTO, Homemaker"
+                    value={form.designation}
+                    onChange={setFE("designation")}
+                  />
+                </div>
               </FormGrid>
 
               <div style={s.divider} />
@@ -575,33 +770,33 @@ function CreateModal({ onClose, onCreated }) {
                 subtitle="Optional — leave blank for consumer (B2C) personas."
               />
               <FormGrid>
-                <Select
+                <CreatableSingle
                   label="Function / Department"
-                  options={DEPARTMENT_OPTIONS}
                   value={form.department}
                   onChange={(v) => setF("department", v)}
-                  placeholder="Select department..."
+                  suggestions={DEPARTMENT_LIST}
+                  placeholder="Select or type department..."
                 />
-                <Select
+                <CreatableSingle
                   label="Industry"
-                  options={INDUSTRY_OPTIONS}
                   value={form.industry}
                   onChange={(v) => setF("industry", v)}
-                  placeholder="Select industry..."
+                  suggestions={INDUSTRY_LIST}
+                  placeholder="Select or type industry..."
                 />
-                <Select
+                <CreatableSingle
                   label="Company Revenue"
-                  options={REVENUE_OPTIONS}
                   value={form.companyRevenue}
                   onChange={(v) => setF("companyRevenue", v)}
-                  placeholder="Select revenue range..."
+                  suggestions={REVENUE_LIST}
+                  placeholder="Select or type revenue..."
                 />
-                <Select
+                <CreatableSingle
                   label="Employee Size"
-                  options={EMPLOYEE_OPTIONS}
                   value={form.employeeSize}
                   onChange={(v) => setF("employeeSize", v)}
-                  placeholder="Select company size..."
+                  suggestions={EMPLOYEE_LIST}
+                  placeholder="Select or type size..."
                 />
               </FormGrid>
             </div>
@@ -612,9 +807,8 @@ function CreateModal({ onClose, onCreated }) {
             <div>
               <SectionHeader
                 title="Persona Description"
-                subtitle="Describe this persona in plain language. The AI reads this directly when answering survey questions — the more detail you provide, the more accurate and consistent the responses will be."
+                subtitle="Describe this persona in plain language. The AI reads this directly when answering survey questions — the more detail you provide, the more accurate the responses."
               />
-
               <div style={s.aiHint}>
                 <span style={{ fontSize: "1rem", flexShrink: 0, marginTop: 1 }}>
                   ✦
@@ -625,11 +819,10 @@ function CreateModal({ onClose, onCreated }) {
                   relevant to the survey topic.
                 </span>
               </div>
-
               <Textarea
                 label="Persona Description"
                 required
-                placeholder={`Example:\n\n"This is a senior IT decision-maker at a mid-size manufacturing company with 500–1000 employees. He is 38 years old, based in Mumbai, and has been in the industry for 12+ years. He is responsible for approving software and infrastructure purchases above $50K. He is tech-savvy but budget-conscious, frustrated with vendor lock-in, and actively looking for cloud-first solutions. He reads CIO magazines, attends industry webinars, and trusts peer recommendations over vendor marketing."`}
+                placeholder={`Example:\n\n"This is a senior IT decision-maker at a mid-size manufacturing company with 500–1000 employees. He is 38 years old, based in Mumbai, and has been in the industry for 12+ years. He is responsible for approving software and infrastructure purchases above $50K. He is tech-savvy but budget-conscious, frustrated with vendor lock-in, and actively looking for cloud-first solutions..."`}
                 rows={10}
                 value={form.secondaryDescription}
                 onChange={setFE("secondaryDescription")}
@@ -638,10 +831,21 @@ function CreateModal({ onClose, onCreated }) {
               <div style={s.divider} />
               <SectionHeader
                 title="Behavioural Tags"
-                subtitle="Quick-select tags that describe this persona's behaviour. These supplement the description above."
+                subtitle="Quick-select tags that describe this persona's behaviour."
               />
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <label style={s.label}>Behavioural Tags</label>
+                <label style={cs.label}>
+                  Behavioural Tags{" "}
+                  <span
+                    style={{
+                      fontSize: "0.75rem",
+                      color: "#94a3b8",
+                      fontWeight: 400,
+                    }}
+                  >
+                    — multi-select
+                  </span>
+                </label>
                 <TagInput
                   value={form.behaviouralTags}
                   onChange={(v) => setF("behaviouralTags", v)}
@@ -679,21 +883,22 @@ function CreateModal({ onClose, onCreated }) {
               <div style={s.divider} />
               <SectionHeader
                 title="Device & Browser Settings"
-                subtitle="These settings configure the browser automation environment for this persona."
+                subtitle="Configure the browser automation environment for this persona."
               />
               <FormGrid>
-                <Select
+                <CreatableSingle
                   label="Device OS"
-                  options={DEVICE_OS_MAP[form.deviceType] || []}
                   value={form.deviceOs}
                   onChange={(v) => setF("deviceOs", v)}
-                  placeholder="Select OS..."
+                  suggestions={DEVICE_OS_MAP[form.deviceType] || []}
+                  placeholder="Select or type OS..."
                 />
-                <Select
+                <CreatableSingle
                   label="Browser"
-                  options={BROWSER_OPTIONS}
                   value={form.browser}
                   onChange={(v) => setF("browser", v)}
+                  suggestions={BROWSER_LIST}
+                  placeholder="Select or type browser..."
                 />
               </FormGrid>
 
@@ -703,33 +908,29 @@ function CreateModal({ onClose, onCreated }) {
                 subtitle="Control how this persona's reading and response style is simulated."
               />
               <FormGrid>
-                <Select
+                <CreatableSingle
                   label="Reading Speed"
-                  options={READING_SPEED_OPTIONS}
                   value={form.readingSpeed}
                   onChange={(v) => setF("readingSpeed", v)}
+                  suggestions={READING_LIST}
+                  placeholder="Select or type..."
                 />
-                <Select
+                <CreatableSingle
                   label="Response Style"
-                  options={RESPONSE_STYLE_OPTIONS}
                   value={form.responseStyle}
                   onChange={(v) => setF("responseStyle", v)}
+                  suggestions={RESPONSE_LIST}
+                  placeholder="Select or type..."
                 />
               </FormGrid>
 
               <div style={s.divider} />
-              <SectionHeader
-                title="Summary"
-                subtitle="Review before creating."
-              />
+              <SectionHeader title="Summary" subtitle="Review before saving." />
               <div style={s.summary}>
                 {[
                   ["Name", form.name || "—"],
-                  [
-                    "Country",
-                    COUNTRY_OPTIONS.find((c) => c.value === form.country)
-                      ?.label || "—",
-                  ],
+                  ["Country", form.country || "—"],
+                  ["Language", form.language || "—"],
                   [
                     "Age Range",
                     form.ageMin && form.ageMax
@@ -798,7 +999,11 @@ function CreateModal({ onClose, onCreated }) {
               onClick={handleSubmit}
               disabled={loading}
             >
-              {loading ? "Creating..." : "Create Persona"}
+              {loading
+                ? "Saving..."
+                : mode === "edit"
+                  ? "Save Changes"
+                  : "Create Persona"}
             </button>
           )}
         </div>
@@ -807,10 +1012,37 @@ function CreateModal({ onClose, onCreated }) {
   );
 }
 
+// ─── Parse stored attrs back to form fields ────────────────────────────────────
+function attrsToForm(persona) {
+  if (!persona) return {};
+  const a = persona.behavioural_attrs || {};
+  return {
+    name: persona.name || "",
+    tags: persona.tags || [],
+    country: persona.country || "",
+    language: persona.language || "English",
+    ageMin: persona.age_min || "",
+    ageMax: persona.age_max || "",
+    gender: persona.gender || "",
+    designation: a.designation || "",
+    department: a.department || "",
+    industry: a.industry || "",
+    companyRevenue: a.companyRevenue || "",
+    employeeSize: a.employeeSize || "",
+    secondaryDescription: a.secondaryDescription || "",
+    behaviouralTags: a.behaviouralTags || [],
+    deviceType: persona.device_type || "desktop",
+    deviceOs: a.deviceOs || "",
+    browser: a.browser || "Chrome",
+    readingSpeed: a.readingSpeed || "Normal — average pace",
+    responseStyle: a.responseStyle || "Neutral — balanced",
+  };
+}
+
 // ─── Personas Table ───────────────────────────────────────────────────────────
 const DEVICE_ICONS = { desktop: Monitor, mobile: Smartphone, tablet: Tablet };
 
-function PersonasTable({ personas, onDelete }) {
+function PersonasTable({ personas, onDelete, onEdit, onDuplicate }) {
   const [sortKey, setSortKey] = useState("created_at");
   const [sortDir, setSortDir] = useState("desc");
 
@@ -844,8 +1076,8 @@ function PersonasTable({ personas, onDelete }) {
       av = a.created_at;
       bv = b.created_at;
     }
-    if (av === undefined || av === null) av = "";
-    if (bv === undefined || bv === null) bv = "";
+    if (av == null) av = "";
+    if (bv == null) bv = "";
     const cmp = String(av).localeCompare(String(bv), undefined, {
       numeric: true,
     });
@@ -861,10 +1093,11 @@ function PersonasTable({ personas, onDelete }) {
     );
   };
 
-  const colHead = (label, key) => (
-    <th style={s.th} onClick={() => toggleSort(key)}>
+  const TH = ({ label, col }) => (
+    <th style={s.th} onClick={() => col && toggleSort(col)}>
       <div style={s.thInner}>
-        {label} <SortIcon col={key} />
+        {label}
+        {col && <SortIcon col={col} />}
       </div>
     </th>
   );
@@ -874,29 +1107,25 @@ function PersonasTable({ personas, onDelete }) {
       <table style={s.table}>
         <thead>
           <tr style={s.theadRow}>
-            {colHead("Persona Name", "name")}
-            {colHead("Country", "country")}
-            {colHead("Age", "age")}
-            <th style={s.th}>Gender</th>
-            <th style={s.th}>Designation</th>
-            <th style={s.th}>Dept / Industry</th>
-            <th style={s.th}>Tags</th>
-            {colHead("Device", "device")}
-            {colHead("Created", "created_at")}
-            <th style={{ ...s.th, width: 60 }}></th>
+            <TH label="Persona Name" col="name" />
+            <TH label="Country" col="country" />
+            <TH label="Age" col="age" />
+            <TH label="Gender" />
+            <TH label="Designation" />
+            <TH label="Dept / Industry" />
+            <TH label="Tags" />
+            <TH label="Device" col="device" />
+            <TH label="Created" col="created_at" />
+            <th style={{ ...s.th, width: 80 }}></th>
           </tr>
         </thead>
         <tbody>
           {sorted.map((persona, idx) => {
             const attrs = persona.behavioural_attrs || {};
-            const country = COUNTRY_OPTIONS.find(
-              (c) => c.value === persona.country,
-            );
             const DevIcon = DEVICE_ICONS[persona.device_type] || Monitor;
-            const dept = attrs.department || "";
-            const ind = attrs.industry || "";
-            const deptInd = [dept, ind].filter(Boolean).join(" / ");
-
+            const deptInd = [attrs.department, attrs.industry]
+              .filter(Boolean)
+              .join(" / ");
             return (
               <tr
                 key={persona.id}
@@ -905,7 +1134,6 @@ function PersonasTable({ personas, onDelete }) {
                   background: idx % 2 === 0 ? "#ffffff" : "#f8fafc",
                 }}
               >
-                {/* Name + description tooltip */}
                 <td style={s.td}>
                   <div style={s.nameCell}>
                     <span style={s.nameText}>{persona.name}</span>
@@ -914,20 +1142,14 @@ function PersonasTable({ personas, onDelete }) {
                         style={s.descPreview}
                         title={attrs.secondaryDescription}
                       >
-                        {attrs.secondaryDescription.slice(0, 50)}…
+                        {attrs.secondaryDescription.slice(0, 55)}…
                       </span>
                     )}
                   </div>
                 </td>
-
-                {/* Country */}
                 <td style={s.td}>
-                  <span style={s.cellText}>
-                    {country?.label || persona.country || "—"}
-                  </span>
+                  <span style={s.cellText}>{persona.country || "—"}</span>
                 </td>
-
-                {/* Age */}
                 <td style={s.td}>
                   <span style={s.cellText}>
                     {persona.age_min && persona.age_max
@@ -935,8 +1157,6 @@ function PersonasTable({ personas, onDelete }) {
                       : "—"}
                   </span>
                 </td>
-
-                {/* Gender */}
                 <td style={s.td}>
                   {persona.gender ? (
                     <span style={s.chip}>
@@ -947,18 +1167,12 @@ function PersonasTable({ personas, onDelete }) {
                     <span style={s.cellMuted}>—</span>
                   )}
                 </td>
-
-                {/* Designation */}
                 <td style={s.td}>
                   <span style={s.cellText}>{attrs.designation || "—"}</span>
                 </td>
-
-                {/* Dept / Industry */}
                 <td style={s.td}>
                   <span style={s.cellText}>{deptInd || "—"}</span>
                 </td>
-
-                {/* Tags */}
                 <td style={s.td}>
                   <div style={s.tagCell}>
                     {(persona.tags || []).slice(0, 2).map((tag) => (
@@ -974,8 +1188,6 @@ function PersonasTable({ personas, onDelete }) {
                     )}
                   </div>
                 </td>
-
-                {/* Device */}
                 <td style={s.td}>
                   <div style={s.deviceCell}>
                     <DevIcon size={14} color="#64748b" />
@@ -985,8 +1197,6 @@ function PersonasTable({ personas, onDelete }) {
                     </span>
                   </div>
                 </td>
-
-                {/* Created */}
                 <td style={s.td}>
                   <span style={s.cellMuted}>
                     {new Date(persona.created_at).toLocaleDateString("en-IN", {
@@ -996,16 +1206,36 @@ function PersonasTable({ personas, onDelete }) {
                     })}
                   </span>
                 </td>
-
-                {/* Delete */}
                 <td style={{ ...s.td, textAlign: "center" }}>
-                  <button
-                    style={s.deleteBtn}
-                    onClick={() => onDelete(persona.id)}
-                    title="Delete persona"
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 4,
+                      justifyContent: "center",
+                    }}
                   >
-                    <Trash2 size={14} />
-                  </button>
+                    <button
+                      style={s.dupBtn}
+                      title="Duplicate persona"
+                      onClick={() => onDuplicate(persona)}
+                    >
+                      <Copy size={13} />
+                    </button>
+                    <button
+                      style={s.editBtn}
+                      title="Edit persona"
+                      onClick={() => onEdit(persona)}
+                    >
+                      <Pencil size={13} />
+                    </button>
+                    <button
+                      style={s.deleteBtn}
+                      title="Delete persona"
+                      onClick={() => onDelete(persona.id)}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 </td>
               </tr>
             );
@@ -1020,7 +1250,8 @@ function PersonasTable({ personas, onDelete }) {
 export default function Personas() {
   const [personas, setPersonas] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [editPersona, setEditPersona] = useState(null);
   const [search, setSearch] = useState("");
 
   const load = async () => {
@@ -1038,6 +1269,19 @@ export default function Personas() {
     load();
   }, []);
 
+  const handleCreate = async (form) => {
+    const res = await api.post("/personas", form);
+    setPersonas((prev) => [res.data.persona, ...prev]);
+  };
+
+  const handleEdit = async (form) => {
+    const res = await api.patch(`/personas/${editPersona.id}`, form);
+    setPersonas((prev) =>
+      prev.map((p) => (p.id === editPersona.id ? res.data.persona : p)),
+    );
+    setEditPersona(null);
+  };
+
   const handleDelete = async (id) => {
     if (!window.confirm("Delete this persona? This cannot be undone.")) return;
     try {
@@ -1048,15 +1292,26 @@ export default function Personas() {
     }
   };
 
+  const handleDuplicate = async (persona) => {
+    try {
+      const form = attrsToForm(persona);
+      form.name = `Copy of ${form.name}`;
+      const res = await api.post("/personas", form);
+      setPersonas((prev) => [res.data.persona, ...prev]);
+    } catch {
+      alert("Failed to duplicate persona");
+    }
+  };
+
   const filtered = personas.filter((p) => {
-    const attrs = p.behavioural_attrs || {};
+    const a = p.behavioural_attrs || {};
     const q = search.toLowerCase();
     return (
       p.name.toLowerCase().includes(q) ||
       (p.tags || []).some((t) => t.toLowerCase().includes(q)) ||
-      (attrs.designation || "").toLowerCase().includes(q) ||
-      (attrs.department || "").toLowerCase().includes(q) ||
-      (attrs.industry || "").toLowerCase().includes(q) ||
+      (a.designation || "").toLowerCase().includes(q) ||
+      (a.department || "").toLowerCase().includes(q) ||
+      (a.industry || "").toLowerCase().includes(q) ||
       (p.country || "").toLowerCase().includes(q)
     );
   });
@@ -1082,7 +1337,7 @@ export default function Personas() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <button style={s.createBtn} onClick={() => setShowModal(true)}>
+        <button style={s.createBtn} onClick={() => setShowCreate(true)}>
           <Plus size={18} /> New Persona
         </button>
       </div>
@@ -1110,19 +1365,35 @@ export default function Personas() {
               : "Build respondent personas to guide AI answer behaviour across survey sessions."}
           </p>
           {!search && (
-            <button style={s.createBtn} onClick={() => setShowModal(true)}>
+            <button style={s.createBtn} onClick={() => setShowCreate(true)}>
               <Plus size={16} /> New Persona
             </button>
           )}
         </div>
       ) : (
-        <PersonasTable personas={filtered} onDelete={handleDelete} />
+        <PersonasTable
+          personas={filtered}
+          onDelete={handleDelete}
+          onEdit={(p) => setEditPersona(p)}
+          onDuplicate={handleDuplicate}
+        />
       )}
 
-      {showModal && (
-        <CreateModal
-          onClose={() => setShowModal(false)}
-          onCreated={(persona) => setPersonas((prev) => [persona, ...prev])}
+      {showCreate && (
+        <PersonaForm
+          mode="create"
+          initial={{}}
+          onSubmit={handleCreate}
+          onClose={() => setShowCreate(false)}
+        />
+      )}
+
+      {editPersona && (
+        <PersonaForm
+          mode="edit"
+          initial={attrsToForm(editPersona)}
+          onSubmit={handleEdit}
+          onClose={() => setEditPersona(null)}
         />
       )}
     </Layout>
@@ -1196,15 +1467,14 @@ const s = {
     fontFamily: FONT,
   },
 
-  // ── Table ──
   tableWrap: {
     background: "white",
     borderRadius: 12,
     boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
     border: "1.5px solid #e2e8f0",
-    overflow: "hidden",
+    overflow: "auto",
   },
-  table: { width: "100%", borderCollapse: "collapse" },
+  table: { width: "100%", borderCollapse: "collapse", minWidth: 900 },
   theadRow: { background: "#f8fafc", borderBottom: "2px solid #e2e8f0" },
   th: {
     padding: "12px 14px",
@@ -1217,7 +1487,7 @@ const s = {
     display: "flex",
     alignItems: "center",
     gap: 4,
-    fontSize: "0.78rem",
+    fontSize: "0.75rem",
     fontWeight: 700,
     color: "#374151",
     fontFamily: FONT,
@@ -1225,8 +1495,7 @@ const s = {
     letterSpacing: 0.4,
   },
   tr: { borderBottom: "1px solid #f1f5f9", transition: "background 0.1s" },
-  td: { padding: "12px 14px", verticalAlign: "middle" },
-
+  td: { padding: "11px 14px", verticalAlign: "middle" },
   nameCell: { display: "flex", flexDirection: "column", gap: 3 },
   nameText: {
     fontSize: "0.88rem",
@@ -1235,7 +1504,7 @@ const s = {
     fontFamily: FONT,
   },
   descPreview: {
-    fontSize: "0.75rem",
+    fontSize: "0.73rem",
     color: "#94a3b8",
     fontFamily: FONT,
     cursor: "help",
@@ -1270,18 +1539,36 @@ const s = {
     fontFamily: FONT,
   },
   deviceCell: { display: "flex", alignItems: "center", gap: 5 },
-  deleteBtn: {
-    background: "none",
-    border: "none",
+  editBtn: {
+    background: "#f0f7ff",
+    border: "1px solid #dbeafe",
     cursor: "pointer",
-    color: "#cbd5e1",
-    padding: 4,
+    color: "#2563eb",
+    padding: "5px 6px",
     borderRadius: 6,
     display: "flex",
-    transition: "color 0.15s",
+    transition: "all 0.15s",
   },
-
-  // ── Modal ──
+  deleteBtn: {
+    background: "#fef2f2",
+    border: "1px solid #fecaca",
+    cursor: "pointer",
+    color: "#ef4444",
+    padding: "5px 6px",
+    borderRadius: 6,
+    display: "flex",
+    transition: "all 0.15s",
+  },
+  dupBtn: {
+    background: "#f0fdf4",
+    border: "1px solid #bbf7d0",
+    cursor: "pointer",
+    color: "#059669",
+    padding: "5px 6px",
+    borderRadius: 6,
+    display: "flex",
+    transition: "all 0.15s",
+  },
   overlay: {
     position: "fixed",
     inset: 0,
@@ -1367,13 +1654,6 @@ const s = {
     borderTop: "1px solid #f1f5f9",
   },
   divider: { height: 1, background: "#f1f5f9", margin: "20px 0" },
-  label: {
-    fontSize: "0.8rem",
-    fontWeight: 600,
-    color: "#374151",
-    fontFamily: FONT,
-  },
-  hint: { fontSize: "0.75rem", color: "#94a3b8", fontWeight: 400 },
   aiHint: {
     display: "flex",
     gap: 10,
