@@ -7,11 +7,24 @@ import {
 } from 'lucide-react'
 
 // ─── Format option labels ─────────────────────────────────────────────────────
-const formatLabel = (str) =>
-  str
+const formatLabel = (str) => {
+  const overrides = {
+    surveymonkey: 'Survey Monkey',
+    brightdata:   'Bright Data',
+    iproyal:      'IPRoyal',
+  }
+  if (overrides[str]) return overrides[str]
+  return str
     .split('_')
     .map(word => word.toUpperCase() === 'AI' ? 'AI' : word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ')
+}
+
+// ─── Platform options ─────────────────────────────────────────────────────────
+const PLATFORMS  = ['decipher', 'qualtrics', 'confirmit', 'alchemer', 'surveymonkey', 'custom', 'unknown']
+const AI_MODES   = ['ai', 'human', 'predefined']
+const STRATEGIES = ['persona_true', 'quota_guided', 'stress_test']
+const PROVIDERS  = ['brightdata', 'oxylabs', 'smartproxy', 'iproyal', 'custom']
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
 const STATUS_COLORS = {
@@ -31,12 +44,6 @@ function StatusBadge({ status }) {
     </span>
   )
 }
-
-// ─── Platform options ─────────────────────────────────────────────────────────
-const PLATFORMS = ['decipher', 'qualtrics', 'confirmit', 'alchemer', 'survey_monkey', 'custom', 'unknown']
-const AI_MODES   = ['ai', 'human', 'predefined']
-const STRATEGIES = ['persona_true', 'quota_guided', 'stress_test']
-const PROVIDERS  = ['bright_data', 'oxylabs', 'smartproxy', 'iproyal', 'custom']
 
 // ─── Create Project Modal ─────────────────────────────────────────────────────
 function CreateModal({ onClose, onCreated }) {
@@ -157,7 +164,7 @@ function CreateModal({ onClose, onCreated }) {
               <div style={s.field}>
                 <label style={s.label}>Survey Platform</label>
                 <select style={s.input} value={form.surveyPlatform} onChange={set('surveyPlatform')}>
-                  {PLATFORMS.map(p =>  <option key={p} value={p}>{formatLabel(p)}</option>)}
+                  {PLATFORMS.map(v =>  <option key={v} value={v}>{formatLabel(v)}</option>)}
                 </select>
               </div>
 
@@ -249,25 +256,25 @@ function CreateModal({ onClose, onCreated }) {
                 <div style={s.field}>
                   <label style={s.label}>Open-End Mode</label>
                   <select style={s.input} value={form.aiModeOpenend} onChange={set('aiModeOpenend')}>
-                    {AI_MODES.map(m => <option key={m} value={m}>{formatLabel(m)}</option>)}
+                    {AI_MODES.map(v =>   <option key={v} value={v}>{formatLabel(v)}</option>)}
                   </select>
                 </div>
                 <div style={s.field}>
                   <label style={s.label}>Image Question Mode</label>
                   <select style={s.input} value={form.aiModeImage} onChange={set('aiModeImage')}>
-                    {AI_MODES.map(m => <option key={m} value={m}>{formatLabel(m)}</option>)}
+                    {AI_MODES.map(v =>   <option key={v} value={v}>{formatLabel(v)}</option>)}
                   </select>
                 </div>
                 <div style={s.field}>
                   <label style={s.label}>AI Strategy</label>
                   <select style={s.input} value={form.aiStrategy} onChange={set('aiStrategy')}>
-                    {STRATEGIES.map(m => <option key={m} value={m}>{formatLabel(m)}</option>)}
+                    {STRATEGIES.map(v => <option key={v} value={v}>{formatLabel(v)}</option>)}
                   </select>
                 </div>
                 <div style={s.field}>
                   <label style={s.label}>Proxy Provider</label>
                   <select style={s.input} value={form.proxyProvider} onChange={set('proxyProvider')}>
-                    {PROVIDERS.map(m =>  <option key={m} value={m}>{formatLabel(m)}</option>)}
+                    {PROVIDERS.map(v =>  <option key={v} value={v}>{formatLabel(v)}</option>)}
                   </select>
                 </div>
                 <div style={s.field}>
