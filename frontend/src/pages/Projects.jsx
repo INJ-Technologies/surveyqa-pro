@@ -26,11 +26,7 @@ function StatusBadge({ status }) {
 }
 
 // ─── Platform options ─────────────────────────────────────────────────────────
-const PLATFORMS = [
-  'decipher', 'qualtrics', 'confirmit',
-  'alchemer', 'surveymonkey', 'custom', 'unknown'
-]
-
+const PLATFORMS = ['decipher', 'qualtrics', 'confirmit', 'alchemer', 'surveymonkey', 'custom', 'unknown']
 const AI_MODES   = ['ai', 'human', 'predefined']
 const STRATEGIES = ['persona_true', 'quota_guided', 'stress_test']
 const PROVIDERS  = ['brightdata', 'oxylabs', 'smartproxy', 'iproyal', 'custom']
@@ -258,7 +254,7 @@ function CreateModal({ onClose, onCreated }) {
                 <div style={s.field}>
                   <label style={s.label}>AI Strategy</label>
                   <select style={s.input} value={form.aiStrategy} onChange={set('aiStrategy')}>
-                    {STRATEGIES.map(m => <option key={m} value={m}>{m.replace(/_/g, ' ')}</option>)}
+                    {STRATEGIES.map(m => <option key={m} value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>)}
                   </select>
                 </div>
                 <div style={s.field}>
