@@ -7,7 +7,6 @@ const { migrate }        = require('./db/migrate');
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 const authRoutes = require('./routes/auth');
-const authRoutes     = require('./routes/auth');
 const projectRoutes  = require('./routes/projects');
 
 const app  = express();
