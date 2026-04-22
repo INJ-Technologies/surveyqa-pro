@@ -7,3 +7,5 @@ build/
 .DS_Store
 github_ssh_key
 github_ssh_key.pub
+*.pem
+*.key
