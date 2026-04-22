@@ -367,7 +367,7 @@ export default function Projects() {
   const load = async () => {
     try {
       const res = await api.get('/projects')
-      setProjects(res.data.projects)
+      setProjects(res.data?.projects || [])
     } catch (err) {
       console.error('Failed to load projects', err)
     } finally {
@@ -377,7 +377,7 @@ export default function Projects() {
 
   useEffect(() => { load() }, [])
 
-  const filtered = projects.filter(p =>
+  const filtered = (projects || []).filter(p =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
     (p.client_name || '').toLowerCase().includes(search.toLowerCase())
   )
