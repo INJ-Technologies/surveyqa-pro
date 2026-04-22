@@ -20,12 +20,6 @@ const formatLabel = (str) => {
     .join(' ')
 }
 
-// ─── Platform options ─────────────────────────────────────────────────────────
-const PLATFORMS  = ['decipher', 'qualtrics', 'confirmit', 'alchemer', 'surveymonkey', 'custom', 'unknown']
-const AI_MODES   = ['ai', 'human', 'predefined']
-const STRATEGIES = ['persona_true', 'quota_guided', 'stress_test']
-const PROVIDERS  = ['brightdata', 'oxylabs', 'smartproxy', 'iproyal', 'custom']
-
 // ─── Status badge ─────────────────────────────────────────────────────────────
 const STATUS_COLORS = {
   draft:     { bg: '#f1f5f9', text: '#64748b' },
@@ -44,6 +38,12 @@ function StatusBadge({ status }) {
     </span>
   )
 }
+
+// ─── Platform options ─────────────────────────────────────────────────────────
+const PLATFORMS  = ['decipher', 'qualtrics', 'confirmit', 'alchemer', 'surveymonkey', 'custom', 'unknown']
+const AI_MODES   = ['ai', 'human', 'predefined']
+const STRATEGIES = ['persona_true', 'quota_guided', 'stress_test']
+const PROVIDERS  = ['brightdata', 'oxylabs', 'smartproxy', 'iproyal', 'custom']
 
 // ─── Create Project Modal ─────────────────────────────────────────────────────
 function CreateModal({ onClose, onCreated }) {
@@ -96,11 +96,11 @@ function CreateModal({ onClose, onCreated }) {
         targetCompletes:    parseInt(form.targetCompletes),
         targetLoi:          parseInt(form.targetLoi),
         concurrentSessions: parseInt(form.concurrentSessions),
-        surveys: form.surveys.map(s => ({
-          ...s,
-          countries:  s.countries  ? s.countries.split(',').map(c => c.trim()).filter(Boolean)  : [],
-          languages:  s.languages  ? s.languages.split(',').map(l => l.trim()).filter(Boolean)  : [],
-          allocation: parseInt(s.allocation) || 100,
+        surveys: form.surveys.map(sv => ({
+          ...sv,
+          countries:  sv.countries ? sv.countries.split(',').map(c => c.trim()).filter(Boolean) : [],
+          languages:  sv.languages ? sv.languages.split(',').map(l => l.trim()).filter(Boolean) : [],
+          allocation: parseInt(sv.allocation) || 100,
         })),
       }
       const res = await api.post('/projects', payload)
@@ -164,7 +164,7 @@ function CreateModal({ onClose, onCreated }) {
               <div style={s.field}>
                 <label style={s.label}>Survey Platform</label>
                 <select style={s.input} value={form.surveyPlatform} onChange={set('surveyPlatform')}>
-                  {PLATFORMS.map(v =>  <option key={v} value={v}>{formatLabel(v)}</option>)}
+                  {PLATFORMS.map(v => <option key={v} value={v}>{formatLabel(v)}</option>)}
                 </select>
               </div>
 
@@ -256,13 +256,13 @@ function CreateModal({ onClose, onCreated }) {
                 <div style={s.field}>
                   <label style={s.label}>Open-End Mode</label>
                   <select style={s.input} value={form.aiModeOpenend} onChange={set('aiModeOpenend')}>
-                    {AI_MODES.map(v =>   <option key={v} value={v}>{formatLabel(v)}</option>)}
+                    {AI_MODES.map(v => <option key={v} value={v}>{formatLabel(v)}</option>)}
                   </select>
                 </div>
                 <div style={s.field}>
                   <label style={s.label}>Image Question Mode</label>
                   <select style={s.input} value={form.aiModeImage} onChange={set('aiModeImage')}>
-                    {AI_MODES.map(v =>   <option key={v} value={v}>{formatLabel(v)}</option>)}
+                    {AI_MODES.map(v => <option key={v} value={v}>{formatLabel(v)}</option>)}
                   </select>
                 </div>
                 <div style={s.field}>
@@ -274,7 +274,7 @@ function CreateModal({ onClose, onCreated }) {
                 <div style={s.field}>
                   <label style={s.label}>Proxy Provider</label>
                   <select style={s.input} value={form.proxyProvider} onChange={set('proxyProvider')}>
-                    {PROVIDERS.map(v =>  <option key={v} value={v}>{formatLabel(v)}</option>)}
+                    {PROVIDERS.map(v => <option key={v} value={v}>{formatLabel(v)}</option>)}
                   </select>
                 </div>
                 <div style={s.field}>
@@ -329,10 +329,15 @@ function ProjectCard({ project, onClick }) {
   return (
     <div style={s.card} onClick={onClick}>
       <div style={s.cardTop}>
-        <div>
-          <h3 style={s.cardTitle}>{project.name}</h3>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={s.cardTitleRow}>
+            {project.reference_id && (
+              <span style={s.cardRef}>{project.reference_id} :: </span>
+            )}
+            <span style={s.cardTitle}>{project.name}</span>
+          </div>
           {project.client_name && (
-            <span style={s.cardClient}>{project.client_name}</span>
+            <div style={s.cardClient}>{project.client_name}</div>
           )}
         </div>
         <StatusBadge status={project.status} />
@@ -369,10 +374,11 @@ function ProjectCard({ project, onClick }) {
 
 // ─── Main Projects Page ───────────────────────────────────────────────────────
 export default function Projects() {
-  const [projects, setProjects] = useState([])
-  const [loading,  setLoading]  = useState(true)
-  const [showModal,setShowModal]= useState(false)
-  const [search,   setSearch]   = useState('')
+  const [projects,     setProjects]     = useState([])
+  const [loading,      setLoading]      = useState(true)
+  const [showModal,    setShowModal]    = useState(false)
+  const [search,       setSearch]       = useState('')
+  const [clientFilter, setClientFilter] = useState('')
 
   const load = async () => {
     try {
@@ -387,18 +393,31 @@ export default function Projects() {
 
   useEffect(() => { load() }, [])
 
-  const filtered = (projects || []).filter(p =>
-    p.name.toLowerCase().includes(search.toLowerCase()) ||
-    (p.client_name || '').toLowerCase().includes(search.toLowerCase())
-  )
+  // Unique client names for filter dropdown
+  const clientNames = [...new Set(projects.map(p => p.client_name).filter(Boolean))]
+
+  const filtered = (projects || []).filter(p => {
+    const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()) ||
+      (p.client_name   || '').toLowerCase().includes(search.toLowerCase()) ||
+      (p.reference_id  || '').toLowerCase().includes(search.toLowerCase())
+    const matchClient = clientFilter ? p.client_name === clientFilter : true
+    return matchSearch && matchClient
+  })
 
   return (
     <Layout title="Projects">
 
       {/* Toolbar */}
       <div style={s.toolbar}>
-        <input style={s.search} placeholder="Search projects..."
+        <input style={s.search} placeholder="Search by name, client or reference ID..."
           value={search} onChange={e => setSearch(e.target.value)} />
+        <select style={s.filterSelect}
+          value={clientFilter} onChange={e => setClientFilter(e.target.value)}>
+          <option value="">All Clients</option>
+          {clientNames.map(c => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
         <button style={s.createBtn} onClick={() => setShowModal(true)}>
           <Plus size={18} /> New Project
         </button>
@@ -411,12 +430,14 @@ export default function Projects() {
         <div style={s.empty}>
           <FolderKanban size={52} color="#cbd5e1" />
           <h3 style={s.emptyTitle}>
-            {search ? 'No projects match your search' : 'No Projects Yet'}
+            {search || clientFilter ? 'No projects match your filters' : 'No Projects Yet'}
           </h3>
           <p style={s.emptyDesc}>
-            {search ? 'Try a different search term.' : 'Create your first survey testing project to get started.'}
+            {search || clientFilter
+              ? 'Try adjusting your search or filter.'
+              : 'Create your first survey testing project to get started.'}
           </p>
-          {!search && (
+          {!search && !clientFilter && (
             <button style={s.createBtn} onClick={() => setShowModal(true)}>
               <Plus size={16} /> New Project
             </button>
@@ -447,48 +468,55 @@ export default function Projects() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const s = {
-  toolbar:       { display: 'flex', gap: 12, marginBottom: 24, alignItems: 'center' },
-  search:        { flex: 1, padding: '10px 16px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.9rem', outline: 'none', background: 'white' },
-  createBtn:     { display: 'flex', alignItems: 'center', gap: 8, background: '#1e3a5f', color: 'white', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: '0.9rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' },
-  grid:          { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 16 },
-  card:          { background: 'white', borderRadius: 12, padding: 22, cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1.5px solid #f1f5f9', transition: 'all 0.15s' },
-  cardTop:       { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 },
-  cardTitle:     { fontSize: '0.95rem', fontWeight: 700, color: '#1e293b', marginBottom: 3 },
-  cardClient:    { fontSize: '0.78rem', color: '#64748b' },
-  cardDesc:      { fontSize: '0.82rem', color: '#64748b', lineHeight: 1.5, marginBottom: 14, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' },
-  cardMeta:      { display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 14 },
-  metaItem:      { display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.78rem', color: '#64748b' },
-  cardFooter:    { display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #f1f5f9', paddingTop: 12 },
-  cardDate:      { fontSize: '0.75rem', color: '#94a3b8' },
-  badge:         { padding: '3px 10px', borderRadius: 20, fontSize: '0.72rem', fontWeight: 600, textTransform: 'capitalize', whiteSpace: 'nowrap' },
-  center:        { textAlign: 'center', padding: 60, color: '#64748b' },
-  empty:         { background: 'white', borderRadius: 12, padding: '80px 40px', textAlign: 'center', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 },
-  emptyTitle:    { fontSize: '1.1rem', fontWeight: 700, color: '#1e293b' },
-  emptyDesc:     { color: '#64748b', fontSize: '0.9rem', marginBottom: 8 },
-  overlay:       { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 },
-  modal:         { background: 'white', borderRadius: 16, width: '100%', maxWidth: 680, maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 25px 50px rgba(0,0,0,0.3)' },
-  modalHeader:   { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '24px 28px 0' },
-  modalTitle:    { fontSize: '1.2rem', fontWeight: 700, color: '#1e293b', marginBottom: 4 },
-  modalSub:      { fontSize: '0.82rem', color: '#64748b' },
-  closeBtn:      { background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', padding: 4 },
-  progress:      { height: 3, background: '#f1f5f9', margin: '16px 28px 0' },
-  progressBar:   { height: '100%', background: '#1e3a5f', borderRadius: 2, transition: 'width 0.3s ease' },
-  modalBody:     { flex: 1, overflowY: 'auto', padding: '24px 28px' },
-  modalFooter:   { display: 'flex', justifyContent: 'flex-end', gap: 12, padding: '16px 28px', borderTop: '1px solid #f1f5f9' },
-  formGrid:      { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 },
-  field:         { display: 'flex', flexDirection: 'column', gap: 6 },
-  fieldFull:     { display: 'flex', flexDirection: 'column', gap: 6, gridColumn: '1 / -1' },
-  label:         { fontSize: '0.8rem', fontWeight: 600, color: '#374151' },
-  input:         { padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 7, fontSize: '0.88rem', outline: 'none', color: '#1e293b', background: 'white' },
-  textarea:      { padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 7, fontSize: '0.88rem', outline: 'none', color: '#1e293b', resize: 'vertical', fontFamily: 'inherit' },
-  sectionHead:   { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  sectionTitle:  { fontSize: '0.9rem', fontWeight: 700, color: '#1e293b' },
-  addBtn:        { display: 'flex', alignItems: 'center', gap: 4, background: '#f1f5f9', border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', color: '#1e3a5f' },
-  surveyCard:    { background: '#f8fafc', border: '1.5px solid #e2e8f0', borderRadius: 10, padding: 16, marginBottom: 12 },
+  toolbar:      { display: 'flex', gap: 12, marginBottom: 24, alignItems: 'center' },
+  search:       { flex: 1, padding: '10px 16px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.9rem', outline: 'none', background: 'white', color: '#1e293b' },
+  filterSelect: { padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.88rem', outline: 'none', background: 'white', color: '#1e293b', cursor: 'pointer', minWidth: 160 },
+  createBtn:    { display: 'flex', alignItems: 'center', gap: 8, background: '#1e3a5f', color: 'white', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: '0.9rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' },
+  grid:         { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 16 },
+
+  card:         { background: 'linear-gradient(135deg, #ffffff 0%, #f0f7ff 100%)', borderRadius: 12, padding: 22, cursor: 'pointer', boxShadow: '0 2px 8px rgba(30,58,95,0.08)', border: '1.5px solid #dbeafe', transition: 'all 0.15s' },
+  cardTop:      { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, gap: 12 },
+  cardTitleRow: { display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 2, marginBottom: 3 },
+  cardRef:      { fontSize: '0.72rem', fontWeight: 700, color: '#2563eb', letterSpacing: 0.5, whiteSpace: 'nowrap' },
+  cardTitle:    { fontSize: '0.95rem', fontWeight: 700, color: '#1e3a5f' },
+  cardClient:   { fontSize: '0.78rem', color: '#64748b', marginTop: 3 },
+  cardDesc:     { fontSize: '0.82rem', color: '#64748b', lineHeight: 1.5, marginBottom: 14, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' },
+  cardMeta:     { display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 14 },
+  metaItem:     { display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.78rem', color: '#64748b' },
+  cardFooter:   { display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #dbeafe', paddingTop: 12 },
+  cardDate:     { fontSize: '0.75rem', color: '#94a3b8' },
+
+  badge:        { padding: '3px 10px', borderRadius: 20, fontSize: '0.72rem', fontWeight: 600, textTransform: 'capitalize', whiteSpace: 'nowrap' },
+  center:       { textAlign: 'center', padding: 60, color: '#64748b' },
+  empty:        { background: 'white', borderRadius: 12, padding: '80px 40px', textAlign: 'center', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 },
+  emptyTitle:   { fontSize: '1.1rem', fontWeight: 700, color: '#1e293b' },
+  emptyDesc:    { color: '#64748b', fontSize: '0.9rem', marginBottom: 8 },
+
+  overlay:      { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 },
+  modal:        { background: 'white', borderRadius: 16, width: '100%', maxWidth: 680, maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 25px 50px rgba(0,0,0,0.3)' },
+  modalHeader:  { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '24px 28px 0' },
+  modalTitle:   { fontSize: '1.2rem', fontWeight: 700, color: '#1e293b', marginBottom: 4 },
+  modalSub:     { fontSize: '0.82rem', color: '#64748b' },
+  closeBtn:     { background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', padding: 4 },
+  progress:     { height: 3, background: '#f1f5f9', margin: '16px 28px 0' },
+  progressBar:  { height: '100%', background: '#1e3a5f', borderRadius: 2, transition: 'width 0.3s ease' },
+  modalBody:    { flex: 1, overflowY: 'auto', padding: '24px 28px' },
+  modalFooter:  { display: 'flex', justifyContent: 'flex-end', gap: 12, padding: '16px 28px', borderTop: '1px solid #f1f5f9' },
+
+  formGrid:         { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 },
+  field:            { display: 'flex', flexDirection: 'column', gap: 6 },
+  fieldFull:        { display: 'flex', flexDirection: 'column', gap: 6, gridColumn: '1 / -1' },
+  label:            { fontSize: '0.8rem', fontWeight: 600, color: '#374151' },
+  input:            { padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 7, fontSize: '0.88rem', outline: 'none', color: '#1e293b', background: 'white' },
+  textarea:         { padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 7, fontSize: '0.88rem', outline: 'none', color: '#1e293b', resize: 'vertical', fontFamily: 'inherit' },
+  sectionHead:      { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
+  sectionTitle:     { fontSize: '0.9rem', fontWeight: 700, color: '#1e293b' },
+  addBtn:           { display: 'flex', alignItems: 'center', gap: 4, background: '#f1f5f9', border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', color: '#1e3a5f' },
+  surveyCard:       { background: '#f8fafc', border: '1.5px solid #e2e8f0', borderRadius: 10, padding: 16, marginBottom: 12 },
   surveyCardHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  surveyNum:     { fontSize: '0.82rem', fontWeight: 700, color: '#1e3a5f' },
-  removeBtn:     { background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', padding: 2 },
-  error:         { display: 'flex', alignItems: 'center', gap: 8, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 14px', color: '#dc2626', fontSize: '0.85rem', marginTop: 12 },
-  cancelBtn:     { background: 'none', border: '1.5px solid #e2e8f0', borderRadius: 8, padding: '9px 20px', fontSize: '0.88rem', cursor: 'pointer', color: '#64748b', fontWeight: 500 },
-  nextBtn:       { background: '#1e3a5f', color: 'white', border: 'none', borderRadius: 8, padding: '9px 24px', fontSize: '0.88rem', fontWeight: 600, cursor: 'pointer' },
+  surveyNum:        { fontSize: '0.82rem', fontWeight: 700, color: '#1e3a5f' },
+  removeBtn:        { background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', padding: 2 },
+  error:            { display: 'flex', alignItems: 'center', gap: 8, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 14px', color: '#dc2626', fontSize: '0.85rem', marginTop: 12 },
+  cancelBtn:        { background: 'none', border: '1.5px solid #e2e8f0', borderRadius: 8, padding: '9px 20px', fontSize: '0.88rem', cursor: 'pointer', color: '#64748b', fontWeight: 500 },
+  nextBtn:          { background: '#1e3a5f', color: 'white', border: 'none', borderRadius: 8, padding: '9px 24px', fontSize: '0.88rem', fontWeight: 600, cursor: 'pointer' },
 }
