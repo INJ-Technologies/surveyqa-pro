@@ -8,10 +8,19 @@ export default function Dashboard() {
   const { user } = useAuth()
   const [stats, setStats] = useState({ projects: 0, personas: 0, sessions: 0, completed: 0 })
 
-  useEffect(() => {
-    // Stats will populate as we build each module
-    // For now shows zeros — will update in later steps
-  }, [])
+useEffect(() => {
+  api.get('/projects/stats')
+    .then(res => {
+      const d = res.data.stats
+      setStats({
+        projects:  parseInt(d.total_projects)   || 0,
+        personas:  parseInt(d.total_personas)   || 0,
+        sessions:  parseInt(d.total_sessions)   || 0,
+        completed: parseInt(d.completed_sessions)|| 0,
+      })
+    })
+    .catch(err => console.error('Stats error', err))
+}, [])
 
   const cards = [
     { label: 'Total Projects',    value: stats.projects,  icon: FolderKanban, color: '#2563eb' },
