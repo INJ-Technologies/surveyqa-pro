@@ -5,3 +5,5 @@ dist/
 build/
 *.log
 .DS_Store
+github_ssh_key
+github_ssh_key.pub
