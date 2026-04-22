@@ -39,13 +39,7 @@ export default function Login() {
 
         {/* Logo */}
         <div style={s.logoWrap}>
-          <div style={s.logoBox}>
-            <span style={s.logoText}>SQ</span>
-          </div>
-          <div>
-            <div style={s.brand}>SurveyQA Pro</div>
-            <div style={s.tagline}>Survey Automation Testing Platform</div>
-          </div>
+          <img src="/logo.png" alt="INJ Technologies" style={s.logoImg} />
         </div>
 
         {/* Tabs */}
@@ -97,7 +91,8 @@ export default function Login() {
 const s = {
   bg:       { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)', padding: 20 },
   card:     { background: 'white', borderRadius: 16, padding: '40px 36px', width: '100%', maxWidth: 420, boxShadow: '0 25px 50px rgba(0,0,0,0.25)' },
-  logoWrap: { display: 'flex', alignItems: 'center', gap: 14, marginBottom: 32 },
+  logoWrap: { display: 'flex', justifyContent: 'center', marginBottom: 28 },
+  logoImg:  { height: 52, maxWidth: 220, objectFit: 'contain' },
   logoBox:  { width: 48, height: 48, borderRadius: 12, background: '#1e3a5f', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   logoText: { color: 'white', fontWeight: 800, fontSize: '1.1rem' },
   brand:    { fontSize: '1.1rem', fontWeight: 700, color: '#1e293b' },
