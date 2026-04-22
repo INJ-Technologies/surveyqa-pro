@@ -344,7 +344,7 @@ function ProjectCard({ project, onClick }) {
 
       <div style={s.cardMeta}>
         <span style={s.metaItem}>
-          <Globe size={13} /> {project.survey_platform}
+          <Globe size={13} /> {formatLabel(project.survey_platform)}
         </span>
         <span style={s.metaItem}>
           <Users size={13} /> {project.total_completes || 0} / {project.target_completes}
