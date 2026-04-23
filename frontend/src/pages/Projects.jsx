@@ -474,7 +474,6 @@ function CreateModal({ onClose, onCreated }) {
 function ProjectCard({ project, onClick }) {
   return (
     <div style={s.card} onClick={onClick}>
-      console.log('Card clicked:', project.id);
       <div style={s.cardTop}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={s.cardTitleRow}>
