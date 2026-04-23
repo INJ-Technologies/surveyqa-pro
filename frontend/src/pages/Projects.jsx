@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import Layout from "../components/Layout";
 import api from "../api";
 import {
@@ -22,6 +23,9 @@ import {
   FullCol,
   SectionHeader,
 } from "../components/FormElements";
+
+const FONT =
+  "'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 
 // ─── Format option labels ─────────────────────────────────────────────────────
 const formatLabel = (str) => {
@@ -52,14 +56,6 @@ const PLATFORMS = [
 const AI_MODES = ["ai", "human", "predefined"];
 const STRATEGIES = ["persona_true", "quota_guided", "stress_test"];
 const PROVIDERS = ["brightdata", "oxylabs", "smartproxy", "iproyal", "custom"];
-const STATUSES = [
-  "draft",
-  "review",
-  "active",
-  "paused",
-  "completed",
-  "archived",
-];
 
 const toOptions = (arr) =>
   arr.map((v) => ({ value: v, label: formatLabel(v) }));
@@ -376,7 +372,6 @@ function CreateModal({ onClose, onCreated }) {
                   </button>
                 }
               />
-
               {form.surveys.map((survey, i) => (
                 <SurveyCard
                   key={i}
@@ -386,7 +381,6 @@ function CreateModal({ onClose, onCreated }) {
                   onRemove={removeSurvey}
                 />
               ))}
-
               <div style={{ marginTop: 28 }}>
                 <SectionHeader
                   title="AI & Automation Settings"
@@ -530,6 +524,7 @@ function ProjectCard({ project, onClick }) {
 
 // ─── Main Projects Page ───────────────────────────────────────────────────────
 export default function Projects() {
+  const navigate = useNavigate();
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -586,7 +581,6 @@ export default function Projects() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-
         <select
           style={s.filterSelect}
           value={clientFilter}
@@ -599,7 +593,6 @@ export default function Projects() {
             </option>
           ))}
         </select>
-
         <select
           style={s.filterSelect}
           value={statusFilter}
@@ -612,7 +605,6 @@ export default function Projects() {
             </option>
           ))}
         </select>
-
         <button style={s.createBtn} onClick={() => setShowModal(true)}>
           <Plus size={18} /> New Project
         </button>
@@ -661,7 +653,7 @@ export default function Projects() {
             <ProjectCard
               key={p.id}
               project={p}
-              onClick={() => console.log("Open project", p.id)}
+              onClick={() => navigate(`/projects/${p.id}`)}
             />
           ))}
         </div>
@@ -678,9 +670,6 @@ export default function Projects() {
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
-const FONT =
-  "'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-
 const s = {
   toolbar: {
     display: "flex",
