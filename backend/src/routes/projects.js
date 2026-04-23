@@ -109,4 +109,41 @@ router.delete('/:id', requireRole('admin'), async (req, res) => {
   }
 });
 
+const {
+  getProjects, getProjectById, getProjectSurveys,
+  createProject, updateProject, deleteProject,
+  getDashboardStats,
+  getProjectSessionStats,
+  getProjectSessions,
+  getProjectCostSummary,
+} = require('../db/projects');
+
+// ─── GET /api/projects/:id/sessions ──────────────────────────────────────────
+router.get('/:id/sessions', async (req, res) => {
+  try {
+    const { status, outcome, country, limit, offset } = req.query
+    const sessions = await getProjectSessions(req.params.id, {
+      status, outcome, country,
+      limit:  parseInt(limit)  || 100,
+      offset: parseInt(offset) || 0,
+    })
+    const stats = await getProjectSessionStats(req.params.id)
+    res.json({ sessions, stats })
+  } catch (err) {
+    console.error('Get sessions error:', err.message)
+    res.status(500).json({ error: 'Failed to fetch sessions' })
+  }
+})
+
+// ─── GET /api/projects/:id/costs ─────────────────────────────────────────────
+router.get('/:id/costs', async (req, res) => {
+  try {
+    const summary = await getProjectCostSummary(req.params.id)
+    res.json({ summary })
+  } catch (err) {
+    console.error('Get costs error:', err.message)
+    res.status(500).json({ error: 'Failed to fetch cost summary' })
+  }
+})
+
 module.exports = router;

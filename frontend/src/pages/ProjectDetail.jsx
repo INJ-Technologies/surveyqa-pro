@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import Layout from "../components/Layout";
 import api from "../api";
@@ -25,6 +25,17 @@ import {
   CheckCircle,
   Save,
   Eye,
+  BarChart2,
+  DollarSign,
+  RefreshCw,
+  ChevronDown,
+  ChevronUp,
+  Target,
+  Zap,
+  TrendingDown,
+  StopCircle,
+  Loader,
+  Filter,
 } from "lucide-react";
 
 const FONT =
@@ -45,6 +56,31 @@ const formatLabel = (str) => {
       w.toUpperCase() === "AI" ? "AI" : w.charAt(0).toUpperCase() + w.slice(1),
     )
     .join(" ");
+};
+
+const fmtDuration = (secs) => {
+  if (!secs) return "—";
+  if (secs < 60) return `${secs}s`;
+  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+};
+
+const fmtDate = (dt) => {
+  if (!dt) return "—";
+  return new Date(dt).toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+};
+
+const fmtTime = (dt) => {
+  if (!dt) return "—";
+  return new Date(dt).toLocaleString("en-IN", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 };
 
 const toOptions = (arr) =>
@@ -72,6 +108,17 @@ const STATUS_COLORS = {
   archived: { bg: "#f1f5f9", text: "#94a3b8", border: "#e2e8f0" },
 };
 
+const SESSION_STATUS_COLORS = {
+  queued: { bg: "#f1f5f9", text: "#64748b" },
+  initialising: { bg: "#fef3c7", text: "#92400e" },
+  in_progress: { bg: "#dbeafe", text: "#1e40af" },
+  completed: { bg: "#dcfce7", text: "#166534" },
+  terminated: { bg: "#fce7f3", text: "#9d174d" },
+  over_quota: { bg: "#fef3c7", text: "#92400e" },
+  error: { bg: "#fef2f2", text: "#dc2626" },
+  flagged: { bg: "#fff7ed", text: "#c2410c" },
+};
+
 const STATUS_TRANSITIONS = {
   draft: [
     { value: "review", label: "Submit for Review" },
@@ -79,7 +126,7 @@ const STATUS_TRANSITIONS = {
   ],
   review: [
     { value: "active", label: "Approve & Launch" },
-    { value: "draft", label: "Send Back to Draft" },
+    { value: "draft", label: "Send Back" },
   ],
   active: [
     { value: "paused", label: "Pause" },
@@ -94,14 +141,15 @@ const STATUS_TRANSITIONS = {
 };
 
 // ─── Status Badge ─────────────────────────────────────────────────────────────
-function StatusBadge({ status, large }) {
-  const c = STATUS_COLORS[status] || STATUS_COLORS.draft;
+function StatusBadge({ status, colors = STATUS_COLORS, large }) {
+  const c = colors[status] ||
+    colors.draft || { bg: "#f1f5f9", text: "#64748b", border: "#e2e8f0" };
   return (
     <span
       style={{
         background: c.bg,
         color: c.text,
-        border: `1.5px solid ${c.border}`,
+        border: c.border ? `1.5px solid ${c.border}` : "none",
         borderRadius: 20,
         padding: large ? "6px 16px" : "3px 10px",
         fontSize: large ? "0.85rem" : "0.72rem",
@@ -121,7 +169,7 @@ function Toast({ message, type, onClose }) {
     const t = setTimeout(onClose, 3500);
     return () => clearTimeout(t);
   }, []);
-  const isError = type === "error";
+  const isErr = type === "error";
   return (
     <div
       style={{
@@ -132,18 +180,18 @@ function Toast({ message, type, onClose }) {
         display: "flex",
         alignItems: "center",
         gap: 10,
-        background: isError ? "#fef2f2" : "#f0fdf4",
-        border: `1.5px solid ${isError ? "#fca5a5" : "#86efac"}`,
+        background: isErr ? "#fef2f2" : "#f0fdf4",
+        border: `1.5px solid ${isErr ? "#fca5a5" : "#86efac"}`,
         borderRadius: 10,
         padding: "12px 18px",
         boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
         fontFamily: FONT,
         fontSize: "0.88rem",
-        color: isError ? "#dc2626" : "#166534",
+        color: isErr ? "#dc2626" : "#166534",
         fontWeight: 500,
       }}
     >
-      {isError ? <AlertCircle size={18} /> : <CheckCircle size={18} />}
+      {isErr ? <AlertCircle size={18} /> : <CheckCircle size={18} />}
       {message}
       <button
         onClick={onClose}
@@ -169,6 +217,7 @@ function ConfirmModal({
   message,
   confirmLabel,
   confirmColor,
+  icon: Icon = Trash2,
   onConfirm,
   onCancel,
   loading,
@@ -197,7 +246,7 @@ function ConfirmModal({
             margin: "0 auto 16px",
           }}
         >
-          <Trash2 size={24} color={confirmColor} />
+          <Icon size={24} color={confirmColor} />
         </div>
         <h3
           style={{
@@ -400,7 +449,6 @@ function SurveyCardEdit({ survey, index, onChange, onRemove }) {
         : [];
   const setVal = (k) => (e) => onChange(index, k, e.target.value);
   const set = (k) => (v) => onChange(index, k, v);
-
   return (
     <div style={s.surveyCard}>
       <div style={s.surveyCardHeader}>
@@ -456,7 +504,976 @@ function SurveyCardEdit({ survey, index, onChange, onRemove }) {
   );
 }
 
-// ─── Main ProjectDetail Page ──────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// QUOTA TAB
+// ══════════════════════════════════════════════════════════════════════════════
+function QuotaTab({ projectId, targetCompletes, showToast }) {
+  const [dimensions, setDimensions] = useState([]);
+  const [existing, setExisting] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const load = async () => {
+    try {
+      const res = await api.get(`/projects/${projectId}/quota`);
+      if (res.data.cells && res.data.cells.length > 0) {
+        setExisting(res.data);
+        // Rebuild dimension UI from saved cells
+        const dimMap = {};
+        for (const cell of res.data.cells) {
+          const dims = cell.dimensions || {};
+          for (const [dimName, dimVal] of Object.entries(dims)) {
+            if (!dimMap[dimName])
+              dimMap[dimName] = { name: dimName, values: [] };
+            dimMap[dimName].values.push({
+              label: dimVal,
+              target: cell.target,
+              minimum: cell.minimum || 0,
+              quotaType: cell.quota_type || "hard",
+              current: cell.current_count || 0,
+              status: cell.status,
+            });
+          }
+        }
+        setDimensions(Object.values(dimMap));
+      }
+    } catch {
+      /* no quota yet */
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, [projectId]);
+
+  const addDimension = () =>
+    setDimensions((d) => [
+      ...d,
+      {
+        name: "",
+        values: [
+          { label: "", target: 0, minimum: 0, quotaType: "hard", pct: 50 },
+        ],
+      },
+    ]);
+
+  const removeDimension = (di) =>
+    setDimensions((d) => d.filter((_, i) => i !== di));
+
+  const setDimName = (di, val) =>
+    setDimensions((d) => {
+      const next = [...d];
+      next[di] = { ...next[di], name: val };
+      return next;
+    });
+
+  const addValue = (di) =>
+    setDimensions((d) => {
+      const next = [...d];
+      next[di] = {
+        ...next[di],
+        values: [
+          ...next[di].values,
+          { label: "", target: 0, minimum: 0, quotaType: "hard", pct: 0 },
+        ],
+      };
+      return next;
+    });
+
+  const removeValue = (di, vi) =>
+    setDimensions((d) => {
+      const next = [...d];
+      next[di] = {
+        ...next[di],
+        values: next[di].values.filter((_, i) => i !== vi),
+      };
+      return next;
+    });
+
+  const setValueField = (di, vi, field, val) =>
+    setDimensions((d) => {
+      const next = [...d];
+      const vals = [...next[di].values];
+      vals[vi] = { ...vals[vi], [field]: val };
+      // Auto-calc target from pct
+      if (field === "pct") {
+        vals[vi].target = Math.round((parseFloat(val) / 100) * targetCompletes);
+      }
+      if (field === "target") {
+        vals[vi].pct =
+          targetCompletes > 0
+            ? Math.round((parseInt(val) / targetCompletes) * 100)
+            : 0;
+      }
+      next[di] = { ...next[di], values: vals };
+      return next;
+    });
+
+  const handleSave = async () => {
+    for (const dim of dimensions) {
+      if (!dim.name.trim()) {
+        showToast("All dimensions must have a name", "error");
+        return;
+      }
+      for (const v of dim.values) {
+        if (!v.label.trim()) {
+          showToast("All quota values must have a label", "error");
+          return;
+        }
+      }
+    }
+    setSaving(true);
+    try {
+      await api.post(`/projects/${projectId}/quota`, { dimensions });
+      showToast("Quota plan saved ✓");
+      load();
+    } catch (err) {
+      showToast(err.response?.data?.error || "Failed to save quota", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <div style={s.tabCenter}>Loading quota plan...</div>;
+
+  const totalAllocated = dimensions.reduce(
+    (sum, d) =>
+      sum + d.values.reduce((s, v) => s + (parseInt(v.target) || 0), 0),
+    0,
+  );
+
+  return (
+    <div>
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          marginBottom: 20,
+        }}
+      >
+        <div>
+          <h3 style={s.sectionH}>Quota Plan</h3>
+          <p style={s.sectionP}>
+            Define target distributions. Each dimension manages its own quota
+            independently.
+          </p>
+        </div>
+        <button style={s.primaryBtn} onClick={addDimension}>
+          <Plus size={16} /> Add Dimension
+        </button>
+      </div>
+
+      {/* Summary bar */}
+      {dimensions.length > 0 && (
+        <div style={s.quotaSummaryBar}>
+          <span
+            style={{ fontFamily: FONT, fontSize: "0.85rem", color: "#1e293b" }}
+          >
+            Project Target: <strong>{targetCompletes}</strong> completes
+          </span>
+          <span
+            style={{
+              fontFamily: FONT,
+              fontSize: "0.85rem",
+              color: totalAllocated === targetCompletes ? "#166534" : "#92400e",
+            }}
+          >
+            Total Allocated: <strong>{totalAllocated}</strong>
+            {totalAllocated !== targetCompletes &&
+              ` (${totalAllocated > targetCompletes ? "+" : ""}${totalAllocated - targetCompletes} vs target)`}
+          </span>
+        </div>
+      )}
+
+      {/* Dimensions */}
+      {dimensions.length === 0 ? (
+        <div style={s.emptyQuota}>
+          <Target size={48} color="#cbd5e1" />
+          <h4
+            style={{ fontFamily: FONT, color: "#1e293b", margin: "12px 0 6px" }}
+          >
+            No Quota Plan Yet
+          </h4>
+          <p
+            style={{
+              fontFamily: FONT,
+              color: "#64748b",
+              fontSize: "0.88rem",
+              marginBottom: 16,
+            }}
+          >
+            Add dimensions to define how sessions should be distributed across
+            respondent groups.
+          </p>
+          <button style={s.primaryBtn} onClick={addDimension}>
+            <Plus size={16} /> Add First Dimension
+          </button>
+        </div>
+      ) : (
+        dimensions.map((dim, di) => (
+          <div key={di} style={s.dimCard}>
+            {/* Dimension header */}
+            <div style={s.dimHeader}>
+              <div style={{ flex: 1 }}>
+                <input
+                  style={s.dimNameInput}
+                  placeholder="Dimension name (e.g. Gender, Age Group, Region)"
+                  value={dim.name}
+                  onChange={(e) => setDimName(di, e.target.value)}
+                />
+              </div>
+              <button
+                style={s.dimRemoveBtn}
+                onClick={() => removeDimension(di)}
+              >
+                <X size={15} /> Remove Dimension
+              </button>
+            </div>
+
+            {/* Values table */}
+            <table style={s.quotaTable}>
+              <thead>
+                <tr>
+                  {[
+                    "Value / Label",
+                    "Target %",
+                    "Target Count",
+                    "Min Count",
+                    "Type",
+                    "Fill",
+                    "",
+                  ].map((h) => (
+                    <th key={h} style={s.quotaTH}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {dim.values.map((val, vi) => (
+                  <tr
+                    key={vi}
+                    style={{ background: vi % 2 === 0 ? "white" : "#f8fafc" }}
+                  >
+                    <td style={s.quotaTD}>
+                      <input
+                        style={s.quotaInput}
+                        placeholder="e.g. Male"
+                        value={val.label}
+                        onChange={(e) =>
+                          setValueField(di, vi, "label", e.target.value)
+                        }
+                      />
+                    </td>
+                    <td style={s.quotaTD}>
+                      <input
+                        style={{ ...s.quotaInput, width: 60 }}
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={val.pct || ""}
+                        placeholder="50"
+                        onChange={(e) =>
+                          setValueField(di, vi, "pct", e.target.value)
+                        }
+                      />
+                    </td>
+                    <td style={s.quotaTD}>
+                      <input
+                        style={{ ...s.quotaInput, width: 80 }}
+                        type="number"
+                        min="0"
+                        value={val.target || ""}
+                        placeholder="0"
+                        onChange={(e) =>
+                          setValueField(di, vi, "target", e.target.value)
+                        }
+                      />
+                    </td>
+                    <td style={s.quotaTD}>
+                      <input
+                        style={{ ...s.quotaInput, width: 70 }}
+                        type="number"
+                        min="0"
+                        value={val.minimum || ""}
+                        placeholder="0"
+                        onChange={(e) =>
+                          setValueField(di, vi, "minimum", e.target.value)
+                        }
+                      />
+                    </td>
+                    <td style={s.quotaTD}>
+                      <select
+                        style={{ ...s.quotaInput, width: 80 }}
+                        value={val.quotaType}
+                        onChange={(e) =>
+                          setValueField(di, vi, "quotaType", e.target.value)
+                        }
+                      >
+                        <option value="hard">Hard</option>
+                        <option value="soft">Soft</option>
+                      </select>
+                    </td>
+                    <td style={s.quotaTD}>
+                      {val.current !== undefined ? (
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                          }}
+                        >
+                          <div
+                            style={{
+                              flex: 1,
+                              height: 6,
+                              background: "#f1f5f9",
+                              borderRadius: 3,
+                              overflow: "hidden",
+                              minWidth: 60,
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "100%",
+                                borderRadius: 3,
+                                width: `${val.target > 0 ? Math.min(Math.round((val.current / val.target) * 100), 100) : 0}%`,
+                                background:
+                                  val.status === "filled"
+                                    ? "#059669"
+                                    : "#2563eb",
+                              }}
+                            />
+                          </div>
+                          <span
+                            style={{
+                              fontSize: "0.75rem",
+                              color: "#64748b",
+                              fontFamily: FONT,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {val.current || 0}/{val.target}
+                          </span>
+                        </div>
+                      ) : (
+                        <span
+                          style={{
+                            fontSize: "0.75rem",
+                            color: "#94a3b8",
+                            fontFamily: FONT,
+                          }}
+                        >
+                          Not started
+                        </span>
+                      )}
+                    </td>
+                    <td style={s.quotaTD}>
+                      {vi > 0 && (
+                        <button
+                          style={s.rowRemoveBtn}
+                          onClick={() => removeValue(di, vi)}
+                        >
+                          <X size={13} />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <button style={s.addValueBtn} onClick={() => addValue(di)}>
+              <Plus size={13} /> Add Value
+            </button>
+          </div>
+        ))
+      )}
+
+      {/* Save */}
+      {dimensions.length > 0 && (
+        <div style={s.saveBar}>
+          <button
+            style={{ ...s.saveBtn, opacity: saving ? 0.7 : 1 }}
+            onClick={handleSave}
+            disabled={saving}
+          >
+            <Save size={16} /> {saving ? "Saving..." : "Save Quota Plan"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SESSIONS TAB
+// ══════════════════════════════════════════════════════════════════════════════
+function SessionsTab({ projectId, showToast }) {
+  const [sessions, setSessions] = useState([]);
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [filters, setFilters] = useState({
+    status: "",
+    outcome: "",
+    country: "",
+  });
+
+  const load = useCallback(
+    async (isRefresh = false) => {
+      if (isRefresh) setRefreshing(true);
+      else setLoading(true);
+      try {
+        const params = new URLSearchParams();
+        if (filters.status) params.append("status", filters.status);
+        if (filters.outcome) params.append("outcome", filters.outcome);
+        if (filters.country) params.append("country", filters.country);
+        const res = await api.get(`/projects/${projectId}/sessions?${params}`);
+        setSessions(res.data.sessions || []);
+        setStats(res.data.stats || null);
+      } catch {
+        showToast("Failed to load sessions", "error");
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [projectId, filters],
+  );
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const setF = (k, v) => setFilters((f) => ({ ...f, [k]: v }));
+
+  const statusOpts = [
+    "queued",
+    "initialising",
+    "in_progress",
+    "completed",
+    "terminated",
+    "over_quota",
+    "error",
+    "flagged",
+  ];
+  const outcomeOpts = ["completed", "terminated", "over_quota", "error"];
+
+  if (loading) return <div style={s.tabCenter}>Loading sessions...</div>;
+
+  return (
+    <div>
+      {/* Stats row */}
+      {stats && (
+        <div style={s.sessionStatsRow}>
+          {[
+            { label: "Total", val: stats.total || 0, color: "#64748b" },
+            { label: "Active", val: stats.active || 0, color: "#2563eb" },
+            { label: "Completed", val: stats.completed || 0, color: "#059669" },
+            {
+              label: "Terminated",
+              val: stats.terminated || 0,
+              color: "#9d174d",
+            },
+            { label: "Errors", val: stats.errors || 0, color: "#dc2626" },
+            {
+              label: "Over Quota",
+              val: stats.over_quota || 0,
+              color: "#92400e",
+            },
+            {
+              label: "Avg Duration",
+              val: fmtDuration(stats.avg_duration),
+              color: "#0891b2",
+            },
+            {
+              label: "Avg Quality",
+              val: stats.avg_quality ? `${stats.avg_quality}/100` : "—",
+              color: "#7c3aed",
+            },
+          ].map(({ label, val, color }) => (
+            <div key={label} style={s.sessionStat}>
+              <div
+                style={{
+                  fontSize: "1.3rem",
+                  fontWeight: 800,
+                  color,
+                  fontFamily: FONT,
+                }}
+              >
+                {val}
+              </div>
+              <div
+                style={{
+                  fontSize: "0.72rem",
+                  color: "#94a3b8",
+                  fontFamily: FONT,
+                }}
+              >
+                {label}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Filters + Refresh */}
+      <div style={s.sessionFilters}>
+        <select
+          style={s.filterSel}
+          value={filters.status}
+          onChange={(e) => setF("status", e.target.value)}
+        >
+          <option value="">All Statuses</option>
+          {statusOpts.map((o) => (
+            <option key={o} value={o}>
+              {formatLabel(o)}
+            </option>
+          ))}
+        </select>
+        <select
+          style={s.filterSel}
+          value={filters.outcome}
+          onChange={(e) => setF("outcome", e.target.value)}
+        >
+          <option value="">All Outcomes</option>
+          {outcomeOpts.map((o) => (
+            <option key={o} value={o}>
+              {formatLabel(o)}
+            </option>
+          ))}
+        </select>
+        <input
+          style={s.filterSel}
+          placeholder="Country code (e.g. IN)"
+          value={filters.country}
+          onChange={(e) => setF("country", e.target.value)}
+        />
+        <button
+          style={s.refreshBtn}
+          onClick={() => load(true)}
+          disabled={refreshing}
+        >
+          <RefreshCw
+            size={14}
+            style={{
+              animation: refreshing ? "spin 1s linear infinite" : "none",
+            }}
+          />
+          {refreshing ? "Refreshing..." : "Refresh"}
+        </button>
+      </div>
+
+      {/* Table */}
+      {sessions.length === 0 ? (
+        <div style={s.emptyQuota}>
+          <Activity size={48} color="#cbd5e1" />
+          <h4
+            style={{ fontFamily: FONT, color: "#1e293b", margin: "12px 0 6px" }}
+          >
+            No Sessions Yet
+          </h4>
+          <p
+            style={{ fontFamily: FONT, color: "#64748b", fontSize: "0.88rem" }}
+          >
+            Sessions will appear here once the project is active and bot runs
+            are triggered.
+          </p>
+        </div>
+      ) : (
+        <div style={s.tableWrap}>
+          <table style={s.table}>
+            <thead>
+              <tr style={s.theadRow}>
+                {[
+                  "Session ID",
+                  "Status",
+                  "Persona",
+                  "Country",
+                  "Device",
+                  "Duration",
+                  "Quality",
+                  "Outcome",
+                  "Started",
+                ].map((h) => (
+                  <th key={h} style={s.th}>
+                    <div style={s.thInner}>{h}</div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sessions.map((session, idx) => (
+                <tr
+                  key={session.id}
+                  style={{
+                    ...s.tr,
+                    background: idx % 2 === 0 ? "white" : "#f8fafc",
+                  }}
+                >
+                  <td style={s.td}>
+                    <span
+                      style={{
+                        fontFamily: "monospace",
+                        fontSize: "0.78rem",
+                        color: "#64748b",
+                        background: "#f1f5f9",
+                        padding: "2px 6px",
+                        borderRadius: 4,
+                      }}
+                    >
+                      {session.id.slice(0, 8)}
+                    </span>
+                  </td>
+                  <td style={s.td}>
+                    <StatusBadge
+                      status={session.status}
+                      colors={SESSION_STATUS_COLORS}
+                    />
+                  </td>
+                  <td style={s.td}>
+                    <span
+                      style={{
+                        fontSize: "0.82rem",
+                        color: "#1e293b",
+                        fontFamily: FONT,
+                      }}
+                    >
+                      {session.persona_name || "—"}
+                    </span>
+                  </td>
+                  <td style={s.td}>
+                    <span
+                      style={{
+                        fontSize: "0.82rem",
+                        color: "#475569",
+                        fontFamily: FONT,
+                      }}
+                    >
+                      {session.proxy_country || "—"}
+                    </span>
+                  </td>
+                  <td style={s.td}>
+                    <span
+                      style={{
+                        fontSize: "0.78rem",
+                        color: "#64748b",
+                        fontFamily: FONT,
+                      }}
+                    >
+                      {session.device_type || "—"}
+                    </span>
+                  </td>
+                  <td style={s.td}>
+                    <span
+                      style={{
+                        fontSize: "0.82rem",
+                        color: "#475569",
+                        fontFamily: FONT,
+                      }}
+                    >
+                      {fmtDuration(session.total_duration_s)}
+                    </span>
+                  </td>
+                  <td style={s.td}>
+                    {session.quality_score != null ? (
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 40,
+                            height: 5,
+                            background: "#f1f5f9",
+                            borderRadius: 3,
+                            overflow: "hidden",
+                          }}
+                        >
+                          <div
+                            style={{
+                              height: "100%",
+                              width: `${session.quality_score}%`,
+                              background:
+                                session.quality_score >= 70
+                                  ? "#059669"
+                                  : session.quality_score >= 40
+                                    ? "#f59e0b"
+                                    : "#ef4444",
+                              borderRadius: 3,
+                            }}
+                          />
+                        </div>
+                        <span
+                          style={{
+                            fontSize: "0.75rem",
+                            color: "#64748b",
+                            fontFamily: FONT,
+                          }}
+                        >
+                          {session.quality_score}
+                        </span>
+                      </div>
+                    ) : (
+                      <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
+                        —
+                      </span>
+                    )}
+                  </td>
+                  <td style={s.td}>
+                    {session.outcome ? (
+                      <StatusBadge
+                        status={session.outcome}
+                        colors={SESSION_STATUS_COLORS}
+                      />
+                    ) : (
+                      <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
+                        —
+                      </span>
+                    )}
+                  </td>
+                  <td style={s.td}>
+                    <span
+                      style={{
+                        fontSize: "0.75rem",
+                        color: "#94a3b8",
+                        fontFamily: FONT,
+                      }}
+                    >
+                      {fmtTime(session.started_at || session.created_at)}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COSTS TAB
+// ══════════════════════════════════════════════════════════════════════════════
+function CostsTab({ projectId, showToast }) {
+  const [summary, setSummary] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api
+      .get(`/projects/${projectId}/costs`)
+      .then((res) => setSummary(res.data.summary))
+      .catch(() => showToast("Failed to load cost data", "error"))
+      .finally(() => setLoading(false));
+  }, [projectId]);
+
+  if (loading) return <div style={s.tabCenter}>Loading cost data...</div>;
+
+  const completed = parseInt(summary?.completed_sessions) || 0;
+  const terminated = parseInt(summary?.terminated_sessions) || 0;
+  const errors = parseInt(summary?.error_sessions) || 0;
+  const active = parseInt(summary?.active_sessions) || 0;
+  const total = parseInt(summary?.total_sessions) || 0;
+  const target = parseInt(summary?.target_completes) || 0;
+  const completionPct =
+    target > 0 ? Math.min(Math.round((completed / target) * 100), 100) : 0;
+
+  return (
+    <div>
+      {/* Session outcome cards */}
+      <div style={s.statsGrid}>
+        <StatCard
+          label="URL Hits"
+          value={total}
+          icon={Activity}
+          color="#f59e0b"
+        />
+        <StatCard
+          label="Completes"
+          value={completed}
+          sub={`${completionPct}% of target`}
+          icon={CheckCircle}
+          color="#059669"
+        />
+        <StatCard
+          label="Incompletes"
+          value={active}
+          sub="In progress or errored"
+          icon={TrendingDown}
+          color="#f97316"
+        />
+        <StatCard
+          label="Terminates"
+          value={terminated}
+          sub="Screener fails + OQ"
+          icon={StopCircle}
+          color="#ef4444"
+        />
+      </div>
+
+      {/* Progress */}
+      {target > 0 && (
+        <div style={s.progressCard}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              marginBottom: 8,
+            }}
+          >
+            <span
+              style={{
+                fontSize: "0.85rem",
+                fontWeight: 600,
+                color: "#1e293b",
+                fontFamily: FONT,
+              }}
+            >
+              Completion Progress
+            </span>
+            <span
+              style={{
+                fontSize: "0.85rem",
+                fontWeight: 700,
+                color: "#2563eb",
+                fontFamily: FONT,
+              }}
+            >
+              {completionPct}%
+            </span>
+          </div>
+          <div
+            style={{
+              height: 8,
+              background: "#f1f5f9",
+              borderRadius: 4,
+              overflow: "hidden",
+              marginBottom: 6,
+            }}
+          >
+            <div
+              style={{
+                height: "100%",
+                width: `${completionPct}%`,
+                background: "linear-gradient(90deg, #1e3a5f, #2563eb)",
+                borderRadius: 4,
+              }}
+            />
+          </div>
+          <div
+            style={{ fontSize: "0.75rem", color: "#94a3b8", fontFamily: FONT }}
+          >
+            {completed} of {target} target completes
+          </div>
+        </div>
+      )}
+
+      {/* Session breakdown */}
+      <div style={{ ...s.detailCard, marginBottom: 16 }}>
+        <div style={s.detailCardTitle}>Session Breakdown</div>
+        {[
+          ["Total Sessions", total],
+          ["Completed", completed],
+          ["Terminated", terminated],
+          ["Errors / Flagged", errors],
+          ["Active / Running", active],
+          ["Avg Duration", fmtDuration(summary?.avg_duration_s)],
+          [
+            "Avg Quality Score",
+            summary?.avg_quality ? `${summary.avg_quality} / 100` : "—",
+          ],
+        ].map(([k, v]) => (
+          <div key={k} style={s.detailRow}>
+            <span style={s.detailKey}>{k}</span>
+            <span style={s.detailVal}>{v}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Cost section — placeholder */}
+      <div style={s.detailCard}>
+        <div style={s.detailCardTitle}>Cost Breakdown</div>
+        <div style={s.costNotice}>
+          <DollarSign size={20} color="#94a3b8" />
+          <div>
+            <div
+              style={{
+                fontSize: "0.88rem",
+                fontWeight: 600,
+                color: "#1e293b",
+                fontFamily: FONT,
+                marginBottom: 4,
+              }}
+            >
+              Pricing rates not configured
+            </div>
+            <div
+              style={{
+                fontSize: "0.82rem",
+                color: "#64748b",
+                fontFamily: FONT,
+                lineHeight: 1.6,
+              }}
+            >
+              Cost per AI token, proxy bandwidth rate, and other pricing will be
+              configurable in
+              <strong> Settings → Billing</strong>. Once configured, cost per
+              session, cost per complete, and total project spend will be
+              calculated automatically.
+            </div>
+          </div>
+        </div>
+        {[
+          ["AI Token Cost", "—", "Rate not configured"],
+          ["Proxy Cost", "—", "Rate not configured"],
+          ["Total Spend", "—", "Awaiting rate config"],
+          ["Cost per Complete", "—", "Awaiting rate config"],
+          [
+            "Budget (Proxy)",
+            summary?.budget_proxy ? `$${summary.budget_proxy}` : "—",
+            "",
+          ],
+          [
+            "Budget (AI)",
+            summary?.budget_ai ? `$${summary.budget_ai}` : "—",
+            "",
+          ],
+        ].map(([k, v, note]) => (
+          <div key={k} style={s.detailRow}>
+            <span style={s.detailKey}>{k}</span>
+            <div style={{ textAlign: "right" }}>
+              <span style={s.detailVal}>{v}</span>
+              {note && (
+                <div
+                  style={{
+                    fontSize: "0.72rem",
+                    color: "#94a3b8",
+                    fontFamily: FONT,
+                  }}
+                >
+                  {note}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MAIN ProjectDetail
+// ══════════════════════════════════════════════════════════════════════════════
 export default function ProjectDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -572,7 +1589,7 @@ export default function ProjectDetail() {
       };
       const res = await api.patch(`/projects/${id}`, payload);
       setProject(res.data.project);
-      setSurveys(payload.surveys); // ← ADD THIS LINE
+      setSurveys(payload.surveys);
       showToast("Project saved successfully ✓");
       setActiveTab("overview");
     } catch (err) {
@@ -645,7 +1662,6 @@ export default function ProjectDetail() {
         )
       : 0;
 
-  // ─── Tab style helper — no spread conflict ────────────────────────────────
   const tabStyle = (key) => ({
     display: "flex",
     alignItems: "center",
@@ -664,14 +1680,21 @@ export default function ProjectDetail() {
     transition: "all 0.15s",
   });
 
+  const TABS = [
+    { key: "overview", label: "Overview", icon: Eye },
+    { key: "quota", label: "Quota", icon: Target },
+    { key: "sessions", label: "Sessions", icon: Activity },
+    { key: "costs", label: "Costs", icon: DollarSign },
+    { key: "edit", label: "Edit", icon: Edit2 },
+  ];
+
   return (
     <Layout title={project.name}>
-      {/* Back */}
       <button style={s.backBtn} onClick={() => navigate("/projects")}>
         <ArrowLeft size={16} /> Back to Projects
       </button>
 
-      {/* Header */}
+      {/* Page header */}
       <div style={s.pageHeader}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
@@ -713,27 +1736,27 @@ export default function ProjectDetail() {
         </div>
       </div>
 
-      {/* Tabs — inline styles, no spread */}
+      {/* Tabs */}
       <div
         style={{
           display: "flex",
           borderBottom: "2px solid #f1f5f9",
           marginBottom: 24,
-          gap: 4,
+          gap: 2,
         }}
       >
-        <button
-          style={tabStyle("overview")}
-          onClick={() => setActiveTab("overview")}
-        >
-          <Eye size={15} /> Overview
-        </button>
-        <button style={tabStyle("edit")} onClick={() => setActiveTab("edit")}>
-          <Edit2 size={15} /> Edit Project
-        </button>
+        {TABS.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            style={tabStyle(key)}
+            onClick={() => setActiveTab(key)}
+          >
+            <Icon size={15} /> {label}
+          </button>
+        ))}
       </div>
 
-      {/* ══════════════ OVERVIEW ══════════════ */}
+      {/* ── OVERVIEW ── */}
       {activeTab === "overview" && (
         <div>
           <div style={s.statsGrid}>
@@ -744,10 +1767,11 @@ export default function ProjectDetail() {
               color="#2563eb"
             />
             <StatCard
-              label="Sessions Run"
+              label="URL Hits"
               value={project.session_count || 0}
               icon={Activity}
-              color="#7c3aed"
+              color="#f59e0b"
+              sub="Total survey attempts"
             />
             <StatCard
               label="Completes"
@@ -837,34 +1861,9 @@ export default function ProjectDetail() {
                 ["AI Strategy", formatLabel(project.ai_strategy)],
                 ["Proxy Provider", formatLabel(project.proxy_provider)],
                 ["Concurrent Sessions", project.concurrent_sessions],
-                [
-                  "Start Date",
-                  project.start_date
-                    ? new Date(project.start_date).toLocaleDateString("en-IN", {
-                        day: "numeric",
-                        month: "short",
-                        year: "numeric",
-                      })
-                    : "—",
-                ],
-                [
-                  "End Date",
-                  project.end_date
-                    ? new Date(project.end_date).toLocaleDateString("en-IN", {
-                        day: "numeric",
-                        month: "short",
-                        year: "numeric",
-                      })
-                    : "—",
-                ],
-                [
-                  "Created",
-                  new Date(project.created_at).toLocaleDateString("en-IN", {
-                    day: "numeric",
-                    month: "short",
-                    year: "numeric",
-                  }),
-                ],
+                ["Start Date", fmtDate(project.start_date)],
+                ["End Date", fmtDate(project.end_date)],
+                ["Created", fmtDate(project.created_at)],
                 ["Owner", project.owner_name || "—"],
               ].map(([k, v]) => (
                 <div key={k} style={s.detailRow}>
@@ -873,7 +1872,6 @@ export default function ProjectDetail() {
                 </div>
               ))}
             </div>
-
             <div style={s.detailCard}>
               <div style={s.detailCardTitle}>
                 Survey URLs ({surveys.length})
@@ -915,7 +1913,26 @@ export default function ProjectDetail() {
         </div>
       )}
 
-      {/* ══════════════ EDIT ══════════════ */}
+      {/* ── QUOTA ── */}
+      {activeTab === "quota" && (
+        <QuotaTab
+          projectId={id}
+          targetCompletes={project.target_completes}
+          showToast={showToast}
+        />
+      )}
+
+      {/* ── SESSIONS ── */}
+      {activeTab === "sessions" && (
+        <SessionsTab projectId={id} showToast={showToast} />
+      )}
+
+      {/* ── COSTS ── */}
+      {activeTab === "costs" && (
+        <CostsTab projectId={id} showToast={showToast} />
+      )}
+
+      {/* ── EDIT ── */}
       {activeTab === "edit" && editForm && (
         <div style={s.editContainer}>
           <SectionHeader
@@ -1065,7 +2082,7 @@ export default function ProjectDetail() {
         </div>
       )}
 
-      {/* Delete confirm */}
+      {/* Modals */}
       {showDelete && (
         <ConfirmModal
           title="Delete Project"
@@ -1077,11 +2094,10 @@ export default function ProjectDetail() {
           loading={deleting}
         />
       )}
-
-      {/* Save confirm */}
       {showSaveConfirm && (
         <ConfirmModal
           title="Save Changes"
+          icon={Save}
           message="Are you sure you want to save the changes made to this project?"
           confirmLabel="Yes, Save Changes"
           confirmColor="#1e3a5f"
@@ -1090,8 +2106,6 @@ export default function ProjectDetail() {
           loading={saving}
         />
       )}
-
-      {/* Toast */}
       {toast && (
         <Toast
           message={toast.message}
@@ -1168,6 +2182,7 @@ const s = {
     cursor: "pointer",
     color: "#ef4444",
   },
+
   statsGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
@@ -1228,6 +2243,7 @@ const s = {
     fontWeight: 500,
     textAlign: "right",
   },
+
   surveyCard: {
     background: "#f8fafc",
     border: "1.5px solid #e2e8f0",
@@ -1270,6 +2286,7 @@ const s = {
     fontWeight: 600,
     fontFamily: FONT,
   },
+
   editContainer: {
     background: "white",
     borderRadius: 12,
@@ -1325,6 +2342,229 @@ const s = {
     fontWeight: 500,
     fontFamily: FONT,
   },
+
+  primaryBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    background: "#1e3a5f",
+    color: "white",
+    border: "none",
+    borderRadius: 8,
+    padding: "9px 18px",
+    fontSize: "0.88rem",
+    fontWeight: 600,
+    cursor: "pointer",
+    fontFamily: FONT,
+  },
+  tabCenter: {
+    textAlign: "center",
+    padding: "60px 0",
+    color: "#64748b",
+    fontFamily: FONT,
+  },
+
+  // Quota
+  quotaSummaryBar: {
+    display: "flex",
+    justifyContent: "space-between",
+    background: "#f8fafc",
+    border: "1.5px solid #e2e8f0",
+    borderRadius: 8,
+    padding: "10px 16px",
+    marginBottom: 16,
+  },
+  emptyQuota: {
+    background: "white",
+    borderRadius: 12,
+    padding: "60px 40px",
+    textAlign: "center",
+    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+    border: "1px solid #f1f5f9",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+  },
+  dimCard: {
+    background: "white",
+    borderRadius: 12,
+    padding: 20,
+    border: "1.5px solid #e2e8f0",
+    marginBottom: 16,
+    boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+  },
+  dimHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 14,
+  },
+  dimNameInput: {
+    width: "100%",
+    padding: "9px 12px",
+    border: "1.5px solid #e2e8f0",
+    borderRadius: 8,
+    fontSize: "0.9rem",
+    fontWeight: 600,
+    fontFamily: FONT,
+    color: "#1e293b",
+    outline: "none",
+  },
+  dimRemoveBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    background: "#fef2f2",
+    border: "1px solid #fecaca",
+    borderRadius: 6,
+    padding: "6px 12px",
+    cursor: "pointer",
+    color: "#ef4444",
+    fontSize: "0.78rem",
+    fontWeight: 600,
+    fontFamily: FONT,
+    whiteSpace: "nowrap",
+  },
+  quotaTable: { width: "100%", borderCollapse: "collapse", marginBottom: 12 },
+  quotaTH: {
+    padding: "8px 10px",
+    textAlign: "left",
+    fontSize: "0.72rem",
+    fontWeight: 700,
+    color: "#94a3b8",
+    fontFamily: FONT,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    borderBottom: "1.5px solid #f1f5f9",
+  },
+  quotaTD: { padding: "8px 6px", verticalAlign: "middle" },
+  quotaInput: {
+    padding: "7px 10px",
+    border: "1.5px solid #e2e8f0",
+    borderRadius: 6,
+    fontSize: "0.85rem",
+    fontFamily: FONT,
+    color: "#1e293b",
+    outline: "none",
+    width: "100%",
+  },
+  addValueBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    background: "#f0f7ff",
+    border: "1.5px solid #dbeafe",
+    borderRadius: 6,
+    padding: "6px 12px",
+    fontSize: "0.8rem",
+    fontWeight: 600,
+    cursor: "pointer",
+    color: "#1e3a5f",
+    fontFamily: FONT,
+  },
+  rowRemoveBtn: {
+    background: "#fef2f2",
+    border: "1px solid #fecaca",
+    borderRadius: 6,
+    padding: "4px 6px",
+    cursor: "pointer",
+    color: "#ef4444",
+    display: "flex",
+    alignItems: "center",
+  },
+  sectionH: {
+    fontSize: "1rem",
+    fontWeight: 700,
+    color: "#1e293b",
+    fontFamily: FONT,
+    marginBottom: 4,
+  },
+  sectionP: { fontSize: "0.82rem", color: "#64748b", fontFamily: FONT },
+
+  // Sessions
+  sessionStatsRow: {
+    display: "flex",
+    gap: 0,
+    background: "white",
+    border: "1.5px solid #e2e8f0",
+    borderRadius: 12,
+    overflow: "hidden",
+    marginBottom: 16,
+  },
+  sessionStat: {
+    flex: 1,
+    padding: "14px 12px",
+    textAlign: "center",
+    borderRight: "1px solid #f1f5f9",
+  },
+  sessionFilters: {
+    display: "flex",
+    gap: 10,
+    marginBottom: 14,
+    flexWrap: "wrap",
+    alignItems: "center",
+  },
+  filterSel: {
+    padding: "8px 12px",
+    border: "1.5px solid #e2e8f0",
+    borderRadius: 8,
+    fontSize: "0.85rem",
+    fontFamily: FONT,
+    color: "#1e293b",
+    outline: "none",
+    background: "white",
+  },
+  refreshBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    background: "#f8fafc",
+    border: "1.5px solid #e2e8f0",
+    borderRadius: 8,
+    padding: "8px 14px",
+    fontSize: "0.85rem",
+    fontWeight: 600,
+    cursor: "pointer",
+    color: "#475569",
+    fontFamily: FONT,
+  },
+
+  tableWrap: {
+    background: "white",
+    borderRadius: 12,
+    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+    border: "1.5px solid #e2e8f0",
+    overflow: "auto",
+  },
+  table: { width: "100%", borderCollapse: "collapse", minWidth: 900 },
+  theadRow: { background: "#f8fafc", borderBottom: "2px solid #e2e8f0" },
+  th: { padding: "12px 14px", textAlign: "left", whiteSpace: "nowrap" },
+  thInner: {
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    fontSize: "0.75rem",
+    fontWeight: 700,
+    color: "#374151",
+    fontFamily: FONT,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  tr: { borderBottom: "1px solid #f1f5f9" },
+  td: { padding: "11px 14px", verticalAlign: "middle" },
+
+  // Costs
+  costNotice: {
+    display: "flex",
+    gap: 14,
+    background: "#f8fafc",
+    border: "1.5px solid #e2e8f0",
+    borderRadius: 10,
+    padding: "14px 16px",
+    marginBottom: 16,
+    alignItems: "flex-start",
+  },
+
   overlay: {
     position: "fixed",
     inset: 0,
