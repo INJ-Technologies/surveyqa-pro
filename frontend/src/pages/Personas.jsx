@@ -125,6 +125,7 @@ function CreatableSingle({ value, onChange, suggestions, placeholder, label, req
   }, []);
 
   const filtered = suggestions.filter(s => s.toLowerCase().includes(input.toLowerCase()));
+  const showCreate = input.trim() && !suggestions.find(s => s.toLowerCase() === input.toLowerCase());
 
   const select = (val) => { setInput(val); onChange(val); setOpen(false); setHovered(-1); };
 
@@ -136,35 +137,45 @@ function CreatableSingle({ value, onChange, suggestions, placeholder, label, req
     if (e.key === "Escape")     setOpen(false);
   };
 
-  const showCreate = input.trim() && !suggestions.find(s => s.toLowerCase() === input.toLowerCase());
-  const showFiltered = filtered.length > 0;
-
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }} ref={ref}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       {label && <label style={cs.label}>{label}{required && <span style={cs.req}> *</span>}</label>}
-      <div style={{ position: "relative" }}>
-        <input style={cs.input} value={input} placeholder={placeholder || `Select or type...`}
+      <div style={{ position: "relative" }} ref={ref}>
+        <input
+          style={cs.input}
+          value={input}
+          placeholder={placeholder || "Select or type..."}
           onChange={e => { setInput(e.target.value); onChange(e.target.value); setOpen(true); setHovered(-1); }}
-          onFocus={() => setOpen(true)} onKeyDown={handleKey} />
+          onFocus={() => setOpen(true)}
+          onKeyDown={handleKey}
+        />
         {input && (
           <button style={cs.clearBtn} onMouseDown={e => { e.preventDefault(); select(""); }}>
             <X size={13} />
           </button>
         )}
+
+        {/* Dropdown is now INSIDE the position:relative wrapper */}
+        {open && (showCreate || filtered.length > 0 || (!input && suggestions.length > 0)) && (
+          <div style={cs.dropdown}>
+            {showCreate && (
+              <div style={cs.createRow} onMouseDown={() => select(input.trim())}>
+                <span style={cs.createLabel}>Create</span> "{input.trim()}"
+              </div>
+            )}
+            {(input ? filtered : suggestions).map((s, i) => (
+              <div
+                key={s}
+                style={{ ...cs.option, background: hovered === i ? "#f0f7ff" : "white" }}
+                onMouseDown={() => select(s)}
+                onMouseEnter={() => setHovered(i)}
+              >
+                {s}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
-      {open && (showCreate || showFiltered || (!input && suggestions.length > 0)) && (
-        <div style={cs.dropdown}>
-          {showCreate && (
-            <div style={cs.createRow} onMouseDown={() => select(input.trim())}>
-              <span style={cs.createLabel}>Create</span> "{input.trim()}"
-            </div>
-          )}
-          {(input ? filtered : suggestions).map((s, i) => (
-            <div key={s} style={{ ...cs.option, background: hovered === i ? "#f0f7ff" : "white" }}
-              onMouseDown={() => select(s)} onMouseEnter={() => setHovered(i)}>{s}</div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
