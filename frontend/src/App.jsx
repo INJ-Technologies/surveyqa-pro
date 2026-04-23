@@ -87,6 +87,14 @@ export default function App() {
           }
         />
         <Route
+          path="/projects/:id"
+          element={
+            <ProtectedRoute>
+              <ProjectDetail />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/personas"
           element={
             <ProtectedRoute>
@@ -103,14 +111,6 @@ export default function App() {
           }
         />
         <Route path="*" element={<Navigate to="/" replace />} />
-        <Route
-          path="/projects/:id"
-          element={
-            <ProtectedRoute>
-              <ProjectDetail />
-            </ProtectedRoute>
-          }
-        />
       </Routes>
     </AuthProvider>
   );
