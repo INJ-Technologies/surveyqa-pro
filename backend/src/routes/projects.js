@@ -4,12 +4,13 @@ const {
   getProjects, getProjectById, getProjectSurveys,
   createProject, updateProject, deleteProject,
   getDashboardStats,
+  getProjectSessionStats,
+  getProjectSessions,
+  getProjectCostSummary,
 } = require('../db/projects');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
-
-// All project routes require authentication
 router.use(requireAuth);
 
 // ─── GET /api/projects ────────────────────────────────────────────────────────
@@ -47,6 +48,34 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// ─── GET /api/projects/:id/sessions ──────────────────────────────────────────
+router.get('/:id/sessions', async (req, res) => {
+  try {
+    const { status, outcome, country, limit, offset } = req.query;
+    const sessions = await getProjectSessions(req.params.id, {
+      status, outcome, country,
+      limit:  parseInt(limit)  || 100,
+      offset: parseInt(offset) || 0,
+    });
+    const stats = await getProjectSessionStats(req.params.id);
+    res.json({ sessions, stats });
+  } catch (err) {
+    console.error('Get sessions error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch sessions' });
+  }
+});
+
+// ─── GET /api/projects/:id/costs ─────────────────────────────────────────────
+router.get('/:id/costs', async (req, res) => {
+  try {
+    const summary = await getProjectCostSummary(req.params.id);
+    res.json({ summary });
+  } catch (err) {
+    console.error('Get costs error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch cost summary' });
+  }
+});
+
 // ─── POST /api/projects ───────────────────────────────────────────────────────
 router.post('/', requireRole('admin', 'project_manager'), async (req, res) => {
   try {
@@ -59,9 +88,8 @@ router.post('/', requireRole('admin', 'project_manager'), async (req, res) => {
     } = req.body;
 
     if (!name) return res.status(400).json({ error: 'Project name is required' });
-    if (!surveys || surveys.length === 0) {
+    if (!surveys || surveys.length === 0)
       return res.status(400).json({ error: 'At least one survey URL is required' });
-    }
     for (const s of surveys) {
       if (!s.url) return res.status(400).json({ error: 'Survey URL is required' });
     }
@@ -108,42 +136,5 @@ router.delete('/:id', requireRole('admin'), async (req, res) => {
     res.status(500).json({ error: 'Failed to delete project' });
   }
 });
-
-const {
-  getProjects, getProjectById, getProjectSurveys,
-  createProject, updateProject, deleteProject,
-  getDashboardStats,
-  getProjectSessionStats,
-  getProjectSessions,
-  getProjectCostSummary,
-} = require('../db/projects');
-
-// ─── GET /api/projects/:id/sessions ──────────────────────────────────────────
-router.get('/:id/sessions', async (req, res) => {
-  try {
-    const { status, outcome, country, limit, offset } = req.query
-    const sessions = await getProjectSessions(req.params.id, {
-      status, outcome, country,
-      limit:  parseInt(limit)  || 100,
-      offset: parseInt(offset) || 0,
-    })
-    const stats = await getProjectSessionStats(req.params.id)
-    res.json({ sessions, stats })
-  } catch (err) {
-    console.error('Get sessions error:', err.message)
-    res.status(500).json({ error: 'Failed to fetch sessions' })
-  }
-})
-
-// ─── GET /api/projects/:id/costs ─────────────────────────────────────────────
-router.get('/:id/costs', async (req, res) => {
-  try {
-    const summary = await getProjectCostSummary(req.params.id)
-    res.json({ summary })
-  } catch (err) {
-    console.error('Get costs error:', err.message)
-    res.status(500).json({ error: 'Failed to fetch cost summary' })
-  }
-})
 
 module.exports = router;
