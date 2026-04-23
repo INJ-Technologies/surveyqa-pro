@@ -137,9 +137,9 @@ const s = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: "16px",
+    padding: "15px",
     borderBottom: "1.5px solid #f1f5f9",
-    minHeight: 70,
+    minHeight: 85,
   },
   logoImg: { height: 50, maxWidth: 150, objectFit: "contain" },
   logoTitle: {
@@ -241,7 +241,7 @@ const s = {
   header: {
     background: "white",
     padding: "0 28px",
-    height: 64,
+    height: 85,
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
