@@ -246,6 +246,78 @@ const getDashboardStats = async (workspaceId) => {
   return result.rows[0];
 };
 
+// ─── Get session stats for a project ─────────────────────────────────────────
+const getProjectSessionStats = async (projectId) => {
+  const result = await pool.query(
+    `SELECT
+       COUNT(*)                                                      as total,
+       COUNT(*) FILTER (WHERE status = 'completed')                 as completed,
+       COUNT(*) FILTER (WHERE status = 'terminated')                as terminated,
+       COUNT(*) FILTER (WHERE status IN ('error','flagged'))        as errors,
+       COUNT(*) FILTER (WHERE status IN ('queued','initialising','in_progress')) as active,
+       COUNT(*) FILTER (WHERE status = 'over_quota')                as over_quota,
+       ROUND(AVG(total_duration_s) FILTER (WHERE total_duration_s IS NOT NULL)) as avg_duration,
+       ROUND(AVG(quality_score)    FILTER (WHERE quality_score    IS NOT NULL), 1) as avg_quality
+     FROM sessions
+     WHERE project_id = $1`,
+    [projectId]
+  );
+  return result.rows[0];
+};
+
+// ─── Get all sessions for a project ──────────────────────────────────────────
+const getProjectSessions = async (projectId, { status, outcome, country, limit = 100, offset = 0 } = {}) => {
+  const conditions = ['s.project_id = $1'];
+  const values     = [projectId];
+  let   idx        = 2;
+
+  if (status)  { conditions.push(`s.status = $${idx++}`);          values.push(status); }
+  if (outcome) { conditions.push(`s.outcome = $${idx++}`);         values.push(outcome); }
+  if (country) { conditions.push(`s.proxy_country = $${idx++}`);   values.push(country); }
+
+  values.push(limit, offset);
+
+  const result = await pool.query(
+    `SELECT
+       s.id, s.status, s.outcome, s.proxy_country, s.proxy_provider,
+       s.device_type, s.browser_type, s.ai_strategy,
+       s.total_duration_s, s.quality_score, s.question_count,
+       s.redirect_type, s.error_log,
+       s.started_at, s.completed_at, s.created_at,
+       p.name as persona_name
+     FROM sessions s
+     LEFT JOIN personas p ON p.id = s.persona_id
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY s.created_at DESC
+     LIMIT $${idx++} OFFSET $${idx}`,
+    values
+  );
+  return result.rows;
+};
+
+// ─── Get cost summary for a project ──────────────────────────────────────────
+const getProjectCostSummary = async (projectId) => {
+  const result = await pool.query(
+    `SELECT
+       p.budget_proxy,
+       p.budget_ai,
+       p.target_completes,
+       COUNT(s.id)                                              as total_sessions,
+       COUNT(s.id) FILTER (WHERE s.status = 'completed')       as completed_sessions,
+       COUNT(s.id) FILTER (WHERE s.status = 'terminated')      as terminated_sessions,
+       COUNT(s.id) FILTER (WHERE s.status IN ('error','flagged')) as error_sessions,
+       COUNT(s.id) FILTER (WHERE s.status IN ('queued','initialising','in_progress')) as active_sessions,
+       ROUND(AVG(s.total_duration_s) FILTER (WHERE s.total_duration_s IS NOT NULL)) as avg_duration_s,
+       ROUND(AVG(s.quality_score)    FILTER (WHERE s.quality_score    IS NOT NULL), 1) as avg_quality
+     FROM projects p
+     LEFT JOIN sessions s ON s.project_id = p.id
+     WHERE p.id = $1
+     GROUP BY p.id`,
+    [projectId]
+  );
+  return result.rows[0] || null;
+};
+
 module.exports = {
   getProjects,
   getProjectById,
@@ -254,4 +326,7 @@ module.exports = {
   updateProject,
   deleteProject,
   getDashboardStats,
+  getProjectSessionStats,
+  getProjectSessions,
+  getProjectCostSummary,
 };
