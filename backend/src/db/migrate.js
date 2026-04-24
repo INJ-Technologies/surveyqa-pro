@@ -237,6 +237,7 @@ const migrate = async () => {
       CREATE TABLE IF NOT EXISTS proxy_used_ips (
         id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         project_id  UUID        NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        session_id  UUID        REFERENCES sessions(id) ON DELETE SET NULL,
         ip_address  VARCHAR(50) NOT NULL,
         country     VARCHAR(10),
         provider    VARCHAR(50),
@@ -250,9 +251,13 @@ const migrate = async () => {
       CREATE TABLE IF NOT EXISTS sessions (
         id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         project_id       UUID         NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        workspace_id     UUID         REFERENCES workspaces(id) ON DELETE SET NULL,
         survey_id        UUID         REFERENCES project_surveys(id) ON DELETE SET NULL,
         persona_id       UUID         REFERENCES personas(id) ON DELETE SET NULL,
         quota_cell_id    UUID         REFERENCES quota_cells(id) ON DELETE SET NULL,
+        survey_url       TEXT,
+        survey_label     VARCHAR(255) DEFAULT 'Main',
+        response_id      VARCHAR(64),
         status           VARCHAR(20)  DEFAULT 'queued'
                            CHECK (status IN (
                              'queued','initialising','in_progress',
@@ -272,6 +277,7 @@ const migrate = async () => {
         quality_score    NUMERIC(5,2),
         tags             TEXT[]       DEFAULT '{}',
         error_log        TEXT,
+        trace_path       TEXT,
         started_at       TIMESTAMPTZ,
         completed_at     TIMESTAMPTZ,
         created_at       TIMESTAMPTZ  DEFAULT NOW(),
@@ -310,9 +316,31 @@ const migrate = async () => {
         event_type   VARCHAR(50) NOT NULL,
         page_number  INTEGER,
         details      JSONB       DEFAULT '{}',
+        payload      JSONB       DEFAULT '{}',
         created_at   TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+
+    // â”€â”€â”€ Column backfills for older DBs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    await client.query(
+      `ALTER TABLE proxy_used_ips
+         ADD COLUMN IF NOT EXISTS session_id UUID REFERENCES sessions(id) ON DELETE SET NULL`
+    );
+
+    await client.query(
+      `ALTER TABLE sessions
+         ADD COLUMN IF NOT EXISTS workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL`
+    );
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS survey_url TEXT`);
+    await client.query(
+      `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS survey_label VARCHAR(255) DEFAULT 'Main'`
+    );
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS response_id VARCHAR(64)`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS trace_path TEXT`);
+
+    await client.query(
+      `ALTER TABLE session_events ADD COLUMN IF NOT EXISTS payload JSONB DEFAULT '{}'`
+    );
 
     // ─── INDEXES ───────────────────────────────────────────────────────────
     const indexes = [

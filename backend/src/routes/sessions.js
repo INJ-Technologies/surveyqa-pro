@@ -102,7 +102,9 @@ router.post(
         });
     } catch (err) {
       console.error("Trigger sessions error:", err.message);
-      res.status(500).json({ error: "Failed to trigger sessions" });
+      res.status(500).json({
+        error: `Failed to trigger sessions${err?.message ? `: ${err.message}` : ""}`,
+      });
     }
   },
 );
