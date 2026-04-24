@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import Layout from "../components/Layout";
 import api from "../api";
@@ -31,12 +31,23 @@ import {
   Zap,
   TrendingDown,
   StopCircle,
+  ChevronRight,
+  FileText,
+  Download,
+  Camera,
+  Globe,
+  Monitor,
+  Smartphone,
+  Tablet,
+  Hash,
 } from "lucide-react";
 
 const FONT =
   "'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── API base ─────────────────────────────────────────────────────────────────
+const API_BASE = import.meta.env.VITE_API_URL || "/api";
+
 const formatLabel = (str) => {
   if (!str) return "—";
   const overrides = {
@@ -59,7 +70,6 @@ const fmtDuration = (secs) => {
   if (secs < 60) return `${secs}s`;
   return `${Math.floor(secs / 60)}m ${secs % 60}s`;
 };
-
 const fmtDate = (dt) => {
   if (!dt) return "—";
   return new Date(dt).toLocaleDateString("en-IN", {
@@ -68,7 +78,6 @@ const fmtDate = (dt) => {
     year: "numeric",
   });
 };
-
 const fmtTime = (dt) => {
   if (!dt) return "—";
   return new Date(dt).toLocaleString("en-IN", {
@@ -78,7 +87,14 @@ const fmtTime = (dt) => {
     minute: "2-digit",
   });
 };
-
+const fmtTimeShort = (dt) => {
+  if (!dt) return "—";
+  return new Date(dt).toLocaleTimeString("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+};
 const toOptions = (arr) =>
   arr.map((v) => ({ value: v, label: formatLabel(v) }));
 
@@ -93,7 +109,7 @@ const PLATFORMS = [
 ];
 const AI_MODES = ["ai", "human", "predefined"];
 const STRATEGIES = ["persona_true", "quota_guided", "stress_test"];
-const PROVIDERS = ["decodo", "brightdata", "oxylabs", "iproyal", "custom"]; // decodo first
+const PROVIDERS = ["decodo", "brightdata", "oxylabs", "iproyal", "custom"];
 
 const STATUS_COLORS = {
   draft: { bg: "#f1f5f9", text: "#64748b", border: "#e2e8f0" },
@@ -183,7 +199,7 @@ function Toast({ message, type, onClose }) {
         boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
         fontFamily: FONT,
         fontSize: "0.88rem",
-        color: isErr ? "#dc2626" : "#166534",
+        color: isErr ? "#dc2626" : "#166634",
         fontWeight: 500,
       }}
     >
@@ -296,7 +312,7 @@ function ConfirmModal({
   );
 }
 
-// ─── Run Sessions Modal — defined OUTSIDE ProjectDetail ───────────────────────
+// ─── Run Sessions Modal ───────────────────────────────────────────────────────
 function RunSessionsModal({ project, onClose, onTriggered }) {
   const [count, setCount] = useState(5);
   const [country, setCountry] = useState("");
@@ -363,7 +379,6 @@ function RunSessionsModal({ project, onClose, onTriggered }) {
             <X size={20} />
           </button>
         </div>
-
         <div style={{ marginBottom: 14 }}>
           <label
             style={{
@@ -402,11 +417,9 @@ function RunSessionsModal({ project, onClose, onTriggered }) {
               marginTop: 4,
             }}
           >
-            Max 20 per trigger. Project concurrent limit:{" "}
-            {project.concurrent_sessions}
+            Max 20 per trigger. Concurrent limit: {project.concurrent_sessions}
           </div>
         </div>
-
         <div style={{ marginBottom: 20 }}>
           <label
             style={{
@@ -437,7 +450,6 @@ function RunSessionsModal({ project, onClose, onTriggered }) {
             onChange={(e) => setCountry(e.target.value.toUpperCase())}
           />
         </div>
-
         <div
           style={{
             background: "#f0f7ff",
@@ -458,7 +470,6 @@ function RunSessionsModal({ project, onClose, onTriggered }) {
           <br />
           <strong>Strategy:</strong> {formatLabel(project.ai_strategy)}
         </div>
-
         {error && (
           <div
             style={{
@@ -478,7 +489,6 @@ function RunSessionsModal({ project, onClose, onTriggered }) {
             <AlertCircle size={16} /> {error}
           </div>
         )}
-
         <div style={{ display: "flex", gap: 12 }}>
           <button style={s.cancelBtnFull} onClick={onClose}>
             Cancel
@@ -506,6 +516,789 @@ function RunSessionsModal({ project, onClose, onTriggered }) {
           >
             <Zap size={16} /> {loading ? "Queuing..." : `Run ${count} Sessions`}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SESSION REPORT MODAL
+// ══════════════════════════════════════════════════════════════════════════════
+function SessionReportModal({ sessionId, onClose }) {
+  const [detail, setDetail] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [activePageIdx, setActivePageIdx] = useState(0);
+  const [imgError, setImgError] = useState({});
+  const printRef = useRef(null);
+
+  useEffect(() => {
+    api
+      .get(`/sessions/${sessionId}`)
+      .then((res) => setDetail(res.data))
+      .catch(() => setDetail(null))
+      .finally(() => setLoading(false));
+  }, [sessionId]);
+
+  // Extract page-level events from session events
+  const getPageEvents = () => {
+    if (!detail?.events) return [];
+    return detail.events
+      .filter((e) => e.event_type === "page_answered")
+      .map((e) => ({
+        ...e,
+        payload:
+          typeof e.payload === "string" ? JSON.parse(e.payload) : e.payload,
+      }));
+  };
+
+  const getMetaEvent = (type) => {
+    if (!detail?.events) return null;
+    const ev = detail.events.find((e) => e.event_type === type);
+    if (!ev) return null;
+    return typeof ev.payload === "string" ? JSON.parse(ev.payload) : ev.payload;
+  };
+
+  const handlePrint = () => {
+    const printWindow = window.open("", "_blank");
+    const content = printRef.current?.innerHTML || "";
+    printWindow.document.write(`
+      <html><head>
+        <title>Session Report — ${sessionId.slice(0, 8)}</title>
+        <style>
+          body { font-family: 'Google Sans', Arial, sans-serif; font-size: 13px; color: #1e293b; padding: 24px; }
+          h1 { font-size: 1.2rem; margin-bottom: 4px; }
+          h2 { font-size: 0.95rem; margin: 16px 0 8px; padding-bottom: 6px; border-bottom: 1px solid #e2e8f0; }
+          .meta { display: flex; gap: 16px; font-size: 0.8rem; color: #64748b; margin-bottom: 16px; }
+          .page-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin-bottom: 12px; page-break-inside: avoid; }
+          .page-header { font-weight: 700; margin-bottom: 8px; color: #1e3a5f; }
+          .screenshot img { max-width: 100%; border: 1px solid #e2e8f0; border-radius: 4px; margin-bottom: 8px; }
+          .question { background: #f8fafc; padding: 8px 10px; border-radius: 6px; margin-bottom: 4px; font-size: 0.82rem; }
+          .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 600; }
+          .completed { background: #dcfce7; color: #166534; }
+          .terminated { background: #fce7f3; color: #9d174d; }
+          .error { background: #fef2f2; color: #dc2626; }
+          @media print { body { padding: 12px; } }
+        </style>
+      </head><body>${content}</body></html>
+    `);
+    printWindow.document.close();
+    printWindow.print();
+  };
+
+  if (loading)
+    return (
+      <div style={s.overlay}>
+        <div
+          style={{
+            background: "white",
+            borderRadius: 16,
+            padding: 60,
+            textAlign: "center",
+            fontFamily: FONT,
+            color: "#64748b",
+          }}
+        >
+          Loading session report...
+        </div>
+      </div>
+    );
+
+  if (!detail)
+    return (
+      <div style={s.overlay}>
+        <div
+          style={{
+            background: "white",
+            borderRadius: 16,
+            padding: 32,
+            maxWidth: 440,
+            width: "100%",
+            textAlign: "center",
+          }}
+        >
+          <p style={{ fontFamily: FONT, color: "#64748b" }}>
+            Session details not available yet.
+          </p>
+          <button style={s.cancelBtnFull} onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    );
+
+  const { session } = detail;
+  const pageEvents = getPageEvents();
+  const ipEvent = getMetaEvent("ip_assigned");
+  const completeEvent = getMetaEvent("session_complete");
+  const activePage = pageEvents[activePageIdx];
+
+  const outcomeColors = {
+    completed: { bg: "#dcfce7", text: "#166534" },
+    terminated: { bg: "#fce7f3", text: "#9d174d" },
+    over_quota: { bg: "#fef3c7", text: "#92400e" },
+    error: { bg: "#fef2f2", text: "#dc2626" },
+  };
+  const oc = outcomeColors[session.outcome] || outcomeColors.error;
+
+  return (
+    <div style={{ ...s.overlay, alignItems: "flex-start", paddingTop: 20 }}>
+      <div
+        style={{
+          background: "white",
+          borderRadius: 16,
+          width: "100%",
+          maxWidth: 980,
+          maxHeight: "94vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 25px 50px rgba(0,0,0,0.3)",
+        }}
+      >
+        {/* Header */}
+        <div
+          style={{
+            padding: "20px 24px",
+            borderBottom: "1px solid #f1f5f9",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: 12,
+          }}
+        >
+          <div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                marginBottom: 4,
+              }}
+            >
+              <FileText size={18} color="#1e3a5f" />
+              <h2
+                style={{
+                  fontFamily: FONT,
+                  fontSize: "1.1rem",
+                  fontWeight: 700,
+                  color: "#1e293b",
+                  margin: 0,
+                }}
+              >
+                Session Report
+              </h2>
+              <span
+                style={{
+                  fontFamily: "monospace",
+                  fontSize: "0.82rem",
+                  color: "#64748b",
+                  background: "#f1f5f9",
+                  padding: "2px 8px",
+                  borderRadius: 4,
+                }}
+              >
+                {session.id.slice(0, 8)}
+              </span>
+              {session.outcome && (
+                <span
+                  style={{
+                    background: oc.bg,
+                    color: oc.text,
+                    borderRadius: 20,
+                    padding: "3px 10px",
+                    fontSize: "0.75rem",
+                    fontWeight: 600,
+                    fontFamily: FONT,
+                  }}
+                >
+                  {formatLabel(session.outcome)}
+                </span>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+              {[
+                session.persona_name && `👤 ${session.persona_name}`,
+                session.proxy_country && `🌍 ${session.proxy_country}`,
+                session.device_type && `💻 ${formatLabel(session.device_type)}`,
+                session.total_duration_s &&
+                  `⏱ ${fmtDuration(session.total_duration_s)}`,
+                session.response_id && `🔑 ${session.response_id}`,
+                ipEvent?.ip && `🌐 ${ipEvent.ip}`,
+              ]
+                .filter(Boolean)
+                .map((item, i) => (
+                  <span
+                    key={i}
+                    style={{
+                      fontSize: "0.78rem",
+                      color: "#64748b",
+                      fontFamily: FONT,
+                    }}
+                  >
+                    {item}
+                  </span>
+                ))}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={handlePrint}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                background: "#f0f7ff",
+                border: "1.5px solid #dbeafe",
+                borderRadius: 8,
+                padding: "7px 14px",
+                fontSize: "0.82rem",
+                fontWeight: 600,
+                cursor: "pointer",
+                color: "#1e3a5f",
+                fontFamily: FONT,
+              }}
+            >
+              <Download size={14} /> Export PDF
+            </button>
+            <button
+              onClick={onClose}
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: "#64748b",
+                padding: 4,
+              }}
+            >
+              <X size={20} />
+            </button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div style={{ flex: 1, overflow: "hidden", display: "flex" }}>
+          {/* Left panel — page list */}
+          <div
+            style={{
+              width: 200,
+              borderRight: "1px solid #f1f5f9",
+              overflowY: "auto",
+              flexShrink: 0,
+            }}
+          >
+            <div
+              style={{
+                padding: "12px 14px 6px",
+                fontSize: "0.72rem",
+                fontWeight: 700,
+                color: "#94a3b8",
+                fontFamily: FONT,
+                textTransform: "uppercase",
+                letterSpacing: 0.5,
+              }}
+            >
+              Pages ({pageEvents.length})
+            </div>
+            {pageEvents.length === 0 ? (
+              <div
+                style={{
+                  padding: "12px 14px",
+                  fontSize: "0.82rem",
+                  color: "#94a3b8",
+                  fontFamily: FONT,
+                }}
+              >
+                No pages recorded yet.
+              </div>
+            ) : (
+              pageEvents.map((ev, i) => (
+                <button
+                  key={i}
+                  onClick={() => setActivePageIdx(i)}
+                  style={{
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "10px 14px",
+                    border: "none",
+                    background: activePageIdx === i ? "#f0f7ff" : "transparent",
+                    borderLeft:
+                      activePageIdx === i
+                        ? "3px solid #2563eb"
+                        : "3px solid transparent",
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 3,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "0.82rem",
+                      fontWeight: 600,
+                      color: activePageIdx === i ? "#1e3a5f" : "#1e293b",
+                      fontFamily: FONT,
+                    }}
+                  >
+                    Page {i + 1}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "0.72rem",
+                      color: "#94a3b8",
+                      fontFamily: FONT,
+                    }}
+                  >
+                    {fmtDuration(ev.payload?.timeTaken)}
+                  </div>
+                  {ev.payload?.screenshot && (
+                    <div
+                      style={{
+                        width: "100%",
+                        height: 50,
+                        background: "#f8fafc",
+                        borderRadius: 4,
+                        overflow: "hidden",
+                        marginTop: 4,
+                      }}
+                    >
+                      <img
+                        src={`${API_BASE}/sessions/${session.id}/screenshot/page_${i + 1}.png`}
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                        }}
+                        onError={() =>
+                          setImgError((p) => ({ ...p, [i]: true }))
+                        }
+                        alt={`Page ${i + 1}`}
+                      />
+                    </div>
+                  )}
+                </button>
+              ))
+            )}
+
+            {/* Outcome event */}
+            {session.outcome && (
+              <div
+                style={{
+                  margin: "8px 14px",
+                  background: oc.bg,
+                  borderRadius: 6,
+                  padding: "8px 10px",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: "0.75rem",
+                    fontWeight: 700,
+                    color: oc.text,
+                    fontFamily: FONT,
+                  }}
+                >
+                  {session.outcome === "completed"
+                    ? "✅ Complete"
+                    : session.outcome === "terminated"
+                      ? "⛔ Terminate"
+                      : session.outcome === "over_quota"
+                        ? "📊 Over Quota"
+                        : "❌ Error"}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Right panel — page detail */}
+          <div
+            style={{ flex: 1, overflowY: "auto", padding: 24 }}
+            ref={printRef}
+          >
+            {/* Print header (visible when printing) */}
+            <div className="print-only" style={{ marginBottom: 20 }}>
+              <h1
+                style={{
+                  fontFamily: FONT,
+                  fontSize: "1.2rem",
+                  fontWeight: 700,
+                  color: "#1e293b",
+                }}
+              >
+                Session Report — {session.id.slice(0, 8)}
+              </h1>
+              <div
+                style={{
+                  fontSize: "0.8rem",
+                  color: "#64748b",
+                  fontFamily: FONT,
+                }}
+              >
+                {session.persona_name && `Persona: ${session.persona_name} • `}
+                {session.proxy_country &&
+                  `Country: ${session.proxy_country} • `}
+                {session.response_id &&
+                  `Response ID: ${session.response_id} • `}
+                {session.total_duration_s &&
+                  `Duration: ${fmtDuration(session.total_duration_s)}`}
+              </div>
+            </div>
+
+            {pageEvents.length === 0 ? (
+              <div
+                style={{
+                  textAlign: "center",
+                  padding: "60px 0",
+                  color: "#94a3b8",
+                  fontFamily: FONT,
+                }}
+              >
+                <Camera
+                  size={48}
+                  color="#e2e8f0"
+                  style={{ marginBottom: 12 }}
+                />
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                  Session data not yet available
+                </div>
+                <div style={{ fontSize: "0.85rem" }}>
+                  {["queued", "initialising", "in_progress"].includes(
+                    session.status,
+                  )
+                    ? "This session is still running. Check back after it completes."
+                    : "No page data was recorded for this session. This may indicate the session errored before the survey loaded."}
+                </div>
+              </div>
+            ) : activePage ? (
+              <div>
+                {/* Page header */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    marginBottom: 16,
+                  }}
+                >
+                  <h3
+                    style={{
+                      fontFamily: FONT,
+                      fontSize: "1rem",
+                      fontWeight: 700,
+                      color: "#1e293b",
+                      margin: 0,
+                    }}
+                  >
+                    Page {activePageIdx + 1} —{" "}
+                    {activePage.payload?.title || "Survey Page"}
+                  </h3>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <span
+                      style={{
+                        fontSize: "0.75rem",
+                        color: "#64748b",
+                        fontFamily: FONT,
+                        background: "#f1f5f9",
+                        padding: "3px 8px",
+                        borderRadius: 6,
+                      }}
+                    >
+                      ⏱ {fmtDuration(activePage.payload?.timeTaken)}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: "0.72rem",
+                        color: "#94a3b8",
+                        fontFamily: FONT,
+                        background: "#f1f5f9",
+                        padding: "3px 8px",
+                        borderRadius: 6,
+                      }}
+                    >
+                      {fmtTimeShort(activePage.created_at)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* URL */}
+                {activePage.payload?.url && (
+                  <div
+                    style={{
+                      fontSize: "0.78rem",
+                      color: "#2563eb",
+                      fontFamily: FONT,
+                      background: "#f0f7ff",
+                      padding: "6px 10px",
+                      borderRadius: 6,
+                      marginBottom: 14,
+                      wordBreak: "break-all",
+                    }}
+                  >
+                    🔗 {activePage.payload.url}
+                  </div>
+                )}
+
+                {/* Screenshot */}
+                <div
+                  style={{
+                    marginBottom: 20,
+                    border: "1.5px solid #e2e8f0",
+                    borderRadius: 10,
+                    overflow: "hidden",
+                    background: "#f8fafc",
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: "8px 12px",
+                      borderBottom: "1px solid #e2e8f0",
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      color: "#94a3b8",
+                      fontFamily: FONT,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <Camera size={13} /> Page Screenshot
+                  </div>
+                  {!imgError[activePageIdx] ? (
+                    <img
+                      src={`${API_BASE}/sessions/${session.id}/screenshot/page_${activePageIdx + 1}.png`}
+                      style={{ width: "100%", display: "block" }}
+                      onError={() =>
+                        setImgError((p) => ({ ...p, [activePageIdx]: true }))
+                      }
+                      alt={`Screenshot of page ${activePageIdx + 1}`}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        padding: 32,
+                        textAlign: "center",
+                        color: "#94a3b8",
+                        fontFamily: FONT,
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      <Camera
+                        size={32}
+                        color="#e2e8f0"
+                        style={{ marginBottom: 8 }}
+                      />
+                      <br />
+                      Screenshot not available
+                    </div>
+                  )}
+                </div>
+
+                {/* Questions detected */}
+                {activePage.payload?.questions?.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div
+                      style={{
+                        fontSize: "0.75rem",
+                        fontWeight: 700,
+                        color: "#94a3b8",
+                        fontFamily: FONT,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.5,
+                        marginBottom: 8,
+                      }}
+                    >
+                      Questions Detected
+                    </div>
+                    {activePage.payload.questions.map((q, qi) => (
+                      <div
+                        key={qi}
+                        style={{
+                          background: "#f8fafc",
+                          border: "1px solid #e2e8f0",
+                          borderRadius: 8,
+                          padding: "10px 12px",
+                          marginBottom: 6,
+                          fontSize: "0.85rem",
+                          color: "#1e293b",
+                          fontFamily: FONT,
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        <span style={{ color: "#94a3b8", marginRight: 6 }}>
+                          Q{qi + 1}.
+                        </span>{" "}
+                        {q}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Answers given */}
+                {activePage.payload?.answers?.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div
+                      style={{
+                        fontSize: "0.75rem",
+                        fontWeight: 700,
+                        color: "#94a3b8",
+                        fontFamily: FONT,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.5,
+                        marginBottom: 8,
+                      }}
+                    >
+                      Answers Given
+                    </div>
+                    {activePage.payload.answers.map((a, ai) => (
+                      <div
+                        key={ai}
+                        style={{
+                          background: "#f0fdf4",
+                          border: "1px solid #bbf7d0",
+                          borderRadius: 8,
+                          padding: "10px 12px",
+                          marginBottom: 6,
+                          fontSize: "0.85rem",
+                          color: "#166534",
+                          fontFamily: FONT,
+                        }}
+                      >
+                        <span style={{ color: "#94a3b8", marginRight: 6 }}>
+                          A{ai + 1}.
+                        </span>{" "}
+                        {typeof a === "object" ? JSON.stringify(a) : a}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Page navigation */}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    marginTop: 20,
+                    paddingTop: 16,
+                    borderTop: "1px solid #f1f5f9",
+                  }}
+                >
+                  <button
+                    onClick={() => setActivePageIdx((i) => Math.max(0, i - 1))}
+                    disabled={activePageIdx === 0}
+                    style={{
+                      background: "none",
+                      border: "1.5px solid #e2e8f0",
+                      borderRadius: 8,
+                      padding: "7px 14px",
+                      fontSize: "0.85rem",
+                      cursor: activePageIdx === 0 ? "not-allowed" : "pointer",
+                      color: "#64748b",
+                      fontFamily: FONT,
+                      opacity: activePageIdx === 0 ? 0.4 : 1,
+                    }}
+                  >
+                    ← Previous Page
+                  </button>
+                  <span
+                    style={{
+                      fontSize: "0.8rem",
+                      color: "#94a3b8",
+                      fontFamily: FONT,
+                      alignSelf: "center",
+                    }}
+                  >
+                    {activePageIdx + 1} / {pageEvents.length}
+                  </span>
+                  <button
+                    onClick={() =>
+                      setActivePageIdx((i) =>
+                        Math.min(pageEvents.length - 1, i + 1),
+                      )
+                    }
+                    disabled={activePageIdx === pageEvents.length - 1}
+                    style={{
+                      background: "#1e3a5f",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "7px 14px",
+                      fontSize: "0.85rem",
+                      cursor:
+                        activePageIdx === pageEvents.length - 1
+                          ? "not-allowed"
+                          : "pointer",
+                      color: "white",
+                      fontFamily: FONT,
+                      opacity:
+                        activePageIdx === pageEvents.length - 1 ? 0.4 : 1,
+                    }}
+                  >
+                    Next Page →
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div
+                style={{
+                  textAlign: "center",
+                  padding: 40,
+                  color: "#94a3b8",
+                  fontFamily: FONT,
+                }}
+              >
+                Select a page from the left panel
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Footer summary */}
+        <div
+          style={{
+            padding: "12px 24px",
+            borderTop: "1px solid #f1f5f9",
+            background: "#f8fafc",
+            display: "flex",
+            gap: 24,
+            flexWrap: "wrap",
+          }}
+        >
+          {[
+            ["Total Pages", pageEvents.length],
+            ["Duration", fmtDuration(session.total_duration_s)],
+            ["Outcome", formatLabel(session.outcome) || "—"],
+            ["Response ID", session.response_id || "—"],
+            ["IP Address", ipEvent?.ip || "—"],
+            ["Country", session.proxy_country || "—"],
+            ["Device", formatLabel(session.device_type)],
+            ["Started", fmtTime(session.started_at)],
+          ].map(([k, v]) => (
+            <div key={k}>
+              <div
+                style={{
+                  fontSize: "0.68rem",
+                  fontWeight: 700,
+                  color: "#94a3b8",
+                  fontFamily: FONT,
+                  textTransform: "uppercase",
+                  letterSpacing: 0.4,
+                }}
+              >
+                {k}
+              </div>
+              <div
+                style={{
+                  fontSize: "0.82rem",
+                  fontWeight: 600,
+                  color: "#1e293b",
+                  fontFamily: FONT,
+                }}
+              >
+                {v}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -840,7 +1633,6 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
   };
 
   if (loading) return <div style={s.tabCenter}>Loading quota plan...</div>;
-
   const totalAllocated = dimensions.reduce(
     (sum, d) =>
       sum + d.values.reduce((ss, v) => ss + (parseInt(v.target) || 0), 0),
@@ -1089,23 +1881,26 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
         ))
       )}
 
-      {dimensions.length > 0 && (
-        <div style={s.saveBar}>
-          <button
-            style={{ ...s.saveBtn, opacity: saving ? 0.7 : 1 }}
-            onClick={handleSave}
-            disabled={saving}
-          >
-            <Save size={16} /> {saving ? "Saving..." : "Save Quota Plan"}
-          </button>
-        </div>
-      )}
+      <div style={{ ...s.saveBar, marginTop: 20 }}>
+        <button
+          style={{ ...s.saveBtn, opacity: saving ? 0.7 : 1 }}
+          onClick={handleSave}
+          disabled={saving}
+        >
+          <Save size={16} />{" "}
+          {saving
+            ? "Saving..."
+            : dimensions.length === 0
+              ? "Save (Clear Quota Plan)"
+              : "Save Quota Plan"}
+        </button>
+      </div>
     </div>
   );
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SESSIONS TAB
+// SESSIONS TAB — with clickable rows
 // ══════════════════════════════════════════════════════════════════════════════
 function SessionsTab({ projectId, showToast }) {
   const [sessions, setSessions] = useState([]);
@@ -1117,6 +1912,7 @@ function SessionsTab({ projectId, showToast }) {
     outcome: "",
     country: "",
   });
+  const [viewSession, setViewSession] = useState(null);
 
   const load = useCallback(
     async (isRefresh = false) => {
@@ -1275,176 +2071,229 @@ function SessionsTab({ projectId, showToast }) {
           </p>
         </div>
       ) : (
-        <div style={s.tableWrap}>
-          <table style={s.table}>
-            <thead>
-              <tr style={s.theadRow}>
-                {[
-                  "Session ID",
-                  "Status",
-                  "Persona",
-                  "Country",
-                  "Device",
-                  "Duration",
-                  "Quality",
-                  "Outcome",
-                  "Started",
-                ].map((h) => (
-                  <th key={h} style={s.th}>
-                    <div style={s.thInner}>{h}</div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sessions.map((session, idx) => (
-                <tr
-                  key={session.id}
-                  style={{
-                    ...s.tr,
-                    background: idx % 2 === 0 ? "white" : "#f8fafc",
-                  }}
-                >
-                  <td style={s.td}>
-                    <span
-                      style={{
-                        fontFamily: "monospace",
-                        fontSize: "0.78rem",
-                        color: "#64748b",
-                        background: "#f1f5f9",
-                        padding: "2px 6px",
-                        borderRadius: 4,
-                      }}
-                    >
-                      {session.id.slice(0, 8)}
-                    </span>
-                  </td>
-                  <td style={s.td}>
-                    <StatusBadge
-                      status={session.status}
-                      colors={SESSION_STATUS_COLORS}
-                    />
-                  </td>
-                  <td style={s.td}>
-                    <span
-                      style={{
-                        fontSize: "0.82rem",
-                        color: "#1e293b",
-                        fontFamily: FONT,
-                      }}
-                    >
-                      {session.persona_name || "—"}
-                    </span>
-                  </td>
-                  <td style={s.td}>
-                    <span
-                      style={{
-                        fontSize: "0.82rem",
-                        color: "#475569",
-                        fontFamily: FONT,
-                      }}
-                    >
-                      {session.proxy_country || "—"}
-                    </span>
-                  </td>
-                  <td style={s.td}>
-                    <span
-                      style={{
-                        fontSize: "0.78rem",
-                        color: "#64748b",
-                        fontFamily: FONT,
-                      }}
-                    >
-                      {session.device_type || "—"}
-                    </span>
-                  </td>
-                  <td style={s.td}>
-                    <span
-                      style={{
-                        fontSize: "0.82rem",
-                        color: "#475569",
-                        fontFamily: FONT,
-                      }}
-                    >
-                      {fmtDuration(session.total_duration_s)}
-                    </span>
-                  </td>
-                  <td style={s.td}>
-                    {session.quality_score != null ? (
-                      <div
+        <>
+          <div
+            style={{
+              fontSize: "0.75rem",
+              color: "#94a3b8",
+              fontFamily: FONT,
+              marginBottom: 8,
+            }}
+          >
+            💡 Click any row to view the full session report
+          </div>
+          <div style={s.tableWrap}>
+            <table style={s.table}>
+              <thead>
+                <tr style={s.theadRow}>
+                  {[
+                    "Session ID",
+                    "Status",
+                    "Persona",
+                    "Country",
+                    "Device",
+                    "Duration",
+                    "Quality",
+                    "Outcome",
+                    "Started",
+                    "Report",
+                  ].map((h) => (
+                    <th key={h} style={s.th}>
+                      <div style={s.thInner}>{h}</div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sessions.map((session, idx) => (
+                  <tr
+                    key={session.id}
+                    onClick={() => setViewSession(session.id)}
+                    style={{
+                      ...s.tr,
+                      background: idx % 2 === 0 ? "white" : "#f8fafc",
+                      cursor: "pointer",
+                    }}
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.background = "#f0f7ff")
+                    }
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.background =
+                        idx % 2 === 0 ? "white" : "#f8fafc")
+                    }
+                  >
+                    <td style={s.td}>
+                      <span
                         style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 6,
+                          fontFamily: "monospace",
+                          fontSize: "0.78rem",
+                          color: "#64748b",
+                          background: "#f1f5f9",
+                          padding: "2px 6px",
+                          borderRadius: 4,
                         }}
                       >
+                        {session.id.slice(0, 8)}
+                      </span>
+                    </td>
+                    <td style={s.td}>
+                      <StatusBadge
+                        status={session.status}
+                        colors={SESSION_STATUS_COLORS}
+                      />
+                    </td>
+                    <td style={s.td}>
+                      <span
+                        style={{
+                          fontSize: "0.82rem",
+                          color: "#1e293b",
+                          fontFamily: FONT,
+                        }}
+                      >
+                        {session.persona_name || "—"}
+                      </span>
+                    </td>
+                    <td style={s.td}>
+                      <span
+                        style={{
+                          fontSize: "0.82rem",
+                          color: "#475569",
+                          fontFamily: FONT,
+                        }}
+                      >
+                        {session.proxy_country || "—"}
+                      </span>
+                    </td>
+                    <td style={s.td}>
+                      <span
+                        style={{
+                          fontSize: "0.78rem",
+                          color: "#64748b",
+                          fontFamily: FONT,
+                        }}
+                      >
+                        {session.device_type || "—"}
+                      </span>
+                    </td>
+                    <td style={s.td}>
+                      <span
+                        style={{
+                          fontSize: "0.82rem",
+                          color: "#475569",
+                          fontFamily: FONT,
+                        }}
+                      >
+                        {fmtDuration(session.total_duration_s)}
+                      </span>
+                    </td>
+                    <td style={s.td}>
+                      {session.quality_score != null ? (
                         <div
                           style={{
-                            width: 40,
-                            height: 5,
-                            background: "#f1f5f9",
-                            borderRadius: 3,
-                            overflow: "hidden",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
                           }}
                         >
                           <div
                             style={{
-                              height: "100%",
-                              width: `${session.quality_score}%`,
-                              background:
-                                session.quality_score >= 70
-                                  ? "#059669"
-                                  : session.quality_score >= 40
-                                    ? "#f59e0b"
-                                    : "#ef4444",
+                              width: 40,
+                              height: 5,
+                              background: "#f1f5f9",
                               borderRadius: 3,
+                              overflow: "hidden",
                             }}
-                          />
+                          >
+                            <div
+                              style={{
+                                height: "100%",
+                                width: `${session.quality_score}%`,
+                                background:
+                                  session.quality_score >= 70
+                                    ? "#059669"
+                                    : session.quality_score >= 40
+                                      ? "#f59e0b"
+                                      : "#ef4444",
+                                borderRadius: 3,
+                              }}
+                            />
+                          </div>
+                          <span
+                            style={{
+                              fontSize: "0.75rem",
+                              color: "#64748b",
+                              fontFamily: FONT,
+                            }}
+                          >
+                            {session.quality_score}
+                          </span>
                         </div>
-                        <span
-                          style={{
-                            fontSize: "0.75rem",
-                            color: "#64748b",
-                            fontFamily: FONT,
-                          }}
-                        >
-                          {session.quality_score}
+                      ) : (
+                        <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
+                          —
                         </span>
-                      </div>
-                    ) : (
-                      <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
-                        —
+                      )}
+                    </td>
+                    <td style={s.td}>
+                      {session.outcome ? (
+                        <StatusBadge
+                          status={session.outcome}
+                          colors={SESSION_STATUS_COLORS}
+                        />
+                      ) : (
+                        <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
+                          —
+                        </span>
+                      )}
+                    </td>
+                    <td style={s.td}>
+                      <span
+                        style={{
+                          fontSize: "0.75rem",
+                          color: "#94a3b8",
+                          fontFamily: FONT,
+                        }}
+                      >
+                        {fmtTime(session.started_at || session.created_at)}
                       </span>
-                    )}
-                  </td>
-                  <td style={s.td}>
-                    {session.outcome ? (
-                      <StatusBadge
-                        status={session.outcome}
-                        colors={SESSION_STATUS_COLORS}
-                      />
-                    ) : (
-                      <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
-                        —
-                      </span>
-                    )}
-                  </td>
-                  <td style={s.td}>
-                    <span
-                      style={{
-                        fontSize: "0.75rem",
-                        color: "#94a3b8",
-                        fontFamily: FONT,
-                      }}
-                    >
-                      {fmtTime(session.started_at || session.created_at)}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    </td>
+                    <td style={s.td}>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setViewSession(session.id);
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 4,
+                          background: "#f0f7ff",
+                          border: "1px solid #dbeafe",
+                          borderRadius: 6,
+                          padding: "5px 8px",
+                          cursor: "pointer",
+                          color: "#2563eb",
+                          fontSize: "0.75rem",
+                          fontFamily: FONT,
+                          fontWeight: 600,
+                        }}
+                      >
+                        <FileText size={12} /> View
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {viewSession && (
+        <SessionReportModal
+          sessionId={viewSession}
+          onClose={() => setViewSession(null)}
+        />
       )}
     </div>
   );
@@ -1609,11 +2458,7 @@ function CostsTab({ projectId, showToast }) {
                 lineHeight: 1.6,
               }}
             >
-              Cost per AI token, proxy bandwidth rate, and other pricing will be
-              configurable in
-              <strong> Settings → Billing</strong>. Once configured, cost per
-              session, cost per complete, and total project spend will be
-              calculated automatically.
+              Configurable in <strong>Settings → Billing</strong>.
             </div>
           </div>
         </div>
@@ -1661,7 +2506,7 @@ export default function ProjectDetail() {
   const [deleting, setDeleting] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
-  const [showRunModal, setShowRunModal] = useState(false); // ← correct location
+  const [showRunModal, setShowRunModal] = useState(false);
   const [toast, setToast] = useState(null);
   const [editForm, setEditForm] = useState(null);
 
@@ -1715,11 +2560,10 @@ export default function ProjectDetail() {
   }, [id]);
 
   const setF = (k, v) => setEditForm((f) => ({ ...f, [k]: v }));
-
   const handleSurveyChange = (i, k, v) => {
-    const updated = [...editForm.surveys];
-    updated[i] = { ...updated[i], [k]: v };
-    setF("surveys", updated);
+    const u = [...editForm.surveys];
+    u[i] = { ...u[i], [k]: v };
+    setF("surveys", u);
   };
   const addSurvey = () =>
     setF("surveys", [
@@ -1900,6 +2744,7 @@ export default function ProjectDetail() {
               {label}
             </button>
           ))}
+          {/* Run Sessions — always visible */}
           <button style={s.runBtn} onClick={() => setShowRunModal(true)}>
             <Zap size={15} /> Run Sessions
           </button>
@@ -2355,12 +3200,13 @@ const s = {
     background: "#059669",
     border: "none",
     borderRadius: 8,
-    padding: "7px 14px",
-    fontSize: "0.82rem",
-    fontWeight: 600,
+    padding: "8px 16px",
+    fontSize: "0.88rem",
+    fontWeight: 700,
     cursor: "pointer",
     color: "white",
     fontFamily: FONT,
+    boxShadow: "0 2px 8px rgba(5,150,105,0.3)",
   },
   deleteBtn: {
     display: "flex",
@@ -2717,7 +3563,7 @@ const s = {
     border: "1.5px solid #e2e8f0",
     overflow: "auto",
   },
-  table: { width: "100%", borderCollapse: "collapse", minWidth: 900 },
+  table: { width: "100%", borderCollapse: "collapse", minWidth: 960 },
   theadRow: { background: "#f8fafc", borderBottom: "2px solid #e2e8f0" },
   th: { padding: "12px 14px", textAlign: "left", whiteSpace: "nowrap" },
   thInner: {
@@ -2731,7 +3577,7 @@ const s = {
     textTransform: "uppercase",
     letterSpacing: 0.4,
   },
-  tr: { borderBottom: "1px solid #f1f5f9" },
+  tr: { borderBottom: "1px solid #f1f5f9", transition: "background 0.1s" },
   td: { padding: "11px 14px", verticalAlign: "middle" },
   costNotice: {
     display: "flex",

@@ -46,7 +46,6 @@ const updateSessionStatus = async (id, status, extra = {}) => {
   );
 };
 
-// ─── camelCase to snake_case ──────────────────────────────────────────────────
 const toCol = (key) => key.replace(/([A-Z])/g, '_$1').toLowerCase();
 
 // ─── Log a session event ──────────────────────────────────────────────────────
@@ -78,7 +77,7 @@ const logSessionAnswer = async ({
   );
 };
 
-// ─── Check if IP already used in project ─────────────────────────────────────
+// ─── IP tracking ──────────────────────────────────────────────────────────────
 const isIPUsedInProject = async (projectId, ipAddress) => {
   const result = await pool.query(
     `SELECT id FROM proxy_used_ips WHERE project_id = $1 AND ip_address = $2`,
@@ -87,7 +86,6 @@ const isIPUsedInProject = async (projectId, ipAddress) => {
   return result.rows.length > 0;
 };
 
-// ─── Record used IP ───────────────────────────────────────────────────────────
 const recordUsedIP = async (projectId, sessionId, ipAddress) => {
   await pool.query(
     `INSERT INTO proxy_used_ips (project_id, session_id, ip_address)
@@ -96,7 +94,7 @@ const recordUsedIP = async (projectId, sessionId, ipAddress) => {
   );
 };
 
-// ─── Save trace path after session completes ─────────────────────────────────
+// ─── Save trace path ──────────────────────────────────────────────────────────
 const saveTracePath = async (sessionId, tracePath) => {
   await pool.query(
     `UPDATE sessions SET trace_path = $1, updated_at = NOW() WHERE id = $2`,
@@ -104,7 +102,7 @@ const saveTracePath = async (sessionId, tracePath) => {
   );
 };
 
-// ─── Get live sessions for a project ─────────────────────────────────────────
+// ─── Get live sessions ────────────────────────────────────────────────────────
 const getLiveSessions = async (projectId) => {
   const result = await pool.query(
     `SELECT s.*, p.name as persona_name
@@ -118,8 +116,41 @@ const getLiveSessions = async (projectId) => {
   return result.rows;
 };
 
+// ─── Get full session detail ──────────────────────────────────────────────────
+const getSessionDetail = async (sessionId) => {
+  const sessionResult = await pool.query(
+    `SELECT s.*,
+            p.name             as persona_name,
+            p.country          as persona_country,
+            p.device_type      as persona_device,
+            p.behavioural_attrs as persona_attrs
+     FROM sessions s
+     LEFT JOIN personas p ON p.id = s.persona_id
+     WHERE s.id = $1`,
+    [sessionId]
+  );
+  if (!sessionResult.rows[0]) return null;
+  const session = sessionResult.rows[0];
+
+  const eventsResult = await pool.query(
+    `SELECT * FROM session_events WHERE session_id = $1 ORDER BY created_at ASC`,
+    [sessionId]
+  );
+
+  const answersResult = await pool.query(
+    `SELECT * FROM session_answers WHERE session_id = $1 ORDER BY created_at ASC`,
+    [sessionId]
+  );
+
+  return {
+    session,
+    events:  eventsResult.rows,
+    answers: answersResult.rows,
+  };
+};
+
 module.exports = {
   createSession, updateSessionStatus, logSessionEvent,
   logSessionAnswer, isIPUsedInProject, recordUsedIP,
-  saveTracePath, getLiveSessions,
+  saveTracePath, getLiveSessions, getSessionDetail,
 };
