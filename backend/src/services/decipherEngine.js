@@ -78,7 +78,9 @@ const answerRadio = async (page, persona) => {
       idx = start + Math.floor(Math.random() * (end - start + 1));
     }
     idx = Math.max(0, Math.min(idx, options.length - 1));
-    await options[idx].click();
+    const el = options[idx];
+    await el.scrollIntoViewIfNeeded().catch(() => {});
+    await el.click({ force: true }).catch(() => el.evaluate(n => n.click()));
     await page.waitForTimeout(Math.floor(Math.random() * 500) + 200);
   }
   return true;
@@ -93,7 +95,8 @@ const answerCheckbox = async (page) => {
   const count = Math.min(boxes.length, Math.floor(Math.random() * 3) + 1);
   const shuffled = [...boxes].sort(() => Math.random() - 0.5).slice(0, count);
   for (const box of shuffled) {
-    await box.click();
+    await box.scrollIntoViewIfNeeded().catch(() => {});
+    await box.click({ force: true }).catch(() => box.evaluate(n => n.click()));
     await page.waitForTimeout(Math.floor(Math.random() * 300) + 100);
   }
   return true;
@@ -156,7 +159,8 @@ const answerOpenEnd = async (page, persona, questionText = '') => {
   const response = pool[Math.floor(Math.random() * pool.length)]
 
   for (const field of fields) {
-    await field.click()
+    await field.scrollIntoViewIfNeeded().catch(() => {});
+    await field.click({ force: true }).catch(() => field.evaluate(n => n.click()));
     await humanType(field, response)
     await page.waitForTimeout(Math.floor(Math.random() * 600) + 300)
   }
@@ -185,7 +189,8 @@ const answerPage = async (page, persona, readingSpeed = 'normal') => {
 const clickNext = async (page) => {
   const btn = await page.$(DECIPHER_SELECTORS.nextBtn)
   if (!btn) return false
-  await btn.click()
+  await btn.scrollIntoViewIfNeeded().catch(() => {})
+  await btn.click({ force: true }).catch(() => btn.evaluate(n => n.click()))
   return true
 }
 
