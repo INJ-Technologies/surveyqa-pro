@@ -41,6 +41,12 @@ app.get('/api/health', async (req, res) => {
     dbOk = true;
   } catch { dbOk = false; }
 
+  const redisPassword =
+    readSecret('redis_password_secret') ||
+    readSecret('redis_password') ||
+    readSecret('redis_pass') ||
+    (process.env.REDIS_PASSWORD || '').trim();
+
   res.json({
     status:      dbOk ? 'ok' : 'degraded',
     service:     'surveyqa-backend',
@@ -51,7 +57,7 @@ app.get('/api/health', async (req, res) => {
       database:  dbOk                                ? '✅ connected' : '❌ failed',
       jwt:       readSecret('surveyqa_jwt_secret')   ? '✅ loaded'    : '❌ missing',
       anthropic: readSecret('anthropic_api_key')     ? '✅ loaded'    : '❌ missing',
-      redis:     readSecret('redis_password_secret') ? '✅ loaded'    : '❌ missing',
+      redis:     redisPassword                        ? '✅ loaded'    : '❌ missing',
     }
   });
 });
