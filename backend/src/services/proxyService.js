@@ -1,49 +1,81 @@
 'use strict';
+
 const fs = require('fs');
 
+// ─── Helper: Read secret or fallback ──────────────────────────────────────────
 const read = (path, fallback = '') => {
-  try { return fs.readFileSync(path, 'utf8').trim(); } catch { return fallback; }
+  try {
+    return fs.readFileSync(path, 'utf8').trim();
+  } catch {
+    return fallback;
+  }
 };
 
-// ─── Decodo (formerly Smartproxy) residential proxy config ───────────────────
-const getDecodoProxy = (country = null, sessionId = null) => {
-  const user = read('/run/secrets/decodo_proxy_user', process.env.DECODO_USER || '');
-  const pass = read('/run/secrets/decodo_proxy_pass', process.env.DECODO_PASS || '');
+// ─── Load Decodo credentials ─────────────────────────────────────────────────
+const DECODO_USER =
+  read('/run/secrets/decodo_proxy_user', process.env.DECODO_USER || '');
 
-  if (!user || !pass) {
-    console.warn('[Proxy] Decodo credentials not configured — running without proxy');
-    return null;
+const DECODO_PASS =
+  read('/run/secrets/decodo_proxy_pass', process.env.DECODO_PASS || '');
+
+// ─── Validate credentials ────────────────────────────────────────────────────
+const isProxyConfigured = () => {
+  if (!DECODO_USER || !DECODO_PASS) {
+    console.warn('[Proxy] Decodo credentials missing — running without proxy');
+    return false;
+  }
+  return true;
+};
+
+// ─── Build Decodo proxy config ───────────────────────────────────────────────
+// Docs: username[-country=XX][-session=ID][-sessionduration=seconds]
+const getDecodoProxy = (options = {}) => {
+  const {
+    country = null,          // e.g. "US", "IN"
+    sessionId = null,        // unique session id
+    sessionDuration = 60     // seconds (optional)
+  } = options;
+
+  if (!isProxyConfigured()) return null;
+
+  let username = DECODO_USER;
+
+  // Ensure session duration exists (recommended)
+  if (sessionDuration) {
+    username += `-sessionduration=${sessionDuration}`;
   }
 
-  // Build username with optional country and session ID
-  // Format: user-{user}-sessionduration-60[-country-{cc}][-session-{id}]
-  let username = user; // e.g. user-INJTechnologies-sessionduration-60
-
+  // Country targeting
   if (country) {
-    username += `-country-${country.toLowerCase()}`;
+    username += `-country=${country.toLowerCase()}`;
   }
 
+  // Sticky session
   if (sessionId) {
-    // Use session ID to ensure each concurrent session gets a unique IP
-    username += `-session-${sessionId}`;
+    username += `-session=${sessionId}`;
   }
 
   return {
-    server:   'http://gate.decodo.com:10001',
+    server: 'http://gate.decodo.com:10001',
     username,
-    password: pass,
+    password: DECODO_PASS,
   };
 };
 
-// ─── Get proxy for a session ──────────────────────────────────────────────────
-const getProxyForSession = (provider, country, sessionId) => {
+// ─── Generic proxy selector (future extensibility) ────────────────────────────
+const getProxyForSession = (provider = 'decodo', options = {}) => {
   switch (provider) {
     case 'decodo':
-    case 'smartproxy':
-      return getDecodoProxy(country, sessionId);
+    case 'smartproxy': // backward compatibility
+      return getDecodoProxy(options);
+
     default:
-      return getDecodoProxy(country, sessionId);
+      console.warn(`[Proxy] Unknown provider "${provider}", defaulting to Decodo`);
+      return getDecodoProxy(options);
   }
 };
 
-module.exports = { getDecodoProxy, getProxyForSession };
+module.exports = {
+  getDecodoProxy,
+  getProxyForSession,
+};
