@@ -17,6 +17,15 @@ const getQuotaPlan = async (projectId) => {
   return { plan: plan.rows[0], cells: cells.rows };
 };
 
+// Clear quota plan for a project (disable all active plans)
+const clearQuotaPlan = async (projectId) => {
+  await pool.query(
+    `UPDATE quota_plans SET is_active = false WHERE project_id = $1`,
+    [projectId]
+  );
+  return { plan: null, cells: [] };
+};
+
 // ─── Save quota plan (create or replace) ─────────────────────────────────────
 const saveQuotaPlan = async (projectId, userId, dimensions) => {
   const client = await pool.connect();
@@ -84,4 +93,4 @@ const incrementQuotaCell = async (cellId) => {
   return result.rows[0];
 };
 
-module.exports = { getQuotaPlan, saveQuotaPlan, incrementQuotaCell };
+module.exports = { getQuotaPlan, saveQuotaPlan, clearQuotaPlan, incrementQuotaCell };

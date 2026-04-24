@@ -1,6 +1,6 @@
 'use strict';
 const express = require('express');
-const { getQuotaPlan, saveQuotaPlan } = require('../db/quota');
+const { getQuotaPlan, saveQuotaPlan, clearQuotaPlan } = require('../db/quota');
 const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router({ mergeParams: true });
@@ -21,8 +21,12 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { dimensions } = req.body;
-    if (!dimensions || !Array.isArray(dimensions) || dimensions.length === 0) {
-      return res.status(400).json({ error: 'At least one dimension is required' });
+    if (!dimensions || !Array.isArray(dimensions)) {
+      return res.status(400).json({ error: 'dimensions must be an array' });
+    }
+    if (dimensions.length === 0) {
+      const data = await clearQuotaPlan(req.params.id);
+      return res.json({ message: 'Quota plan cleared', ...data });
     }
     const data = await saveQuotaPlan(req.params.id, req.user.id, dimensions);
     res.json({ message: 'Quota plan saved', ...data });
