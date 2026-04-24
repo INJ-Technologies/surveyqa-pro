@@ -10,6 +10,8 @@ const authRoutes = require('./routes/auth');
 const projectRoutes  = require('./routes/projects');
 const personaRoutes = require('./routes/personas');
 const quotaRoutes = require('./routes/quota');
+const sessionRoutes = require('./routes/sessions');
+const quotaRoutes   = require('./routes/quota');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -63,6 +65,8 @@ app.get('/api', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/personas', personaRoutes);
+app.use('/api/projects/:id/quota', quotaRoutes);
+app.use('/api/sessions', sessionRoutes);
 app.use('/api/projects/:id/quota', quotaRoutes);
 
 // ─── 404 handler ─────────────────────────────────────────────────────────────

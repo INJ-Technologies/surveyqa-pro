@@ -25,17 +25,12 @@ import {
   CheckCircle,
   Save,
   Eye,
-  BarChart2,
   DollarSign,
   RefreshCw,
-  ChevronDown,
-  ChevronUp,
   Target,
   Zap,
   TrendingDown,
   StopCircle,
-  Loader,
-  Filter,
 } from "lucide-react";
 
 const FONT =
@@ -48,6 +43,7 @@ const formatLabel = (str) => {
     surveymonkey: "Survey Monkey",
     brightdata: "Bright Data",
     iproyal: "IPRoyal",
+    decodo: "Decodo",
   };
   if (overrides[str]) return overrides[str];
   return str
@@ -97,7 +93,7 @@ const PLATFORMS = [
 ];
 const AI_MODES = ["ai", "human", "predefined"];
 const STRATEGIES = ["persona_true", "quota_guided", "stress_test"];
-const PROVIDERS = ["brightdata", "oxylabs", "smartproxy", "iproyal", "custom"];
+const PROVIDERS = ["decodo", "brightdata", "oxylabs", "iproyal", "custom"]; // decodo first
 
 const STATUS_COLORS = {
   draft: { bg: "#f1f5f9", text: "#64748b", border: "#e2e8f0" },
@@ -293,6 +289,222 @@ function ConfirmModal({
             disabled={loading}
           >
             {loading ? "Please wait..." : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Run Sessions Modal — defined OUTSIDE ProjectDetail ───────────────────────
+function RunSessionsModal({ project, onClose, onTriggered }) {
+  const [count, setCount] = useState(5);
+  const [country, setCountry] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleRun = async () => {
+    setError("");
+    setLoading(true);
+    try {
+      await api.post("/sessions/trigger", {
+        projectId: project.id,
+        count: parseInt(count),
+        proxyCountry: country || null,
+      });
+      onTriggered();
+    } catch (err) {
+      setError(err.response?.data?.error || "Failed to trigger sessions");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={s.overlay}>
+      <div
+        style={{
+          background: "white",
+          borderRadius: 16,
+          padding: 32,
+          maxWidth: 440,
+          width: "100%",
+          boxShadow: "0 25px 50px rgba(0,0,0,0.3)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 20,
+          }}
+        >
+          <h3
+            style={{
+              fontFamily: FONT,
+              fontSize: "1.1rem",
+              fontWeight: 700,
+              color: "#1e293b",
+              margin: 0,
+            }}
+          >
+            Run Bot Sessions
+          </h3>
+          <button
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "#64748b",
+            }}
+            onClick={onClose}
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <label
+            style={{
+              fontSize: "0.8rem",
+              fontWeight: 600,
+              color: "#374151",
+              fontFamily: FONT,
+              display: "block",
+              marginBottom: 6,
+            }}
+          >
+            Number of Sessions
+          </label>
+          <input
+            type="number"
+            min="1"
+            max="20"
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              border: "1.5px solid #e2e8f0",
+              borderRadius: 8,
+              fontSize: "0.88rem",
+              fontFamily: FONT,
+              outline: "none",
+              boxSizing: "border-box",
+            }}
+            value={count}
+            onChange={(e) => setCount(e.target.value)}
+          />
+          <div
+            style={{
+              fontSize: "0.75rem",
+              color: "#94a3b8",
+              fontFamily: FONT,
+              marginTop: 4,
+            }}
+          >
+            Max 20 per trigger. Project concurrent limit:{" "}
+            {project.concurrent_sessions}
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 20 }}>
+          <label
+            style={{
+              fontSize: "0.8rem",
+              fontWeight: 600,
+              color: "#374151",
+              fontFamily: FONT,
+              display: "block",
+              marginBottom: 6,
+            }}
+          >
+            Proxy Country (optional)
+          </label>
+          <input
+            type="text"
+            placeholder="e.g. IN, US, GB — leave blank for auto"
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              border: "1.5px solid #e2e8f0",
+              borderRadius: 8,
+              fontSize: "0.88rem",
+              fontFamily: FONT,
+              outline: "none",
+              boxSizing: "border-box",
+            }}
+            value={country}
+            onChange={(e) => setCountry(e.target.value.toUpperCase())}
+          />
+        </div>
+
+        <div
+          style={{
+            background: "#f0f7ff",
+            border: "1.5px solid #dbeafe",
+            borderRadius: 8,
+            padding: "10px 14px",
+            marginBottom: 20,
+            fontSize: "0.82rem",
+            color: "#1e3a5f",
+            fontFamily: FONT,
+            lineHeight: 1.7,
+          }}
+        >
+          <strong>Survey:</strong> {formatLabel(project.survey_platform)} —{" "}
+          {project.name}
+          <br />
+          <strong>Proxy:</strong> Decodo Residential
+          <br />
+          <strong>Strategy:</strong> {formatLabel(project.ai_strategy)}
+        </div>
+
+        {error && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              background: "#fef2f2",
+              border: "1px solid #fecaca",
+              borderRadius: 8,
+              padding: "10px 14px",
+              color: "#dc2626",
+              fontSize: "0.85rem",
+              marginBottom: 14,
+              fontFamily: FONT,
+            }}
+          >
+            <AlertCircle size={16} /> {error}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 12 }}>
+          <button style={s.cancelBtnFull} onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            style={{
+              flex: 1,
+              background: "#059669",
+              color: "white",
+              border: "none",
+              borderRadius: 8,
+              padding: "10px",
+              fontSize: "0.9rem",
+              fontWeight: 600,
+              cursor: "pointer",
+              fontFamily: FONT,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              opacity: loading ? 0.7 : 1,
+            }}
+            onClick={handleRun}
+            disabled={loading}
+          >
+            <Zap size={16} /> {loading ? "Queuing..." : `Run ${count} Sessions`}
           </button>
         </div>
       </div>
@@ -509,7 +721,6 @@ function SurveyCardEdit({ survey, index, onChange, onRemove }) {
 // ══════════════════════════════════════════════════════════════════════════════
 function QuotaTab({ projectId, targetCompletes, showToast }) {
   const [dimensions, setDimensions] = useState([]);
-  const [existing, setExisting] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -517,8 +728,6 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
     try {
       const res = await api.get(`/projects/${projectId}/quota`);
       if (res.data.cells && res.data.cells.length > 0) {
-        setExisting(res.data);
-        // Rebuild dimension UI from saved cells
         const dimMap = {};
         for (const cell of res.data.cells) {
           const dims = cell.dimensions || {};
@@ -532,6 +741,10 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
               quotaType: cell.quota_type || "hard",
               current: cell.current_count || 0,
               status: cell.status,
+              pct:
+                targetCompletes > 0
+                  ? Math.round((cell.target / targetCompletes) * 100)
+                  : 0,
             });
           }
         }
@@ -558,57 +771,47 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
         ],
       },
     ]);
-
   const removeDimension = (di) =>
     setDimensions((d) => d.filter((_, i) => i !== di));
-
   const setDimName = (di, val) =>
     setDimensions((d) => {
-      const next = [...d];
-      next[di] = { ...next[di], name: val };
-      return next;
+      const n = [...d];
+      n[di] = { ...n[di], name: val };
+      return n;
     });
-
   const addValue = (di) =>
     setDimensions((d) => {
-      const next = [...d];
-      next[di] = {
-        ...next[di],
+      const n = [...d];
+      n[di] = {
+        ...n[di],
         values: [
-          ...next[di].values,
+          ...n[di].values,
           { label: "", target: 0, minimum: 0, quotaType: "hard", pct: 0 },
         ],
       };
-      return next;
+      return n;
     });
-
   const removeValue = (di, vi) =>
     setDimensions((d) => {
-      const next = [...d];
-      next[di] = {
-        ...next[di],
-        values: next[di].values.filter((_, i) => i !== vi),
-      };
-      return next;
+      const n = [...d];
+      n[di] = { ...n[di], values: n[di].values.filter((_, i) => i !== vi) };
+      return n;
     });
 
   const setValueField = (di, vi, field, val) =>
     setDimensions((d) => {
-      const next = [...d];
-      const vals = [...next[di].values];
+      const n = [...d];
+      const vals = [...n[di].values];
       vals[vi] = { ...vals[vi], [field]: val };
-      // Auto-calc target from pct
-      if (field === "pct") {
+      if (field === "pct")
         vals[vi].target = Math.round((parseFloat(val) / 100) * targetCompletes);
-      }
-      if (field === "target") {
+      if (field === "target")
         vals[vi].pct =
           targetCompletes > 0
             ? Math.round((parseInt(val) / targetCompletes) * 100)
             : 0;
-      }
-      next[di] = { ...next[di], values: vals };
-      return next;
+      n[di] = { ...n[di], values: vals };
+      return n;
     });
 
   const handleSave = async () => {
@@ -640,13 +843,12 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
 
   const totalAllocated = dimensions.reduce(
     (sum, d) =>
-      sum + d.values.reduce((s, v) => s + (parseInt(v.target) || 0), 0),
+      sum + d.values.reduce((ss, v) => ss + (parseInt(v.target) || 0), 0),
     0,
   );
 
   return (
     <div>
-      {/* Header */}
       <div
         style={{
           display: "flex",
@@ -667,7 +869,6 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
         </button>
       </div>
 
-      {/* Summary bar */}
       {dimensions.length > 0 && (
         <div style={s.quotaSummaryBar}>
           <span
@@ -689,7 +890,6 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
         </div>
       )}
 
-      {/* Dimensions */}
       {dimensions.length === 0 ? (
         <div style={s.emptyQuota}>
           <Target size={48} color="#cbd5e1" />
@@ -706,8 +906,7 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
               marginBottom: 16,
             }}
           >
-            Add dimensions to define how sessions should be distributed across
-            respondent groups.
+            Add dimensions to define how sessions should be distributed.
           </p>
           <button style={s.primaryBtn} onClick={addDimension}>
             <Plus size={16} /> Add First Dimension
@@ -716,7 +915,6 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
       ) : (
         dimensions.map((dim, di) => (
           <div key={di} style={s.dimCard}>
-            {/* Dimension header */}
             <div style={s.dimHeader}>
               <div style={{ flex: 1 }}>
                 <input
@@ -733,8 +931,6 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
                 <X size={15} /> Remove Dimension
               </button>
             </div>
-
-            {/* Values table */}
             <table style={s.quotaTable}>
               <thead>
                 <tr>
@@ -886,7 +1082,6 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
                 ))}
               </tbody>
             </table>
-
             <button style={s.addValueBtn} onClick={() => addValue(di)}>
               <Plus size={13} /> Add Value
             </button>
@@ -894,7 +1089,6 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
         ))
       )}
 
-      {/* Save */}
       {dimensions.length > 0 && (
         <div style={s.saveBar}>
           <button
@@ -951,7 +1145,6 @@ function SessionsTab({ projectId, showToast }) {
   }, [load]);
 
   const setF = (k, v) => setFilters((f) => ({ ...f, [k]: v }));
-
   const statusOpts = [
     "queued",
     "initialising",
@@ -968,7 +1161,6 @@ function SessionsTab({ projectId, showToast }) {
 
   return (
     <div>
-      {/* Stats row */}
       {stats && (
         <div style={s.sessionStatsRow}>
           {[
@@ -1022,7 +1214,6 @@ function SessionsTab({ projectId, showToast }) {
         </div>
       )}
 
-      {/* Filters + Refresh */}
       <div style={s.sessionFilters}>
         <select
           style={s.filterSel}
@@ -1069,7 +1260,6 @@ function SessionsTab({ projectId, showToast }) {
         </button>
       </div>
 
-      {/* Table */}
       {sessions.length === 0 ? (
         <div style={s.emptyQuota}>
           <Activity size={48} color="#cbd5e1" />
@@ -1081,8 +1271,7 @@ function SessionsTab({ projectId, showToast }) {
           <p
             style={{ fontFamily: FONT, color: "#64748b", fontSize: "0.88rem" }}
           >
-            Sessions will appear here once the project is active and bot runs
-            are triggered.
+            Sessions will appear here once bot runs are triggered.
           </p>
         </div>
       ) : (
@@ -1289,7 +1478,6 @@ function CostsTab({ projectId, showToast }) {
 
   return (
     <div>
-      {/* Session outcome cards */}
       <div style={s.statsGrid}>
         <StatCard
           label="URL Hits"
@@ -1320,7 +1508,6 @@ function CostsTab({ projectId, showToast }) {
         />
       </div>
 
-      {/* Progress */}
       {target > 0 && (
         <div style={s.progressCard}>
           <div
@@ -1377,7 +1564,6 @@ function CostsTab({ projectId, showToast }) {
         </div>
       )}
 
-      {/* Session breakdown */}
       <div style={{ ...s.detailCard, marginBottom: 16 }}>
         <div style={s.detailCardTitle}>Session Breakdown</div>
         {[
@@ -1399,7 +1585,6 @@ function CostsTab({ projectId, showToast }) {
         ))}
       </div>
 
-      {/* Cost section — placeholder */}
       <div style={s.detailCard}>
         <div style={s.detailCardTitle}>Cost Breakdown</div>
         <div style={s.costNotice}>
@@ -1437,16 +1622,6 @@ function CostsTab({ projectId, showToast }) {
           ["Proxy Cost", "—", "Rate not configured"],
           ["Total Spend", "—", "Awaiting rate config"],
           ["Cost per Complete", "—", "Awaiting rate config"],
-          [
-            "Budget (Proxy)",
-            summary?.budget_proxy ? `$${summary.budget_proxy}` : "—",
-            "",
-          ],
-          [
-            "Budget (AI)",
-            summary?.budget_ai ? `$${summary.budget_ai}` : "—",
-            "",
-          ],
         ].map(([k, v, note]) => (
           <div key={k} style={s.detailRow}>
             <span style={s.detailKey}>{k}</span>
@@ -1486,6 +1661,7 @@ export default function ProjectDetail() {
   const [deleting, setDeleting] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  const [showRunModal, setShowRunModal] = useState(false); // ← correct location
   const [toast, setToast] = useState(null);
   const [editForm, setEditForm] = useState(null);
 
@@ -1503,7 +1679,7 @@ export default function ProjectDetail() {
       aiModeOpenend: p.ai_mode_openend || "ai",
       aiModeImage: p.ai_mode_image || "ai",
       aiStrategy: p.ai_strategy || "persona_true",
-      proxyProvider: p.proxy_provider || "brightdata",
+      proxyProvider: p.proxy_provider || "decodo",
       concurrentSessions: p.concurrent_sessions || 5,
       startDate: p.start_date ? p.start_date.split("T")[0] : "",
       endDate: p.end_date ? p.end_date.split("T")[0] : "",
@@ -1636,7 +1812,6 @@ export default function ProjectDetail() {
         </div>
       </Layout>
     );
-
   if (!project)
     return (
       <Layout title="Project">
@@ -1694,7 +1869,6 @@ export default function ProjectDetail() {
         <ArrowLeft size={16} /> Back to Projects
       </button>
 
-      {/* Page header */}
       <div style={s.pageHeader}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
@@ -1726,6 +1900,9 @@ export default function ProjectDetail() {
               {label}
             </button>
           ))}
+          <button style={s.runBtn} onClick={() => setShowRunModal(true)}>
+            <Zap size={15} /> Run Sessions
+          </button>
           <button
             style={s.deleteBtn}
             onClick={() => setShowDelete(true)}
@@ -1736,7 +1913,6 @@ export default function ProjectDetail() {
         </div>
       </div>
 
-      {/* Tabs */}
       <div
         style={{
           display: "flex",
@@ -1756,7 +1932,6 @@ export default function ProjectDetail() {
         ))}
       </div>
 
-      {/* ── OVERVIEW ── */}
       {activeTab === "overview" && (
         <div>
           <div style={s.statsGrid}>
@@ -1913,7 +2088,6 @@ export default function ProjectDetail() {
         </div>
       )}
 
-      {/* ── QUOTA ── */}
       {activeTab === "quota" && (
         <QuotaTab
           projectId={id}
@@ -1921,18 +2095,13 @@ export default function ProjectDetail() {
           showToast={showToast}
         />
       )}
-
-      {/* ── SESSIONS ── */}
       {activeTab === "sessions" && (
         <SessionsTab projectId={id} showToast={showToast} />
       )}
-
-      {/* ── COSTS ── */}
       {activeTab === "costs" && (
         <CostsTab projectId={id} showToast={showToast} />
       )}
 
-      {/* ── EDIT ── */}
       {activeTab === "edit" && editForm && (
         <div style={s.editContainer}>
           <SectionHeader
@@ -2001,7 +2170,6 @@ export default function ProjectDetail() {
               onChange={(e) => setF("endDate", e.target.value)}
             />
           </FormGrid>
-
           <div style={s.editDivider} />
           <SectionHeader
             title="Survey URLs"
@@ -2021,7 +2189,6 @@ export default function ProjectDetail() {
               onRemove={removeSurvey}
             />
           ))}
-
           <div style={s.editDivider} />
           <SectionHeader
             title="AI & Automation Settings"
@@ -2060,7 +2227,6 @@ export default function ProjectDetail() {
               onChange={(e) => setF("concurrentSessions", e.target.value)}
             />
           </FormGrid>
-
           <div style={s.saveBar}>
             <button
               style={s.cancelBtnFull}
@@ -2082,7 +2248,6 @@ export default function ProjectDetail() {
         </div>
       )}
 
-      {/* Modals */}
       {showDelete && (
         <ConfirmModal
           title="Delete Project"
@@ -2104,6 +2269,17 @@ export default function ProjectDetail() {
           onConfirm={doSave}
           onCancel={() => setShowSaveConfirm(false)}
           loading={saving}
+        />
+      )}
+      {showRunModal && (
+        <RunSessionsModal
+          project={project}
+          onClose={() => setShowRunModal(false)}
+          onTriggered={() => {
+            setShowRunModal(false);
+            setActiveTab("sessions");
+            showToast("Sessions queued successfully ✓");
+          }}
         />
       )}
       {toast && (
@@ -2172,6 +2348,20 @@ const s = {
     color: "#475569",
     fontFamily: FONT,
   },
+  runBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 5,
+    background: "#059669",
+    border: "none",
+    borderRadius: 8,
+    padding: "7px 14px",
+    fontSize: "0.82rem",
+    fontWeight: 600,
+    cursor: "pointer",
+    color: "white",
+    fontFamily: FONT,
+  },
   deleteBtn: {
     display: "flex",
     alignItems: "center",
@@ -2182,7 +2372,6 @@ const s = {
     cursor: "pointer",
     color: "#ef4444",
   },
-
   statsGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
@@ -2243,7 +2432,6 @@ const s = {
     fontWeight: 500,
     textAlign: "right",
   },
-
   surveyCard: {
     background: "#f8fafc",
     border: "1.5px solid #e2e8f0",
@@ -2286,7 +2474,6 @@ const s = {
     fontWeight: 600,
     fontFamily: FONT,
   },
-
   editContainer: {
     background: "white",
     borderRadius: 12,
@@ -2342,7 +2529,6 @@ const s = {
     fontWeight: 500,
     fontFamily: FONT,
   },
-
   primaryBtn: {
     display: "flex",
     alignItems: "center",
@@ -2363,8 +2549,6 @@ const s = {
     color: "#64748b",
     fontFamily: FONT,
   },
-
-  // Quota
   quotaSummaryBar: {
     display: "flex",
     justifyContent: "space-between",
@@ -2480,8 +2664,6 @@ const s = {
     marginBottom: 4,
   },
   sectionP: { fontSize: "0.82rem", color: "#64748b", fontFamily: FONT },
-
-  // Sessions
   sessionStatsRow: {
     display: "flex",
     gap: 0,
@@ -2528,7 +2710,6 @@ const s = {
     color: "#475569",
     fontFamily: FONT,
   },
-
   tableWrap: {
     background: "white",
     borderRadius: 12,
@@ -2552,8 +2733,6 @@ const s = {
   },
   tr: { borderBottom: "1px solid #f1f5f9" },
   td: { padding: "11px 14px", verticalAlign: "middle" },
-
-  // Costs
   costNotice: {
     display: "flex",
     gap: 14,
@@ -2564,7 +2743,6 @@ const s = {
     marginBottom: 16,
     alignItems: "flex-start",
   },
-
   overlay: {
     position: "fixed",
     inset: 0,
