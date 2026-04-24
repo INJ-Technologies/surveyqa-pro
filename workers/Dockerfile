@@ -26,7 +26,7 @@ COPY backend/package*.json  ./backend/
 
 # Install dependencies
 RUN cd workers  && npm ci --only=production
-RUN cd backend  && npm ci --only=production
+RUN cd backend  && npm install --omit=dev
 
 # Copy source code
 COPY workers/   ./workers/
