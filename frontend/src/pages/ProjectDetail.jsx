@@ -631,7 +631,14 @@ function SessionReportModal({ sessionId, onClose }) {
   const pageEvents = getPageEvents();
   const ipEvent = getMetaEvent("ip_assigned");
   const completeEvent = getMetaEvent("session_complete");
+  const errorEvent = getMetaEvent("error");
   const activePage = pageEvents[activePageIdx];
+  const errorText =
+    session?.error_log ||
+    errorEvent?.message ||
+    errorEvent?.error ||
+    errorEvent?.stack ||
+    "";
 
   const outcomeColors = {
     completed: { bg: "#dcfce7", text: "#166534" },
@@ -943,6 +950,41 @@ function SessionReportModal({ sessionId, onClose }) {
                   `Duration: ${fmtDuration(session.total_duration_s)}`}
               </div>
             </div>
+
+            {session?.outcome === "error" && errorText && (
+              <div
+                style={{
+                  marginBottom: 16,
+                  background: "#fef2f2",
+                  border: "1px solid #fecaca",
+                  borderRadius: 10,
+                  padding: "10px 12px",
+                }}
+              >
+                <div
+                  style={{
+                    fontFamily: FONT,
+                    fontSize: "0.78rem",
+                    fontWeight: 700,
+                    color: "#991b1b",
+                    marginBottom: 4,
+                  }}
+                >
+                  Error details
+                </div>
+                <div
+                  style={{
+                    fontFamily: "monospace",
+                    fontSize: "0.75rem",
+                    color: "#7f1d1d",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {String(errorText).slice(0, 2000)}
+                </div>
+              </div>
+            )}
 
             {pageEvents.length === 0 ? (
               <div

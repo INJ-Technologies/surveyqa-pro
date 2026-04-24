@@ -8,24 +8,49 @@ const createSession = async ({
   proxyCountry, proxyProvider,
   deviceType, browserType, aiStrategy,
 }) => {
-  const result = await pool.query(
-    `INSERT INTO sessions (
-       project_id, workspace_id, persona_id,
-       survey_url, survey_label, response_id,
-       proxy_country, proxy_provider,
-       device_type, browser_type,
-       ai_strategy, status
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'queued')
-     RETURNING *`,
-    [
-      projectId, workspaceId, personaId || null,
-      surveyUrl, surveyLabel || 'Main', responseId || null,
-      proxyCountry || null, proxyProvider || 'decodo',
-      deviceType || 'desktop', browserType || 'chrome',
-      aiStrategy || 'persona_true',
-    ]
-  );
-  return result.rows[0];
+  try {
+    const result = await pool.query(
+      `INSERT INTO sessions (
+         project_id, workspace_id, persona_id,
+         survey_url, survey_label, response_id,
+         proxy_country, proxy_provider,
+         device_type, browser_type,
+         ai_strategy, status
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'queued')
+       RETURNING *`,
+      [
+        projectId, workspaceId, personaId || null,
+        surveyUrl, surveyLabel || 'Main', responseId || null,
+        proxyCountry || null, proxyProvider || 'decodo',
+        deviceType || 'desktop', browserType || 'chrome',
+        aiStrategy || 'persona_true',
+      ]
+    );
+    return result.rows[0];
+  } catch (err) {
+    // Backward compatible insert for DBs missing the newer columns.
+    const msg = (err && err.message) || '';
+    if (!msg.includes('workspace_id') && !msg.includes('survey_url') && !msg.includes('response_id')) {
+      throw err;
+    }
+
+    const result = await pool.query(
+      `INSERT INTO sessions (
+         project_id, persona_id,
+         proxy_country, proxy_provider,
+         device_type, browser_type,
+         ai_strategy, status
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'queued')
+       RETURNING *`,
+      [
+        projectId, personaId || null,
+        proxyCountry || null, proxyProvider || 'decodo',
+        deviceType || 'desktop', browserType || 'chrome',
+        aiStrategy || 'persona_true',
+      ]
+    );
+    return result.rows[0];
+  }
 };
 
 // ─── Update session status ────────────────────────────────────────────────────
@@ -50,11 +75,22 @@ const toCol = (key) => key.replace(/([A-Z])/g, '_$1').toLowerCase();
 
 // ─── Log a session event ──────────────────────────────────────────────────────
 const logSessionEvent = async (sessionId, eventType, payload = {}) => {
-  await pool.query(
-    `INSERT INTO session_events (session_id, event_type, payload)
-     VALUES ($1, $2, $3)`,
-    [sessionId, eventType, JSON.stringify(payload)]
-  );
+  try {
+    await pool.query(
+      `INSERT INTO session_events (session_id, event_type, payload)
+       VALUES ($1, $2, $3)`,
+      [sessionId, eventType, JSON.stringify(payload)]
+    );
+  } catch (err) {
+    // Backward compatible with older schema using "details" instead of "payload".
+    const msg = (err && err.message) || '';
+    if (!msg.includes('payload') && !msg.includes('session_events')) throw err;
+    await pool.query(
+      `INSERT INTO session_events (session_id, event_type, details)
+       VALUES ($1, $2, $3)`,
+      [sessionId, eventType, JSON.stringify(payload)]
+    );
+  }
 };
 
 // ─── Log a session answer ─────────────────────────────────────────────────────
@@ -87,19 +123,36 @@ const isIPUsedInProject = async (projectId, ipAddress) => {
 };
 
 const recordUsedIP = async (projectId, sessionId, ipAddress) => {
-  await pool.query(
-    `INSERT INTO proxy_used_ips (project_id, session_id, ip_address)
-     VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-    [projectId, sessionId, ipAddress]
-  );
+  try {
+    await pool.query(
+      `INSERT INTO proxy_used_ips (project_id, session_id, ip_address)
+       VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+      [projectId, sessionId, ipAddress]
+    );
+  } catch (err) {
+    // Backward compatible with older schema missing session_id.
+    const msg = (err && err.message) || '';
+    if (!msg.includes('session_id') && !msg.includes('proxy_used_ips')) throw err;
+    await pool.query(
+      `INSERT INTO proxy_used_ips (project_id, ip_address)
+       VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [projectId, ipAddress]
+    );
+  }
 };
 
 // ─── Save trace path ──────────────────────────────────────────────────────────
 const saveTracePath = async (sessionId, tracePath) => {
-  await pool.query(
-    `UPDATE sessions SET trace_path = $1, updated_at = NOW() WHERE id = $2`,
-    [tracePath, sessionId]
-  );
+  try {
+    await pool.query(
+      `UPDATE sessions SET trace_path = $1, updated_at = NOW() WHERE id = $2`,
+      [tracePath, sessionId]
+    );
+  } catch (err) {
+    const msg = (err && err.message) || '';
+    if (!msg.includes('trace_path') && !msg.includes('sessions')) throw err;
+    // Ignore if column doesn't exist (older DB schema).
+  }
 };
 
 // ─── Get live sessions ────────────────────────────────────────────────────────
@@ -142,11 +195,12 @@ const getSessionDetail = async (sessionId) => {
     [sessionId]
   );
 
-  return {
-    session,
-    events:  eventsResult.rows,
-    answers: answersResult.rows,
-  };
+  const events = (eventsResult.rows || []).map((e) => ({
+    ...e,
+    payload: e.payload ?? e.details ?? {},
+  }));
+
+  return { session, events, answers: answersResult.rows };
 };
 
 module.exports = {

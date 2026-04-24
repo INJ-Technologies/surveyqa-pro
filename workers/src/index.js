@@ -112,6 +112,7 @@ const processSession = async (job) => {
 
   let browser, context, page;
   let outcome = null;
+  let errorMessage = null;
   let pageCount = 0;
   let questionCount = 0;
   const startTime = Date.now();
@@ -304,7 +305,11 @@ const processSession = async (job) => {
     if (!outcome) outcome = pageCount >= MAX_PAGES ? "error" : "completed";
   } catch (err) {
     outcome = "error";
-    await logSessionEvent(sessionId, "error", { message: err.message });
+    errorMessage = err?.stack || err?.message || String(err);
+    await logSessionEvent(sessionId, "error", {
+      message: err?.message || "Unknown error",
+      stack: err?.stack,
+    });
     console.error(`[Worker] Session ${sessionId} error:`, err.message);
   } finally {
     try {
@@ -324,6 +329,7 @@ const processSession = async (job) => {
     totalDurationS: durationS,
     questionCount,
     redirectType: outcome,
+    ...(outcome === "error" && errorMessage ? { errorLog: errorMessage } : {}),
   });
 
   await logSessionEvent(sessionId, "session_complete", {
