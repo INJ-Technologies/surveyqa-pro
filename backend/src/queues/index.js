@@ -70,9 +70,11 @@ const getRedisPassword = () => {
 const redisUsername = getRedisUsername();
 const redisPassword = getRedisPassword();
 const redisHost = getRedisHost();
-const redisPort = parseInt(
-  readFileTrim(process.env.REDIS_PORT_FILE) || process.env.REDIS_PORT,
-) || 6379;
+const redisPortString =
+  readFileTrim(process.env.REDIS_PORT_FILE) ||
+  readSecret('redis_port') ||
+  readEnvTrim('REDIS_PORT', 'redis_port');
+const redisPort = parseInt(redisPortString, 10) || 6379;
 
 const connection = {
   host: redisHost,
