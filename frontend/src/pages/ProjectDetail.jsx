@@ -40,6 +40,8 @@ import {
   Smartphone,
   Tablet,
   Hash,
+  ChevronDown,
+  Globe,  
 } from "lucide-react";
 
 const FONT =
@@ -313,208 +315,203 @@ function ConfirmModal({
 }
 
 // ─── Run Sessions Modal ───────────────────────────────────────────────────────
+// Drop-in replacement for RunSessionsModal in ProjectDetail.jsx
 function RunSessionsModal({ project, onClose, onTriggered }) {
-  const [count, setCount] = useState(5);
-  const [country, setCountry] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [count,        setCount]        = useState(5);
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState('');
+  const [countries,    setCountries]    = useState([]);   // all from DB
+  const [selected,     setSelected]     = useState([]);   // selected codes [{code,country}]
+  const [search,       setSearch]       = useState('');
+  const [dropOpen,     setDropOpen]     = useState(false);
+  const dropRef = useRef(null);
+
+  // Load countries from API on mount
+  useEffect(() => {
+    api.get('/proxy/countries')
+      .then(res => setCountries(res.data.countries || []))
+      .catch(() => setCountries([]));
+  }, []);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (dropRef.current && !dropRef.current.contains(e.target)) setDropOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const filtered = countries.filter(c =>
+    c.country.toLowerCase().includes(search.toLowerCase()) ||
+    c.code.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const toggleCountry = (c) => {
+    setSelected(prev => {
+      const exists = prev.find(s => s.code === c.code);
+      if (exists) return prev.filter(s => s.code !== c.code);
+      return [...prev, { code: c.code, country: c.country }];
+    });
+  };
+
+  const removeCountry = (code) => setSelected(prev => prev.filter(s => s.code !== code));
+
+  // How countries will be distributed across sessions
+  const getDistribution = () => {
+    if (selected.length === 0) return [];
+    const n = parseInt(count) || 1;
+    return Array.from({ length: n }, (_, i) => selected[i % selected.length]);
+  };
 
   const handleRun = async () => {
-    setError("");
-    setLoading(true);
+    setError(''); setLoading(true);
     try {
-      await api.post("/sessions/trigger", {
-        projectId: project.id,
-        count: parseInt(count),
-        proxyCountry: country || null,
+      const countryCodes = selected.map(s => s.code);
+      await api.post('/sessions/trigger', {
+        projectId:    project.id,
+        count:        parseInt(count),
+        proxyCountry: countryCodes.length > 0 ? countryCodes : null,
       });
       onTriggered();
     } catch (err) {
-      setError(err.response?.data?.error || "Failed to trigger sessions");
-    } finally {
-      setLoading(false);
-    }
+      setError(err.response?.data?.error || 'Failed to trigger sessions');
+    } finally { setLoading(false); }
   };
+
+  const distribution = getDistribution();
+  const n = parseInt(count) || 1;
 
   return (
     <div style={s.overlay}>
-      <div
-        style={{
-          background: "white",
-          borderRadius: 16,
-          padding: 32,
-          maxWidth: 440,
-          width: "100%",
-          boxShadow: "0 25px 50px rgba(0,0,0,0.3)",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 20,
-          }}
-        >
-          <h3
-            style={{
-              fontFamily: FONT,
-              fontSize: "1.1rem",
-              fontWeight: 700,
-              color: "#1e293b",
-              margin: 0,
-            }}
-          >
-            Run Bot Sessions
-          </h3>
-          <button
-            style={{
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              color: "#64748b",
-            }}
-            onClick={onClose}
-          >
-            <X size={20} />
-          </button>
+      <div style={{ background: 'white', borderRadius: 16, padding: 28, maxWidth: 520, width: '100%', boxShadow: '0 25px 50px rgba(0,0,0,0.3)', maxHeight: '90vh', overflowY: 'auto' }}>
+
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <h3 style={{ fontFamily: FONT, fontSize: '1.1rem', fontWeight: 700, color: '#1e293b', margin: 0 }}>Run Bot Sessions</h3>
+          <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }} onClick={onClose}><X size={20} /></button>
         </div>
-        <div style={{ marginBottom: 14 }}>
-          <label
-            style={{
-              fontSize: "0.8rem",
-              fontWeight: 600,
-              color: "#374151",
-              fontFamily: FONT,
-              display: "block",
-              marginBottom: 6,
-            }}
-          >
+
+        {/* Session count */}
+        <div style={{ marginBottom: 18 }}>
+          <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#374151', fontFamily: FONT, display: 'block', marginBottom: 6 }}>
             Number of Sessions
           </label>
-          <input
-            type="number"
-            min="1"
-            max="20"
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              border: "1.5px solid #e2e8f0",
-              borderRadius: 8,
-              fontSize: "0.88rem",
-              fontFamily: FONT,
-              outline: "none",
-              boxSizing: "border-box",
-            }}
-            value={count}
-            onChange={(e) => setCount(e.target.value)}
-          />
-          <div
-            style={{
-              fontSize: "0.75rem",
-              color: "#94a3b8",
-              fontFamily: FONT,
-              marginTop: 4,
-            }}
-          >
+          <input type="number" min="1" max="20"
+            style={{ width: '100%', padding: '10px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.88rem', fontFamily: FONT, outline: 'none', boxSizing: 'border-box' }}
+            value={count} onChange={e => setCount(e.target.value)} />
+          <div style={{ fontSize: '0.72rem', color: '#94a3b8', fontFamily: FONT, marginTop: 4 }}>
             Max 20 per trigger. Concurrent limit: {project.concurrent_sessions}
           </div>
         </div>
-        <div style={{ marginBottom: 20 }}>
-          <label
-            style={{
-              fontSize: "0.8rem",
-              fontWeight: 600,
-              color: "#374151",
-              fontFamily: FONT,
-              display: "block",
-              marginBottom: 6,
-            }}
-          >
-            Proxy Country (optional)
+
+        {/* Country multi-select */}
+        <div style={{ marginBottom: 18 }}>
+          <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#374151', fontFamily: FONT, display: 'block', marginBottom: 6 }}>
+            Target Countries <span style={{ color: '#94a3b8', fontWeight: 400 }}>(optional — distributed round-robin)</span>
           </label>
-          <input
-            type="text"
-            placeholder="e.g. IN, US, GB — leave blank for auto"
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              border: "1.5px solid #e2e8f0",
-              borderRadius: 8,
-              fontSize: "0.88rem",
-              fontFamily: FONT,
-              outline: "none",
-              boxSizing: "border-box",
-            }}
-            value={country}
-            onChange={(e) => setCountry(e.target.value.toUpperCase())}
-          />
+
+          {/* Selected chips */}
+          {selected.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+              {selected.map(s => (
+                <span key={s.code} style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#dbeafe', color: '#1e3a5f', borderRadius: 20, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, fontFamily: FONT }}>
+                  {s.code} — {s.country}
+                  <button onClick={() => removeCountry(s.code)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', padding: 0, display: 'flex', lineHeight: 1 }}>
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+              <button onClick={() => setSelected([])} style={{ background: 'none', border: '1px solid #e2e8f0', borderRadius: 20, padding: '3px 10px', fontSize: '0.75rem', cursor: 'pointer', color: '#94a3b8', fontFamily: FONT }}>
+                Clear all
+              </button>
+            </div>
+          )}
+
+          {/* Dropdown */}
+          <div ref={dropRef} style={{ position: 'relative' }}>
+            <div
+              onClick={() => setDropOpen(o => !o)}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, cursor: 'pointer', background: 'white', fontSize: '0.85rem', fontFamily: FONT, color: selected.length > 0 ? '#1e293b' : '#94a3b8' }}>
+              <Globe size={14} color="#94a3b8" />
+              <span style={{ flex: 1 }}>{selected.length > 0 ? `${selected.length} countr${selected.length === 1 ? 'y' : 'ies'} selected` : 'Search and select countries...'}</span>
+              <ChevronDown size={14} color="#94a3b8" style={{ transform: dropOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+            </div>
+
+            {dropOpen && (
+              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 9999, background: 'white', border: '1.5px solid #e2e8f0', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.12)', marginTop: 4, maxHeight: 240, display: 'flex', flexDirection: 'column' }}>
+                {/* Search */}
+                <div style={{ padding: '8px 10px', borderBottom: '1px solid #f1f5f9' }}>
+                  <input
+                    autoFocus
+                    placeholder="Search country or code..."
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    style={{ width: '100%', padding: '6px 10px', border: '1.5px solid #e2e8f0', borderRadius: 6, fontSize: '0.82rem', fontFamily: FONT, outline: 'none', boxSizing: 'border-box' }}
+                  />
+                </div>
+                {/* Options */}
+                <div style={{ overflowY: 'auto', flex: 1 }}>
+                  {filtered.length === 0 ? (
+                    <div style={{ padding: '12px 14px', fontSize: '0.82rem', color: '#94a3b8', fontFamily: FONT }}>No countries found</div>
+                  ) : filtered.map(c => {
+                    const isSelected = selected.some(s => s.code === c.code);
+                    return (
+                      <div key={c.code}
+                        onClick={() => toggleCountry(c)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', cursor: 'pointer', background: isSelected ? '#f0f7ff' : 'white', borderBottom: '1px solid #f8fafc' }}
+                        onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = '#f8fafc'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = isSelected ? '#f0f7ff' : 'white'; }}>
+                        <div style={{ width: 16, height: 16, borderRadius: 4, border: `2px solid ${isSelected ? '#2563eb' : '#cbd5e1'}`, background: isSelected ? '#2563eb' : 'white', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          {isSelected && <CheckCircle size={10} color="white" />}
+                        </div>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748b', fontFamily: 'monospace', minWidth: 26 }}>{c.code}</span>
+                        <span style={{ fontSize: '0.83rem', color: '#1e293b', fontFamily: FONT, flex: 1 }}>{c.country}</span>
+                        <span style={{ fontSize: '0.7rem', color: '#94a3b8', fontFamily: 'monospace' }}>{c.endpoint === 'gate.decodo.com' ? `gate:${c.port}` : c.endpoint?.split('.')[0]}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
-        <div
-          style={{
-            background: "#f0f7ff",
-            border: "1.5px solid #dbeafe",
-            borderRadius: 8,
-            padding: "10px 14px",
-            marginBottom: 20,
-            fontSize: "0.82rem",
-            color: "#1e3a5f",
-            fontFamily: FONT,
-            lineHeight: 1.7,
-          }}
-        >
-          <strong>Survey:</strong> {formatLabel(project.survey_platform)} —{" "}
-          {project.name}
-          <br />
-          <strong>Proxy:</strong> Decodo Residential
-          <br />
+
+        {/* Distribution preview */}
+        {selected.length > 0 && n > 0 && (
+          <div style={{ background: '#f8fafc', border: '1.5px solid #e2e8f0', borderRadius: 8, padding: '10px 14px', marginBottom: 18 }}>
+            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#94a3b8', fontFamily: FONT, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+              Session Distribution Preview
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {distribution.map((c, i) => (
+                <span key={i} style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 6, padding: '3px 8px', fontSize: '0.75rem', fontFamily: FONT, color: '#475569' }}>
+                  <span style={{ color: '#94a3b8' }}>#{i + 1}</span> {c.code}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Project info */}
+        <div style={{ background: '#f0f7ff', border: '1.5px solid #dbeafe', borderRadius: 8, padding: '10px 14px', marginBottom: 18, fontSize: '0.82rem', color: '#1e3a5f', fontFamily: FONT, lineHeight: 1.7 }}>
+          <strong>Survey:</strong> {formatLabel(project.survey_platform)} — {project.name}<br />
+          <strong>Proxy:</strong> Decodo — country-specific endpoints<br />
           <strong>Strategy:</strong> {formatLabel(project.ai_strategy)}
         </div>
+
         {error && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              background: "#fef2f2",
-              border: "1px solid #fecaca",
-              borderRadius: 8,
-              padding: "10px 14px",
-              color: "#dc2626",
-              fontSize: "0.85rem",
-              marginBottom: 14,
-              fontFamily: FONT,
-            }}
-          >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 14px', color: '#dc2626', fontSize: '0.85rem', marginBottom: 14, fontFamily: FONT }}>
             <AlertCircle size={16} /> {error}
           </div>
         )}
-        <div style={{ display: "flex", gap: 12 }}>
-          <button style={s.cancelBtnFull} onClick={onClose}>
-            Cancel
-          </button>
+
+        <div style={{ display: 'flex', gap: 12 }}>
+          <button style={s.cancelBtnFull} onClick={onClose}>Cancel</button>
           <button
-            style={{
-              flex: 1,
-              background: "#059669",
-              color: "white",
-              border: "none",
-              borderRadius: 8,
-              padding: "10px",
-              fontSize: "0.9rem",
-              fontWeight: 600,
-              cursor: "pointer",
-              fontFamily: FONT,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-              opacity: loading ? 0.7 : 1,
-            }}
-            onClick={handleRun}
-            disabled={loading}
-          >
-            <Zap size={16} /> {loading ? "Queuing..." : `Run ${count} Sessions`}
+            style={{ flex: 1, background: '#059669', color: 'white', border: 'none', borderRadius: 8, padding: '10px', fontSize: '0.9rem', fontWeight: 600, cursor: 'pointer', fontFamily: FONT, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: loading ? 0.7 : 1 }}
+            onClick={handleRun} disabled={loading}>
+            <Zap size={16} /> {loading ? 'Queuing...' : `Run ${count} Session${parseInt(count) !== 1 ? 's' : ''}`}
           </button>
         </div>
       </div>

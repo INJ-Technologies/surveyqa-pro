@@ -1,24 +1,20 @@
 'use strict';
 
-const fs = require('fs');
+const fs  = require('fs');
+const { pool } = require('../db/index');
 
 const read = (filePath, fallback = '') => {
   try { return fs.readFileSync(filePath, 'utf8').trim(); } catch { return fallback; }
 };
 
-// ─── Load credentials once at startup ────────────────────────────────────────
 const DECODO_USER_RAW = read('/run/secrets/decodo_proxy_user', process.env.DECODO_USER || '');
 const DECODO_PASS     = read('/run/secrets/decodo_proxy_pass', process.env.DECODO_PASS || '');
 
-// ─── Strip sessionduration from the stored secret if present ─────────────────
-// Secret may be stored as "user-INJTechnologies-sessionduration-60"
-// We need just "user-INJTechnologies" so we can rebuild the full username
-// in the correct parameter order: country → sessionduration → session
+// Strip any sessionduration already in the secret so we rebuild it correctly
 const DECODO_USER = DECODO_USER_RAW.replace(/-sessionduration-\d+/gi, '').trim();
 
-console.log(`[Proxy] Raw user from secret: ${DECODO_USER_RAW ? DECODO_USER_RAW.slice(0, 40) + '...' : 'MISSING'}`);
-console.log(`[Proxy] Base user (cleaned):  ${DECODO_USER || 'MISSING'}`);
-console.log(`[Proxy] Pass loaded:          ${DECODO_PASS ? '***set***' : 'MISSING'}`);
+console.log(`[Proxy] Base user: ${DECODO_USER || 'MISSING'}`);
+console.log(`[Proxy] Pass:      ${DECODO_PASS ? '***set***' : 'MISSING'}`);
 
 const isProxyConfigured = () => {
   if (!DECODO_USER || !DECODO_PASS) {
@@ -28,55 +24,96 @@ const isProxyConfigured = () => {
   return true;
 };
 
-// ─── Build Decodo proxy config ────────────────────────────────────────────────
-// Confirmed working format (from curl test):
-//   user-INJTechnologies-country-us-sessionduration-60
-// on port 10000 (rotating with country targeting)
+// ─── Look up country config from DB ──────────────────────────────────────────
+const getCountryConfig = async (code) => {
+  if (!code) return null;
+  try {
+    const result = await pool.query(
+      `SELECT code, endpoint, port FROM proxy_countries WHERE code = $1 AND status = 1`,
+      [code.toUpperCase()]
+    );
+    return result.rows[0] || null;
+  } catch (err) {
+    console.warn(`[Proxy] DB lookup failed for country ${code}:`, err.message);
+    return null;
+  }
+};
+
+// ─── Build Decodo proxy config using country-specific endpoint ────────────────
 //
-// Parameter order matters:
-//   {base}-country-{cc}-sessionduration-{N}-session-{id}
-const getDecodoProxy = (options = {}) => {
+// Two connection modes depending on country:
+//
+// Mode A — Country has own endpoint (e.g. fr.decodo.com:40000):
+//   server:   http://fr.decodo.com:40000
+//   username: user-INJTechnologies-sessionduration-60-session-{id}
+//   (no country in username — endpoint already targets the country)
+//
+// Mode B — Country uses gate.decodo.com:10000:
+//   server:   http://gate.decodo.com:10000
+//   username: user-INJTechnologies-country-{cc}-sessionduration-60-session-{id}
+//
+const getDecodoProxy = async (options = {}) => {
   const { country = null, sessionId = null, sessionDuration = 60 } = options;
 
   if (!isProxyConfigured()) return null;
 
-  let username = DECODO_USER; // e.g. "user-INJTechnologies"
+  let server, username;
 
-  // 1. Country — must come first
-  if (country && country.trim()) {
-    username += `-country-${country.toLowerCase().trim()}`;
+  if (country) {
+    const cfg = await getCountryConfig(country);
+
+    if (cfg && cfg.endpoint && cfg.port) {
+      const isGate = cfg.endpoint === 'gate.decodo.com';
+
+      if (isGate) {
+        // Mode B — use gate with country in username
+        server   = `http://gate.decodo.com:${cfg.port}`;
+        username = DECODO_USER;
+        username += `-country-${country.toLowerCase()}`;
+        username += `-sessionduration-${sessionDuration}`;
+        if (sessionId) username += `-session-${sessionId}`;
+      } else {
+        // Mode A — use country-specific endpoint, no country in username
+        server   = `http://${cfg.endpoint}:${cfg.port}`;
+        username = DECODO_USER;
+        username += `-sessionduration-${sessionDuration}`;
+        if (sessionId) username += `-session-${sessionId}`;
+      }
+
+      console.log(`[Proxy] Mode: ${isGate ? 'B (gate+country)' : 'A (dedicated endpoint)'}`);
+    } else {
+      // Country not found in DB — fallback to gate with country param
+      console.warn(`[Proxy] Country ${country} not found in DB — using gate fallback`);
+      server   = 'http://gate.decodo.com:10000';
+      username = DECODO_USER;
+      username += `-country-${country.toLowerCase()}`;
+      username += `-sessionduration-${sessionDuration}`;
+      if (sessionId) username += `-session-${sessionId}`;
+    }
+  } else {
+    // No country — use sticky session on gate
+    server   = 'http://gate.decodo.com:10001';
+    username = DECODO_USER;
+    username += `-sessionduration-${sessionDuration}`;
+    if (sessionId) username += `-session-${sessionId}`;
   }
 
-  // 2. Session duration — always include
-  username += `-sessionduration-${sessionDuration}`;
-
-  // 3. Session ID — for IP stickiness within a session
-  if (sessionId && sessionId.trim()) {
-    username += `-session-${sessionId.trim()}`;
-  }
-
-  // Port 10000 = rotating + country targeting (confirmed working)
-  // Port 10001 = sticky only, no country targeting on this plan
-  const server = country
-    ? 'http://gate.decodo.com:10000'
-    : 'http://gate.decodo.com:10001';
-
-  console.log(`[Proxy] Built username: ${username}`);
-  console.log(`[Proxy] Server:         ${server}`);
-  console.log(`[Proxy] Country:        ${country || 'none'}`);
+  console.log(`[Proxy] Server:   ${server}`);
+  console.log(`[Proxy] Username: ${username}`);
+  console.log(`[Proxy] Country:  ${country || 'none'}`);
+  console.log(`[Proxy] TEST CMD: curl -x "http://${username}:PASS@${server.replace('http://', '')}" https://ip.decodo.com/json`);
 
   return { server, username, password: DECODO_PASS };
 };
 
+// ─── Sync wrapper for non-async callers — returns promise ────────────────────
 const getProxyForSession = (provider = 'decodo', options = {}) => {
-  switch ((provider || 'decodo').toLowerCase()) {
-    case 'decodo':
-    case 'smartproxy':
-      return getDecodoProxy(options);
-    default:
-      console.warn(`[Proxy] Unknown provider "${provider}" — defaulting to Decodo`);
-      return getDecodoProxy(options);
+  const p = (provider || 'decodo').toLowerCase();
+  if (p === 'decodo' || p === 'smartproxy') {
+    return getDecodoProxy(options); // returns Promise
   }
+  console.warn(`[Proxy] Unknown provider "${provider}" — defaulting to Decodo`);
+  return getDecodoProxy(options);
 };
 
 module.exports = { getDecodoProxy, getProxyForSession };

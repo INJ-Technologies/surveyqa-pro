@@ -98,7 +98,7 @@ const processSession = async (job) => {
 
   // ── Proxy ─────────────────────────────────────────────────────────────────
   const proxySessionId = sessionId.slice(0, 8);
-  const proxy = getProxyForSession(proxyProvider || "decodo", {
+  const proxy = await getProxyForSession(proxyProvider || "decodo", {
     country: proxyCountry || null,
     sessionId: proxySessionId,
     sessionDuration: 60,
