@@ -40,8 +40,7 @@ import {
   Smartphone,
   Tablet,
   Hash,
-  ChevronDown,
-  Globe,  
+  ChevronDown, 
 } from "lucide-react";
 
 const FONT =
