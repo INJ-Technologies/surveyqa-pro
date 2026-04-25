@@ -324,7 +324,7 @@ function RunSessionsModal({ project, onClose, onTriggered }) {
   const [search, setSearch] = useState("");
   const [dropOpen, setDropOpen] = useState(false);
   const dropRef = useRef(null);
-  const [autoRefreshSessions, setAutoRefreshSessions] = useState(false);
+
 
   // Load countries from API on mount
   useEffect(() => {
@@ -3307,6 +3307,7 @@ export default function ProjectDetail() {
   const [showRunModal, setShowRunModal] = useState(false);
   const [toast, setToast] = useState(null);
   const [editForm, setEditForm] = useState(null);
+  const [autoRefreshSessions, setAutoRefreshSessions] = useState(false);
 
   const showToast = (message, type = "success") => setToast({ message, type });
 
