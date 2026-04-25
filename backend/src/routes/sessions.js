@@ -12,9 +12,28 @@ const { sessionQueue } = require("../queues/index");
 const { getProjectById, getProjectSurveys } = require("../db/projects");
 
 const router = express.Router();
-router.use(requireAuth);
 
 const SCREENSHOTS_DIR = process.env.SCREENSHOTS_DIR || "/app/screenshots";
+
+// ─── GET /api/sessions/:id/screenshot/:filename — Serve screenshot ────────────
+router.get("/:id/screenshot/:filename", (req, res) => {
+  try {
+    const filePath = path.join(
+      SCREENSHOTS_DIR,
+      req.params.id,
+      req.params.filename,
+    );
+    if (!fs.existsSync(filePath))
+      return res.status(404).json({ error: "Screenshot not found" });
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    fs.createReadStream(filePath).pipe(res);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to serve screenshot" });
+  }
+});
+
+router.use(requireAuth);
 
 // ─── Generate 12-char alphanumeric response ID ────────────────────────────────
 const generateResponseId = () => {
@@ -128,24 +147,6 @@ router.get("/:id", async (req, res) => {
   } catch (err) {
     console.error("Get session detail error:", err.message);
     res.status(500).json({ error: "Failed to fetch session detail" });
-  }
-});
-
-// ─── GET /api/sessions/:id/screenshot/:filename — Serve screenshot ────────────
-router.get("/:id/screenshot/:filename", (req, res) => {
-  try {
-    const filePath = path.join(
-      SCREENSHOTS_DIR,
-      req.params.id,
-      req.params.filename,
-    );
-    if (!fs.existsSync(filePath))
-      return res.status(404).json({ error: "Screenshot not found" });
-    res.setHeader("Content-Type", "image/png");
-    res.setHeader("Cache-Control", "public, max-age=86400");
-    fs.createReadStream(filePath).pipe(res);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to serve screenshot" });
   }
 });
 
