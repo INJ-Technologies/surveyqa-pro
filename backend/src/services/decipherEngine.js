@@ -1,200 +1,293 @@
 'use strict';
 
-// ─── Decipher Survey Engine ───────────────────────────────────────────────────
-// Handles navigation, question detection, and answering for Decipher surveys
+// ─── Decipher / FocusVision Survey Engine ────────────────────────────────────
+// Tuned for emea.focusvision.com and standard Decipher surveys
 
-const DECIPHER_SELECTORS = {
-  // Question containers
-  question:     '.sv-question, .sv_question, [class*="question"]',
-  // Answer types
-  radio:        'input[type="radio"]',
-  checkbox:     'input[type="checkbox"]',
-  select:       'select',
-  textarea:     'textarea',
-  textInput:    'input[type="text"], input[type="number"]',
-  // Navigation
-  nextBtn:      'input[type="submit"], button[type="submit"], .sv-btn, #next, .next-btn, [value="Next"], [value="Continue"]',
-  // Outcome detection
-  completeUrl:  ['thankyou', 'complete', 'thank-you', 'finished', 'done'],
-  terminateUrl: ['terminate', 'terminated', 'screenout', 'screen-out', 'disqualified', 'dq'],
-  quotaUrl:     ['quota', 'over-quota', 'overquota', 'quotafull', 'quota-full'],
-};
+// ─── Outcome detection from URL ───────────────────────────────────────────────
+const COMPLETE_URLS  = ['thankyou', 'complete', 'thank-you', 'finished', 'done', 'survey-closed'];
+const TERMINATE_URLS = ['terminate', 'terminated', 'screenout', 'screen-out', 'disqualified', 'dq', 'noteligible'];
+const QUOTA_URLS     = ['quota', 'over-quota', 'overquota', 'quotafull', 'quota-full', 'full'];
 
-// ─── Detect page outcome from URL ─────────────────────────────────────────────
 const detectOutcome = (url) => {
   const lower = url.toLowerCase();
-  if (DECIPHER_SELECTORS.completeUrl.some(k  => lower.includes(k))) return 'completed';
-  if (DECIPHER_SELECTORS.terminateUrl.some(k => lower.includes(k))) return 'terminated';
-  if (DECIPHER_SELECTORS.quotaUrl.some(k     => lower.includes(k))) return 'over_quota';
+  if (COMPLETE_URLS.some(k  => lower.includes(k))) return 'completed';
+  if (TERMINATE_URLS.some(k => lower.includes(k))) return 'terminated';
+  if (QUOTA_URLS.some(k     => lower.includes(k))) return 'over_quota';
   return null;
 };
 
-// ─── Human reading delay ──────────────────────────────────────────────────────
+// ─── Reading delay ────────────────────────────────────────────────────────────
 const readingDelay = async (page, speed = 'normal') => {
   const delays = {
-    slow:   { min: 3000, max: 8000 },
+    slow:   { min: 3000, max: 7000 },
     normal: { min: 1500, max: 4000 },
-    fast:   { min: 500,  max: 2000 },
+    fast:   { min: 600,  max: 2000 },
   };
   const { min, max } = delays[speed] || delays.normal;
   const ms = Math.floor(Math.random() * (max - min + 1)) + min;
   await page.waitForTimeout(ms);
 };
 
-// ─── Simulate human typing ────────────────────────────────────────────────────
-const humanType = async (element, text) => {
+// ─── Human-like typing ────────────────────────────────────────────────────────
+const humanType = async (page, element, text) => {
+  await element.click({ force: true }).catch(() => {});
+  await page.waitForTimeout(200);
+  // Clear existing content first
+  await element.fill('').catch(() => {});
   for (const char of text) {
-    await element.type(char, { delay: Math.floor(Math.random() * 80) + 40 });
+    await element.type(char, { delay: Math.floor(Math.random() * 80) + 30 });
   }
 };
 
-// ─── Answer a single radio group ─────────────────────────────────────────────
-const answerRadio = async (page, persona) => {
-  const radios = await page.$$(DECIPHER_SELECTORS.radio);
-  if (radios.length === 0) return false;
+// ─── Safe click ───────────────────────────────────────────────────────────────
+const safeClick = async (el) => {
+  try {
+    await el.scrollIntoViewIfNeeded();
+    await el.click({ force: true });
+  } catch {
+    try { await el.evaluate(n => n.click()); } catch {}
+  }
+};
 
-  // Group by name
-  const groups = {};
-  for (const radio of radios) {
-    const name = await radio.getAttribute('name');
-    if (!groups[name]) groups[name] = [];
-    groups[name].push(radio);
+// ─── Answer radio questions ───────────────────────────────────────────────────
+const answerRadio = async (page, persona) => {
+  // Decipher-specific radio selectors
+  const radioSelectors = [
+    'input[type="radio"]:not([disabled])',
+  ];
+
+  let allRadios = [];
+  for (const sel of radioSelectors) {
+    const found = await page.$$(sel);
+    if (found.length > 0) { allRadios = found; break; }
   }
 
-  for (const [name, options] of Object.entries(groups)) {
-    // Pick a random option (weighted toward middle options — avoid extremes)
-    const style = persona?.behavioural_attrs?.responseStyle || 'neutral';
+  if (allRadios.length === 0) return false;
+
+  // Group by name attribute
+  const groups = {};
+  for (const radio of allRadios) {
+    try {
+      const name  = await radio.getAttribute('name');
+      const value = await radio.getAttribute('value');
+      // Skip "other" type inputs and hidden values
+      if (!name || value === '' || value === null) continue;
+      if (!groups[name]) groups[name] = [];
+      groups[name].push(radio);
+    } catch {}
+  }
+
+  const groupNames = Object.keys(groups);
+  if (groupNames.length === 0) return false;
+
+  const style = persona?.behavioural_attrs?.responseStyle || 'neutral';
+
+  for (const name of groupNames) {
+    const options = groups[name];
+    if (options.length === 0) continue;
+
     let idx;
     if (style === 'conservative') {
-      // Tends toward middle-to-positive
-      idx = Math.floor(options.length * 0.3 + Math.random() * options.length * 0.4);
+      // Middle-to-positive (for scales: avoid extremes)
+      idx = Math.floor(options.length * 0.25 + Math.random() * options.length * 0.5);
     } else if (style === 'expressive') {
-      // More varied
       idx = Math.floor(Math.random() * options.length);
     } else {
-      // Neutral — avoid extreme ends
+      // Neutral — slightly toward positive end but avoid extremes
       const start = Math.max(0, Math.floor(options.length * 0.2));
-      const end   = Math.min(options.length - 1, Math.floor(options.length * 0.8));
+      const end   = Math.min(options.length - 1, Math.floor(options.length * 0.75));
       idx = start + Math.floor(Math.random() * (end - start + 1));
     }
     idx = Math.max(0, Math.min(idx, options.length - 1));
-    const el = options[idx];
-    await el.scrollIntoViewIfNeeded().catch(() => {});
-    await el.click({ force: true }).catch(() => el.evaluate(n => n.click()));
-    await page.waitForTimeout(Math.floor(Math.random() * 500) + 200);
+
+    try {
+      await safeClick(options[idx]);
+      await page.waitForTimeout(Math.floor(Math.random() * 400) + 150);
+    } catch {}
   }
   return true;
 };
 
-// ─── Answer checkboxes ────────────────────────────────────────────────────────
+// ─── Answer checkbox questions ────────────────────────────────────────────────
 const answerCheckbox = async (page) => {
-  const boxes = await page.$$(DECIPHER_SELECTORS.checkbox);
+  const boxes = await page.$$('input[type="checkbox"]:not([disabled])');
   if (boxes.length === 0) return false;
 
-  // Select 1 to 3 random checkboxes
-  const count = Math.min(boxes.length, Math.floor(Math.random() * 3) + 1);
+  // For "select all that apply" — pick 1 to 3
+  const count    = Math.min(boxes.length, Math.floor(Math.random() * 3) + 1);
   const shuffled = [...boxes].sort(() => Math.random() - 0.5).slice(0, count);
+
   for (const box of shuffled) {
-    await box.scrollIntoViewIfNeeded().catch(() => {});
-    await box.click({ force: true }).catch(() => box.evaluate(n => n.click()));
-    await page.waitForTimeout(Math.floor(Math.random() * 300) + 100);
+    try {
+      await safeClick(box);
+      await page.waitForTimeout(Math.floor(Math.random() * 300) + 100);
+    } catch {}
   }
   return true;
 };
 
 // ─── Answer select dropdowns ──────────────────────────────────────────────────
 const answerSelect = async (page) => {
-  const selects = await page.$$(DECIPHER_SELECTORS.select);
+  const selects = await page.$$('select:not([disabled])');
   if (selects.length === 0) return false;
 
   for (const select of selects) {
-    const options = await select.$$('option');
-    const validOptions = options.slice(1); // skip first (usually placeholder)
-    if (validOptions.length === 0) continue;
-    const idx = Math.floor(Math.random() * validOptions.length);
-    const value = await validOptions[idx].getAttribute('value');
-    if (value) await select.selectOption(value);
-    await page.waitForTimeout(Math.floor(Math.random() * 400) + 150);
+    try {
+      const options = await select.$$('option');
+      // Skip first (usually blank placeholder) and last (sometimes "prefer not to say")
+      const validOptions = options.slice(1, -1);
+      if (validOptions.length === 0) continue;
+      const idx   = Math.floor(Math.random() * validOptions.length);
+      const value = await validOptions[idx].getAttribute('value');
+      if (value) {
+        await select.selectOption(value);
+        await page.waitForTimeout(Math.floor(Math.random() * 400) + 150);
+      }
+    } catch {}
   }
   return true;
 };
 
-// ─── Answer open-ended text ───────────────────────────────────────────────────
-const answerOpenEnd = async (page, persona, questionText = '') => {
-  const textareas = await page.$$(DECIPHER_SELECTORS.textarea);
-  const textInputs = await page.$$(DECIPHER_SELECTORS.textInput);
+// ─── Answer open-ended text fields ────────────────────────────────────────────
+const answerOpenEnd = async (page, persona) => {
+  // Decipher open-ends: textareas and text inputs not used for hidden fields
+  const textareas  = await page.$$('textarea:not([disabled]):not([readonly])');
+  const textInputs = await page.$$('input[type="text"]:not([disabled]):not([readonly]):not([name*="hidden"])');
+
   const fields = [...textareas, ...textInputs];
   if (fields.length === 0) return false;
 
-  // Generate a basic open-end response based on persona description
-  // Phase 2.7 will replace this with actual Claude API calls
-  const description = persona?.behavioural_attrs?.secondaryDescription || ''
-  const style = persona?.behavioural_attrs?.responseStyle || 'neutral'
+  const style = persona?.behavioural_attrs?.responseStyle || 'neutral';
 
   const responses = {
     conservative: [
-      'It meets my expectations.',
-      'Generally satisfactory.',
-      'No strong opinion either way.',
-      'It does what it is supposed to do.',
-      'Fairly standard in my experience.',
+      'It meets my expectations and does what I need.',
+      'Generally satisfactory and reliable.',
+      'No strong feelings either way — seems adequate.',
+      'Works as expected without any major issues.',
+      'Fairly standard experience overall.',
     ],
     neutral: [
-      'It works well for my needs.',
-      'I find it fairly useful.',
-      'Has both strengths and areas for improvement.',
-      'Overall a decent experience.',
-      'Meets most of my requirements.',
+      'It works well for my needs most of the time.',
+      'I find it useful and relatively easy to use.',
+      'Has both strengths and areas that could be improved.',
+      'Overall a decent experience with room for improvement.',
+      'Meets most of my requirements on a day to day basis.',
     ],
     expressive: [
-      'I really appreciate how intuitive and user-friendly this is — it saves me a lot of time.',
-      'There are some areas that could be improved but overall it is a great product.',
-      'I have been using this for a while and find it consistently delivers on its promises.',
-      'Very impressed with the quality and attention to detail.',
-      'Could be better in some areas but the core functionality is excellent.',
+      'I really appreciate how intuitive and user-friendly this is — it saves me considerable time and effort.',
+      'While there are some areas that could be improved, overall this is a great product that delivers real value.',
+      'I have been using this for a while now and it consistently delivers on its promises — very reliable.',
+      'Very impressed with the overall quality and attention to detail — would definitely recommend.',
+      'The core functionality is excellent and the interface is clean and easy to navigate.',
     ],
-  }
+  };
 
-  const pool = responses[style] || responses.neutral
-  const response = pool[Math.floor(Math.random() * pool.length)]
+  const pool     = responses[style] || responses.neutral;
+  const response = pool[Math.floor(Math.random() * pool.length)];
 
   for (const field of fields) {
-    await field.scrollIntoViewIfNeeded().catch(() => {});
-    await field.click({ force: true }).catch(() => field.evaluate(n => n.click()));
-    await humanType(field, response)
-    await page.waitForTimeout(Math.floor(Math.random() * 600) + 300)
-  }
-  return true
-}
+    try {
+      // Skip very small fields (likely hidden or for numbers)
+      const box = await field.boundingBox();
+      if (box && box.width < 30) continue;
 
-// ─── Answer all questions on current page ─────────────────────────────────────
+      await humanType(page, field, response);
+      await page.waitForTimeout(Math.floor(Math.random() * 500) + 200);
+    } catch {}
+  }
+  return true;
+};
+
+// ─── Handle numeric/number inputs ─────────────────────────────────────────────
+const answerNumeric = async (page) => {
+  const numInputs = await page.$$('input[type="number"]:not([disabled])');
+  if (numInputs.length === 0) return false;
+
+  for (const input of numInputs) {
+    try {
+      const min = parseFloat(await input.getAttribute('min') || '1');
+      const max = parseFloat(await input.getAttribute('max') || '100');
+      const val = Math.floor(min + Math.random() * (max - min));
+      await input.fill(String(val));
+      await page.waitForTimeout(200);
+    } catch {}
+  }
+  return true;
+};
+
+// ─── Answer all questions on page ─────────────────────────────────────────────
 const answerPage = async (page, persona, readingSpeed = 'normal') => {
-  // Wait for page to settle
-  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {})
+  // Wait for network and DOM to settle
+  await page.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
+  await page.waitForTimeout(500);
 
   // Human reading delay
-  await readingDelay(page, readingSpeed)
+  await readingDelay(page, readingSpeed);
 
-  // Answer in order: radio → checkbox → select → text
-  await answerRadio(page, persona)
-  await answerCheckbox(page)
-  await answerSelect(page)
-  await answerOpenEnd(page, persona)
+  const answers = [];
+
+  // Answer in order most common on Decipher surveys
+  const didRadio    = await answerRadio(page, persona);
+  const didCheckbox = await answerCheckbox(page);
+  const didSelect   = await answerSelect(page);
+  const didNumeric  = await answerNumeric(page);
+  const didOpenEnd  = await answerOpenEnd(page, persona);
+
+  if (didRadio)    answers.push('radio');
+  if (didCheckbox) answers.push('checkbox');
+  if (didSelect)   answers.push('select');
+  if (didNumeric)  answers.push('numeric');
+  if (didOpenEnd)  answers.push('open-end');
 
   // Small pause before clicking next
-  await page.waitForTimeout(Math.floor(Math.random() * 1000) + 500)
-}
+  await page.waitForTimeout(Math.floor(Math.random() * 800) + 400);
 
-// ─── Click the Next button ────────────────────────────────────────────────────
+  return answers;
+};
+
+// ─── Click Next/Submit button ─────────────────────────────────────────────────
 const clickNext = async (page) => {
-  const btn = await page.$(DECIPHER_SELECTORS.nextBtn)
-  if (!btn) return false
-  await btn.scrollIntoViewIfNeeded().catch(() => {})
-  await btn.click({ force: true }).catch(() => btn.evaluate(n => n.click()))
-  return true
-}
+  // Decipher next button selectors — ordered by specificity
+  const nextSelectors = [
+    // Decipher-specific
+    'input[type="submit"]',
+    'button[type="submit"]',
+    // Common labels
+    'input[value="Next"]',
+    'input[value="Continue"]',
+    'input[value="Submit"]',
+    'input[value="Next >>"]',
+    'input[value=">> Next"]',
+    'button:has-text("Next")',
+    'button:has-text("Continue")',
+    'button:has-text("Submit")',
+    // Generic fallbacks
+    '#next',
+    '.next-btn',
+    '.btn-next',
+    '[data-role="next"]',
+  ];
+
+  for (const sel of nextSelectors) {
+    try {
+      const btn = await page.$(sel);
+      if (!btn) continue;
+
+      const isVisible = await btn.isVisible().catch(() => false);
+      const isEnabled = await btn.isEnabled().catch(() => false);
+      if (!isVisible || !isEnabled) continue;
+
+      await safeClick(btn);
+      return true;
+    } catch {}
+  }
+  return false;
+};
 
 module.exports = {
-  detectOutcome, answerPage, clickNext,
-  DECIPHER_SELECTORS,
-}
+  detectOutcome,
+  answerPage,
+  clickNext,
+  readingDelay,
+};
