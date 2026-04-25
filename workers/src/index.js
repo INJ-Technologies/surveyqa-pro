@@ -7,7 +7,7 @@ const fs   = require('fs');
 const { connection }         = require('../../backend/src/queues/index');
 const { updateSessionStatus, logSessionEvent, recordUsedIP, saveTracePath } = require('../../backend/src/db/sessions');
 const { getProxyForSession } = require('../../backend/src/services/proxyService');
-const { detectOutcome, answerPage, clickNext } = require('../../backend/src/services/decipherEngine');
+const { detectOutcome, answerPage, clickNext, capturePageOptions, isHintText } = require('../../backend/src/services/decipherEngine');
 const { pool }               = require('../../backend/src/db/index');
 
 const CONCURRENCY     = parseInt(process.env.WORKER_CONCURRENCY) || 5;
@@ -65,15 +65,14 @@ const processSession = async (job) => {
   const uaKey    = `${deviceType || 'desktop'}-${deviceOs.toLowerCase()}`;
   const userAgent = userAgents[uaKey] || userAgents['desktop-windows'];
 
-  // ── PROXY — using new signature ────────────────────────────────────────────
+  // ── Proxy ─────────────────────────────────────────────────────────────────
   const proxySessionId = sessionId.slice(0, 8);
   const proxy = getProxyForSession(proxyProvider || 'decodo', {
-    country:         proxyCountry || null,
-    sessionId:       proxySessionId,
-    sessionDuration: 60,
+    country:   proxyCountry || null,
+    sessionId: proxySessionId,
   });
 
-  console.log(`[Worker] Proxy: ${proxy ? `${proxy.server} | user: ${proxy.username}` : 'DIRECT (no proxy)'}`);
+  console.log(`[Worker] Proxy: ${proxy ? `${proxy.server} | user: ${proxy.username}` : 'DIRECT'}`);
 
   const launchOptions = {
     headless: true,
@@ -81,12 +80,8 @@ const processSession = async (job) => {
       executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
     }),
     args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
+      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled',
-      '--disable-web-security',
-      '--allow-running-insecure-content',
     ],
   };
   if (proxy) launchOptions.proxy = proxy;
@@ -105,47 +100,38 @@ const processSession = async (job) => {
 
   try {
     browser = await chromium.launch(launchOptions);
-    context = await browser.newContext({
-      viewport, userAgent,
-      locale: 'en-US', timezoneId: 'Asia/Kolkata',
-    });
+    context = await browser.newContext({ viewport, userAgent, locale: 'en-US', timezoneId: 'Asia/Kolkata' });
 
     await context.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-      Object.defineProperty(navigator, 'plugins',   { get: () => [1, 2, 3, 4, 5] });
-      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+      Object.defineProperty(navigator, 'webdriver',  { get: () => undefined });
+      Object.defineProperty(navigator, 'plugins',    { get: () => [1, 2, 3, 4, 5] });
+      Object.defineProperty(navigator, 'languages',  { get: () => ['en-US', 'en'] });
     });
 
     await context.tracing.start({ screenshots: true, snapshots: true, title: `Session ${sessionId}` });
-
     page = await context.newPage();
 
-    // ── Check IP assigned ────────────────────────────────────────────────────
+    // ── IP check ─────────────────────────────────────────────────────────────
     try {
       const ipRes  = await page.goto('https://api.ipify.org?format=json', { timeout: 12000 });
       const ipData = await ipRes.json();
       if (ipData?.ip) {
         await recordUsedIP(projectId, sessionId, ipData.ip);
         await logSessionEvent(sessionId, 'ip_assigned', { ip: ipData.ip, country: proxyCountry });
-        console.log(`[Worker] Session ${sessionId} IP: ${ipData.ip} (requested: ${proxyCountry})`);
+        console.log(`[Worker] IP: ${ipData.ip} (requested: ${proxyCountry})`);
       }
     } catch (e) {
-      console.warn(`[Worker] IP check failed: ${e.message}`);
       await logSessionEvent(sessionId, 'ip_check_failed', { error: e.message });
     }
 
     await updateSessionStatus(sessionId, 'in_progress');
-    await logSessionEvent(sessionId, 'browser_launched', {
-      proxy:     proxy ? `decodo-${proxyCountry}` : 'direct',
-      userAgent, responseId, surveyUrl,
-    });
+    await logSessionEvent(sessionId, 'browser_launched', { proxy: proxy ? `decodo-${proxyCountry}` : 'direct', responseId, surveyUrl });
 
-    // ── Navigate to survey ───────────────────────────────────────────────────
     console.log(`[Worker] Navigating to: ${surveyUrl}`);
     await page.goto(surveyUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await logSessionEvent(sessionId, 'survey_loaded', { url: surveyUrl, responseId });
 
-    // ── Main survey loop ─────────────────────────────────────────────────────
+    // ── Main survey loop ──────────────────────────────────────────────────────
     while (pageCount < MAX_PAGES) {
       pageCount++;
       const currentUrl = page.url();
@@ -153,14 +139,53 @@ const processSession = async (job) => {
 
       console.log(`[Worker] Page ${pageCount}: ${currentUrl}`);
 
-      // Check for redirect/completion
       outcome = detectOutcome(currentUrl);
       if (outcome) {
         await logSessionEvent(sessionId, 'redirect_detected', { url: currentUrl, outcome });
         break;
       }
 
-      // Screenshot BEFORE answering
+      // ── Capture question text BEFORE answering (clean DOM state) ───────────
+      let pageTitle       = '';
+      let questionsOnPage = [];
+      try {
+        pageTitle = await page.title();
+        const rawTexts = await page.evaluate(() => {
+          const selectors = [
+            '.qtext', '.question-text', '.qtitle',
+            '[class*="qtext"]', '[class*="question-title"]',
+            'legend', 'h2', 'h3',
+          ];
+          const found = new Set();
+          for (const sel of selectors) {
+            document.querySelectorAll(sel).forEach(el => {
+              const text = (el.innerText || el.textContent || '').trim();
+              if (text) found.add(text);
+            });
+            if (found.size >= 8) break;
+          }
+          return [...found];
+        });
+        // Filter out hint texts like "Please select one"
+        questionsOnPage = rawTexts
+          .filter(t => !isHintText(t))
+          .slice(0, 5);
+      } catch {}
+
+      // ── Capture all options BEFORE answering ──────────────────────────────
+      const pageOptionsBefore = await capturePageOptions(page);
+
+      // ── Answer questions ──────────────────────────────────────────────────
+      const answersGiven = await answerPage(page, persona, readingSpeed);
+      questionCount++;
+
+      // ── Small pause so selections visually register ───────────────────────
+      await page.waitForTimeout(800);
+
+      // ── Capture options AFTER answering (shows selected state) ────────────
+      const pageOptionsAfter = await capturePageOptions(page);
+
+      // ── Screenshot AFTER answering — shows selections ─────────────────────
       const screenshotFilename = `page_${pageCount}.png`;
       const screenshotPath     = path.join(sessionScreenshotsDir, screenshotFilename);
       try {
@@ -170,61 +195,39 @@ const processSession = async (job) => {
         console.warn(`[Worker] Screenshot failed: ${e.message}`);
       }
 
-      // Extract page title + questions
-      let pageTitle      = '';
-      let questionsOnPage = [];
-      try {
-        pageTitle = await page.title();
-        questionsOnPage = await page.evaluate(() => {
-          const selectors = [
-            // Decipher-specific
-            '.qtext', '.question-text', '.qtitle',
-            // Generic fallbacks
-            'legend', 'label.question', 'h2', 'h3', 'h4',
-            '[class*="question"] .text',
-            '[class*="qtext"]',
-          ];
-          const found = new Set();
-          for (const sel of selectors) {
-            document.querySelectorAll(sel).forEach(el => {
-              const text = (el.innerText || el.textContent || '').trim();
-              if (text && text.length > 5 && text.length < 400) found.add(text);
-            });
-            if (found.size >= 5) break;
-          }
-          return [...found].slice(0, 5);
-        });
-      } catch {}
-
-      // Answer questions
-      const answersGiven = await answerPage(page, persona, readingSpeed);
-      questionCount++;
-
       const pageTime = Math.round((Date.now() - pageStart) / 1000);
+
+      // Build structured answer summary for display
+      const answerSummary = buildAnswerSummary(pageOptionsAfter, answersGiven);
 
       pages.push({
         pageNum: pageCount, url: currentUrl, title: pageTitle,
-        questions: questionsOnPage, answers: answersGiven,
+        questions: questionsOnPage,
+        options: pageOptionsAfter,       // all options with selected state
+        answers: answersGiven,           // raw answer objects
+        answerSummary,                   // human-readable summary
         timeTaken: pageTime,
         screenshot: `${sessionId}/${screenshotFilename}`,
       });
 
       await logSessionEvent(sessionId, 'page_answered', {
         page: pageCount, url: currentUrl, title: pageTitle,
-        questions: questionsOnPage, answers: answersGiven,
-        timeTaken: pageTime,
-        screenshot: `${sessionId}/${screenshotFilename}`,
+        questions:     questionsOnPage,
+        options:       pageOptionsAfter,
+        answers:       answersGiven,
+        answerSummary,
+        timeTaken:     pageTime,
+        screenshot:    `${sessionId}/${screenshotFilename}`,
       });
 
-      // Click next
+      // ── Click next ────────────────────────────────────────────────────────
       const clicked = await clickNext(page);
       if (!clicked) {
-        console.log(`[Worker] No next button found on page ${pageCount}`);
+        console.log(`[Worker] No next button on page ${pageCount}`);
         outcome = detectOutcome(page.url()) || 'completed';
         break;
       }
 
-      // Wait for navigation
       try {
         await page.waitForNavigation({ timeout: 15000, waitUntil: 'domcontentloaded' });
       } catch {
@@ -234,7 +237,6 @@ const processSession = async (job) => {
       const newUrl = page.url();
       outcome = detectOutcome(newUrl);
       if (outcome) {
-        // Screenshot the final page
         const finalPath = path.join(sessionScreenshotsDir, `page_${pageCount + 1}_final.png`);
         try { await page.screenshot({ path: finalPath, fullPage: true }); } catch {}
         await logSessionEvent(sessionId, 'redirect_detected', {
@@ -269,19 +271,62 @@ const processSession = async (job) => {
   });
 
   await logSessionEvent(sessionId, 'session_complete', {
-    outcome, durationS, pageCount, questionCount, responseId,
-    screenshotsCount: pages.length,
+    outcome, durationS, pageCount, questionCount, responseId, screenshotsCount: pages.length,
   });
 
-  console.log(`[Worker] Session ${sessionId} → ${outcome} | ${durationS}s | ${pageCount} pages | ${pages.length} screenshots`);
+  console.log(`[Worker] Session ${sessionId} → ${outcome} | ${durationS}s | ${pageCount} pages`);
   return { sessionId, outcome, durationS, responseId };
 };
 
+// ─── Build human-readable answer summary ─────────────────────────────────────
+const buildAnswerSummary = (pageOptions, answersGiven) => {
+  const summary = [];
+
+  for (const opt of (pageOptions || [])) {
+    if (opt.type === 'radio' && opt.selected) {
+      const totalOpts = opt.options?.length || 0;
+      const selIdx    = opt.options?.indexOf(opt.selected);
+      const selNum    = selIdx >= 0 ? selIdx + 1 : '?';
+      summary.push({
+        type:    'radio',
+        label:   `Selected: ${opt.selected}`,
+        detail:  `Option ${selNum} of ${totalOpts}`,
+        options: opt.options || [],
+        selected: opt.selected,
+      });
+    } else if (opt.type === 'checkbox' && opt.selected?.length > 0) {
+      summary.push({
+        type:    'checkbox',
+        label:   `Selected ${opt.selected.length} of ${opt.options?.length || '?'}`,
+        detail:  opt.selected.join(', '),
+        options: opt.options || [],
+        selected: opt.selected,
+      });
+    } else if (opt.type === 'select' && opt.selected) {
+      summary.push({
+        type:    'select',
+        label:   `Selected: ${opt.selected}`,
+        options: opt.options || [],
+        selected: opt.selected,
+      });
+    }
+  }
+
+  // Add open-end answers from answersGiven
+  for (const ans of (answersGiven || [])) {
+    if (ans?.type === 'open-end' && ans.text) {
+      summary.push({ type: 'open-end', label: 'Typed response', detail: ans.text });
+    }
+    if (ans?.type === 'numeric' && ans.values?.length > 0) {
+      summary.push({ type: 'numeric', label: 'Entered value', detail: ans.values.join(', ') });
+    }
+  }
+
+  return summary;
+};
+
 // ─── Worker ───────────────────────────────────────────────────────────────────
-const worker = new Worker('survey-sessions', processSession, {
-  connection,
-  concurrency: CONCURRENCY,
-});
+const worker = new Worker('survey-sessions', processSession, { connection, concurrency: CONCURRENCY });
 
 worker.on('completed', (job, result) => console.log(`[Worker] Job ${job.id} done — ${result.outcome}`));
 worker.on('failed',    (job, err)    => console.error(`[Worker] Job ${job.id} failed:`, err.message));
