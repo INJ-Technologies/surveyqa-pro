@@ -52,13 +52,17 @@ router.get('/:id', async (req, res) => {
 router.get('/:id/sessions', async (req, res) => {
   try {
     const { status, outcome, country, limit, offset } = req.query;
-    const sessions = await getProjectSessions(req.params.id, {
+    const result = await getProjectSessions(req.params.id, {
       status, outcome, country,
-      limit:  parseInt(limit)  || 100,
+      limit:  parseInt(limit)  || 20,
       offset: parseInt(offset) || 0,
     });
     const stats = await getProjectSessionStats(req.params.id);
-    res.json({ sessions, stats });
+    res.json({
+      sessions: result.sessions,
+      stats,
+      total: result.total,
+    });
   } catch (err) {
     console.error('Get sessions error:', err.message);
     res.status(500).json({ error: 'Failed to fetch sessions' });

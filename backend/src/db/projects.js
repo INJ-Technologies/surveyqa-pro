@@ -266,25 +266,38 @@ const getProjectSessionStats = async (projectId) => {
 };
 
 // ─── Get all sessions for a project ──────────────────────────────────────────
-const getProjectSessions = async (projectId, { status, outcome, country, limit = 100, offset = 0 } = {}) => {
+const getProjectSessions = async (projectId, { status, outcome, country, limit = 20, offset = 0 } = {}) => {
   const conditions = ['s.project_id = $1'];
   const values     = [projectId];
   let   idx        = 2;
-
-  if (status)  { conditions.push(`s.status = $${idx++}`);          values.push(status); }
-  if (outcome) { conditions.push(`s.outcome = $${idx++}`);         values.push(outcome); }
-  if (country) { conditions.push(`s.proxy_country = $${idx++}`);   values.push(country); }
-
+ 
+  if (status)  { conditions.push(`s.status = $${idx++}`);        values.push(status); }
+  if (outcome) { conditions.push(`s.outcome = $${idx++}`);       values.push(outcome); }
+  if (country) { conditions.push(`s.proxy_country ILIKE $${idx++}`); values.push(country); }
+ 
+  // Count query for pagination
+  const countResult = await pool.query(
+    `SELECT COUNT(*) as total FROM sessions s WHERE ${conditions.join(' AND ')}`,
+    values
+  );
+  const total = parseInt(countResult.rows[0].total) || 0;
+ 
   values.push(limit, offset);
-
+ 
   const result = await pool.query(
     `SELECT
        s.id, s.status, s.outcome, s.proxy_country, s.proxy_provider,
        s.device_type, s.browser_type, s.ai_strategy,
        s.total_duration_s, s.quality_score, s.question_count,
        s.redirect_type, s.error_log,
+       s.response_id,
        s.started_at, s.completed_at, s.created_at,
-       p.name as persona_name
+       p.name as persona_name,
+       (SELECT se.payload->>'ip'
+        FROM session_events se
+        WHERE se.session_id = s.id
+          AND se.event_type = 'ip_assigned'
+        LIMIT 1) as ip_address
      FROM sessions s
      LEFT JOIN personas p ON p.id = s.persona_id
      WHERE ${conditions.join(' AND ')}
@@ -292,7 +305,8 @@ const getProjectSessions = async (projectId, { status, outcome, country, limit =
      LIMIT $${idx++} OFFSET $${idx}`,
     values
   );
-  return result.rows;
+ 
+  return { sessions: result.rows, total };
 };
 
 // ─── Get cost summary for a project ──────────────────────────────────────────
