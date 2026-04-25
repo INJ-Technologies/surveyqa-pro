@@ -31,32 +31,29 @@ const isProxyConfigured = () => {
 // Docs: username[-country=XX][-session=ID][-sessionduration=seconds]
 const getDecodoProxy = (options = {}) => {
   const {
-    country = null,          // e.g. "US", "IN"
-    sessionId = null,        // unique session id
-    sessionDuration = 60     // seconds (optional)
+    country   = null,
+    sessionId = null,
   } = options;
 
   if (!isProxyConfigured()) return null;
 
+  // DECODO_USER already contains sessionduration in the base username
+  // e.g. "user-INJTechnologies-sessionduration-60"
+  // Decodo format uses hyphens NOT equals signs: -country-XX -session-ID
   let username = DECODO_USER;
 
-  // Ensure session duration exists (recommended)
-  if (sessionDuration) {
-    username += `-sessionduration=${sessionDuration}`;
-  }
-
-  // Country targeting
   if (country) {
-    username += `-country=${country.toLowerCase()}`;
+    username += `-country-${country.toLowerCase()}`;
   }
 
-  // Sticky session
   if (sessionId) {
-    username += `-session=${sessionId}`;
+    username += `-session-${sessionId}`;
   }
+
+  console.log(`[Proxy] Username: ${username}`);
 
   return {
-    server: 'http://gate.decodo.com:10001',
+    server:   'http://gate.decodo.com:10001',
     username,
     password: DECODO_PASS,
   };
