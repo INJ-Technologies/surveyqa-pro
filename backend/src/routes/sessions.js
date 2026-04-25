@@ -46,87 +46,91 @@ const generateResponseId = () => {
 };
 
 // ─── POST /api/sessions/trigger ───────────────────────────────────────────────
-router.post(
-  "/trigger",
-  requireRole("admin", "project_manager"),
-  async (req, res) => {
-    try {
-      const { projectId, personaIds = [], count = 1, proxyCountry } = req.body;
+router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res) => {
+  try {
+    const { projectId, personaIds = [], count = 1, proxyCountry } = req.body;
 
-      if (!projectId)
-        return res.status(400).json({ error: "projectId is required" });
+    if (!projectId) return res.status(400).json({ error: 'projectId is required' });
 
-      const project = await getProjectById(projectId, req.user.workspace_id);
-      if (!project) return res.status(404).json({ error: "Project not found" });
+    const project = await getProjectById(projectId, req.user.workspace_id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
 
-      const surveys = await getProjectSurveys(projectId);
-      if (!surveys.length)
-        return res.status(400).json({ error: "No survey URLs configured" });
+    const surveys = await getProjectSurveys(projectId);
+    if (!surveys.length) return res.status(400).json({ error: 'No survey URLs configured' });
 
-      const survey = surveys.find((s) => s.label === "Main") || surveys[0];
-      if (!survey.url)
-        return res.status(400).json({ error: "Survey URL is empty" });
+    const survey = surveys.find(s => s.label === 'Main') || surveys[0];
+    if (!survey.url) return res.status(400).json({ error: 'Survey URL is empty' });
 
-      const sessionLimit = Math.min(parseInt(count) || 1, 20);
-      const created = [];
-
-      for (let i = 0; i < sessionLimit; i++) {
-        const personaId =
-          personaIds.length > 0 ? personaIds[i % personaIds.length] : null;
-        const responseId = generateResponseId();
-        const finalUrl = survey.url.replace(/identifier/gi, responseId);
-        const country = proxyCountry || survey.countries?.[0] || null;
-
-        const session = await createSession({
-          projectId,
-          workspaceId: req.user.workspace_id,
-          personaId,
-          surveyUrl: finalUrl,
-          surveyLabel: survey.label,
-          responseId,
-          proxyCountry: country,
-          proxyProvider: project.proxy_provider || "decodo",
-          deviceType: project.device_type || "desktop",
-          browserType: "chrome",
-          aiStrategy: project.ai_strategy || "persona_true",
-        });
-
-        await sessionQueue.add(
-          "run-session",
-          {
-            sessionId: session.id,
-            projectId,
-            personaId,
-            surveyUrl: finalUrl,
-            responseId,
-            proxyProvider: project.proxy_provider || "decodo",
-            proxyCountry: country,
-            deviceType: project.device_type || "desktop",
-            aiStrategy: project.ai_strategy || "persona_true",
-          },
-          { jobId: `session-${session.id}`, priority: 1 },
-        );
-
-        created.push(session);
-      }
-
-      console.log(
-        `[Sessions] Queued ${created.length} session(s) for project ${projectId}`,
-      );
-      res
-        .status(201)
-        .json({
-          message: `${created.length} session(s) queued`,
-          sessions: created,
-        });
-    } catch (err) {
-      console.error("Trigger sessions error:", err.message);
-      res.status(500).json({
-        error: `Failed to trigger sessions${err?.message ? `: ${err.message}` : ""}`,
-      });
+    // ── Parse countries — supports "FR, DE" or "FR" or ["FR","DE"] ──────────
+    let countryList = [];
+    if (Array.isArray(proxyCountry)) {
+      countryList = proxyCountry.map(c => c.trim().toUpperCase()).filter(Boolean);
+    } else if (typeof proxyCountry === 'string' && proxyCountry.trim()) {
+      countryList = proxyCountry
+        .split(/[,\s]+/)
+        .map(c => c.trim().toUpperCase())
+        .filter(Boolean);
     }
-  },
-);
+    // Fall back to survey's configured countries if none provided
+    if (countryList.length === 0 && survey.countries?.length > 0) {
+      countryList = Array.isArray(survey.countries)
+        ? survey.countries
+        : survey.countries.split(',').map(c => c.trim().toUpperCase()).filter(Boolean);
+    }
+
+    const sessionLimit = Math.min(parseInt(count) || 1, 20);
+    const created = [];
+
+    for (let i = 0; i < sessionLimit; i++) {
+      const personaId  = personaIds.length > 0 ? personaIds[i % personaIds.length] : null;
+      const responseId = generateResponseId();
+      const finalUrl   = survey.url.replace(/identifier/gi, responseId);
+
+      // ── Round-robin country per session ─────────────────────────────────
+      // Session 0 → FR, Session 1 → DE, Session 2 → FR, etc.
+      const country = countryList.length > 0
+        ? countryList[i % countryList.length]
+        : null;
+
+      console.log(`[Sessions] Session ${i + 1}/${sessionLimit} → country: ${country || 'none'}`);
+
+      const session = await createSession({
+        projectId,
+        workspaceId:   req.user.workspace_id,
+        personaId,
+        surveyUrl:     finalUrl,
+        surveyLabel:   survey.label,
+        responseId,
+        proxyCountry:  country,
+        proxyProvider: project.proxy_provider || 'decodo',
+        deviceType:    project.device_type    || 'desktop',
+        browserType:   'chrome',
+        aiStrategy:    project.ai_strategy    || 'persona_true',
+      });
+
+      await sessionQueue.add('run-session', {
+        sessionId:    session.id,
+        projectId,
+        personaId,
+        surveyUrl:    finalUrl,
+        responseId,
+        proxyProvider: project.proxy_provider || 'decodo',
+        proxyCountry:  country,
+        deviceType:    project.device_type || 'desktop',
+        aiStrategy:    project.ai_strategy || 'persona_true',
+      }, { jobId: `session-${session.id}`, priority: 1 });
+
+      created.push(session);
+    }
+
+    console.log(`[Sessions] Queued ${created.length} session(s) — countries: ${countryList.join(', ') || 'none'}`);
+    res.status(201).json({ message: `${created.length} session(s) queued`, sessions: created });
+
+  } catch (err) {
+    console.error('Trigger sessions error:', err.message);
+    res.status(500).json({ error: `Failed to trigger sessions: ${err.message}` });
+  }
+});
 
 // ─── GET /api/sessions/live/:projectId ────────────────────────────────────────
 router.get("/live/:projectId", async (req, res) => {
