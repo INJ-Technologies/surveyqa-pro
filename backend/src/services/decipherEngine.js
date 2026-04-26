@@ -6,7 +6,6 @@ const COMPLETE_URLS  = ['thankyou', 'complete', 'thank-you', 'finished', 'done',
 const TERMINATE_URLS = ['terminate', 'terminated', 'screenout', 'screen-out', 'disqualified', 'dq', 'noteligible'];
 const QUOTA_URLS     = ['quota', 'over-quota', 'overquota', 'quotafull', 'quota-full', 'full'];
 
-// ─── Hint text patterns to exclude from question detection ───────────────────
 const HINT_PATTERNS = [
   /^please select/i, /^select all/i, /^choose all/i,
   /^select one/i,    /^choose one/i, /^check all/i,
@@ -19,7 +18,6 @@ const isHintText = (text) =>
   !text || text.length < 4 || text.length > 350 ||
   HINT_PATTERNS.some(p => p.test(text.trim()));
 
-// ─── "Other" option patterns — avoid selecting these ─────────────────────────
 const OTHER_PATTERNS = [
   /^other/i, /^other \(please specify\)/i, /^other \(specify\)/i,
   /^specify/i, /^none of the above/i, /^prefer not to (say|answer)/i,
@@ -29,13 +27,62 @@ const OTHER_PATTERNS = [
 const isOtherOption = (text) =>
   OTHER_PATTERNS.some(p => p.test((text || '').trim()));
 
-// ─── Outcome detection ────────────────────────────────────────────────────────
+// ─── Detect outcome from URL ──────────────────────────────────────────────────
 const detectOutcome = (url) => {
   const lower = url.toLowerCase();
   if (COMPLETE_URLS.some(k  => lower.includes(k))) return 'completed';
   if (TERMINATE_URLS.some(k => lower.includes(k))) return 'terminated';
   if (QUOTA_URLS.some(k     => lower.includes(k))) return 'over_quota';
   return null;
+};
+
+// ─── Detect outcome from page content (Decipher exit pages) ──────────────────
+// Decipher exit pages stay on the same URL — must read page body to know outcome
+const detectOutcomeFromPage = async (page) => {
+  try {
+    const text = await page.evaluate(() =>
+      (document.body.innerText || document.body.textContent || '').toLowerCase()
+    );
+
+    // Terminated / Screened out — check FIRST (more specific phrases)
+    if (
+      text.includes('looking for a specific type of participant') ||
+      text.includes('unfortunately, we are looking') ||
+      text.includes('unfortunately we are looking') ||
+      text.includes('does not meet our requirements') ||
+      text.includes('do not qualify') ||
+      text.includes('not eligible') ||
+      text.includes('screened out') ||
+      text.includes('unfortunately we are unable to include you') ||
+      text.includes('does not qualify') ||
+      text.includes('not what we are looking for') ||
+      text.includes('we appreciate your understanding')
+    ) return 'terminated';
+
+    // Over quota — check SECOND
+    if (
+      text.includes('no longer accepting respondents') ||
+      text.includes('no longer accepting participants') ||
+      text.includes('quota has been filled') ||
+      text.includes('enough respondents') ||
+      text.includes('survey is full') ||
+      text.includes('unfortunately we are no longer')
+    ) return 'over_quota';
+
+    // Qualified / Completed — check LAST (most generic)
+    if (
+      text.includes('thank you for taking our survey') ||
+      text.includes('your efforts are greatly appreciated') ||
+      text.includes('thank you for completing') ||
+      text.includes('survey is now complete') ||
+      text.includes('successfully completed') ||
+      text.includes('thank you for your participation')
+    ) return 'completed';
+
+    return null;
+  } catch {
+    return null;
+  }
 };
 
 // ─── Reading delay ────────────────────────────────────────────────────────────
@@ -90,12 +137,10 @@ const getLabelText = async (input) => {
 };
 
 // ─── Answer radio questions ───────────────────────────────────────────────────
-// Avoids "Other (please specify)" unless it's the only option
 const answerRadio = async (page, persona) => {
   const allRadios = await page.$$('input[type="radio"]:not([disabled])');
   if (allRadios.length === 0) return null;
 
-  // Group by name
   const groups = {};
   for (const radio of allRadios) {
     try {
@@ -118,20 +163,17 @@ const answerRadio = async (page, persona) => {
     const allOptions = groups[name];
     if (allOptions.length === 0) continue;
 
-    // Filter out "Other/None/Prefer not to say" options — only use them as last resort
-    const mainOptions = allOptions.filter(o => !isOtherOption(o.label));
+    const mainOptions  = allOptions.filter(o => !isOtherOption(o.label));
     const optionsToUse = mainOptions.length > 0 ? mainOptions : allOptions;
 
     let idx;
     const n = optionsToUse.length;
 
     if (style === 'conservative') {
-      // Middle-positive range
       idx = Math.floor(n * 0.25 + Math.random() * n * 0.5);
     } else if (style === 'expressive') {
       idx = Math.floor(Math.random() * n);
     } else {
-      // Neutral — avoid extremes (first and last of main options)
       const start = Math.max(0, Math.floor(n * 0.15));
       const end   = Math.min(n - 1, Math.floor(n * 0.80));
       idx = start + Math.floor(Math.random() * (end - start + 1));
@@ -144,7 +186,6 @@ const answerRadio = async (page, persona) => {
       await safeClick(chosen.el);
       await page.waitForTimeout(Math.floor(Math.random() * 400) + 150);
 
-      // Find position in full option list
       const fullIdx = allOptions.findIndex(o => o.value === chosen.value);
 
       selectedAnswers.push({
@@ -163,22 +204,18 @@ const answerRadio = async (page, persona) => {
 };
 
 // ─── Answer checkboxes ────────────────────────────────────────────────────────
-// Avoids "Other/None" checkboxes unless forced
 const answerCheckbox = async (page) => {
   const allBoxes = await page.$$('input[type="checkbox"]:not([disabled])');
   if (allBoxes.length === 0) return null;
 
-  // Get labels for all boxes
   const boxesWithLabels = await Promise.all(allBoxes.map(async box => ({
     el: box,
     label: await getLabelText(box),
   })));
 
-  // Prefer non-Other options
   const mainBoxes  = boxesWithLabels.filter(b => !isOtherOption(b.label));
   const pool       = mainBoxes.length > 0 ? mainBoxes : boxesWithLabels;
 
-  // Select 1–3 random from pool
   const count    = Math.min(pool.length, Math.floor(Math.random() * 3) + 1);
   const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, count);
   const selectedLabels = [];
@@ -209,20 +246,12 @@ const answerSelect = async (page) => {
   for (const select of selects) {
     try {
       const options = await select.$$('option');
-      // Skip first (placeholder), last (often "prefer not to say")
-      // Also skip "Other" options when possible
       const allValid = options.slice(1);
-      const mainOpts = allValid.filter(async o => {
-        const txt = await o.evaluate(el => el.innerText?.trim() || '');
-        return !isOtherOption(txt);
-      });
+      if (allValid.length === 0) continue;
 
-      const useOpts = allValid; // use all valid for select — other filter less important
-      if (useOpts.length === 0) continue;
-
-      const idx   = Math.floor(Math.random() * Math.min(useOpts.length, Math.ceil(useOpts.length * 0.75)));
-      const value = await useOpts[idx].getAttribute('value');
-      const label = await useOpts[idx].evaluate(el => el.innerText?.trim() || el.value);
+      const idx   = Math.floor(Math.random() * Math.min(allValid.length, Math.ceil(allValid.length * 0.75)));
+      const value = await allValid[idx].getAttribute('value');
+      const label = await allValid[idx].evaluate(el => el.innerText?.trim() || el.value);
 
       if (value) {
         await select.selectOption(value);
@@ -256,10 +285,7 @@ const answerNumeric = async (page) => {
 };
 
 // ─── Answer open-ended text fields ───────────────────────────────────────────
-// IMPORTANT: Only fills text fields that are NOT "Other specify" fields
-// (unless the corresponding Other radio is already checked)
 const answerOpenEnd = async (page, persona) => {
-  // Find all visible text areas and inputs
   const textareas  = await page.$$('textarea:not([disabled]):not([readonly])');
   const textInputs = await page.$$('input[type="text"]:not([disabled]):not([readonly])');
 
@@ -295,15 +321,11 @@ const answerOpenEnd = async (page, persona) => {
   for (const field of allFields) {
     try {
       const box = await field.boundingBox();
-      // Skip hidden / tiny fields
       if (!box || box.width < 40 || box.height < 10) continue;
 
-      // Check if this field is an "Other specify" input
-      // by looking at surrounding context
       const isSpecifyField = await field.evaluate(el => {
-        // Check if there's a nearby "other" radio that is NOT checked
-        const form     = el.closest('form') || el.closest('.survey-page') || document;
-        const radios   = [...form.querySelectorAll('input[type="radio"]')];
+        const form   = el.closest('form') || el.closest('.survey-page') || document;
+        const radios = [...form.querySelectorAll('input[type="radio"]')];
         const nearbyOtherRadio = radios.find(r => {
           const id  = r.id;
           const lbl = id ? document.querySelector(`label[for="${id}"]`) : r.closest('label');
@@ -311,19 +333,15 @@ const answerOpenEnd = async (page, persona) => {
           return txt.includes('other') || txt.includes('specify');
         });
 
-        if (nearbyOtherRadio) {
-          // Only fill this specify field if "Other" radio is checked
-          return !nearbyOtherRadio.checked;
-        }
+        if (nearbyOtherRadio) return !nearbyOtherRadio.checked;
 
-        // Also check parent container for "other" context
         const parent = el.closest('[class*="other"]') || el.closest('[id*="other"]');
         if (parent) {
           const radio = parent.querySelector('input[type="radio"]');
-          if (radio && !radio.checked) return true; // skip — other radio not selected
+          if (radio && !radio.checked) return true;
         }
 
-        return false; // not a specify field, safe to fill
+        return false;
       }).catch(() => false);
 
       if (isSpecifyField) {
@@ -341,7 +359,6 @@ const answerOpenEnd = async (page, persona) => {
 };
 
 // ─── Wait for timer-gated Next button ────────────────────────────────────────
-// Some Decipher surveys show a countdown timer before Next becomes clickable
 const waitForNextButton = async (page, maxWaitMs = 120000) => {
   const nextSelectors = [
     'input[type="submit"]', 'button[type="submit"]',
@@ -363,18 +380,15 @@ const waitForNextButton = async (page, maxWaitMs = 120000) => {
       } catch {}
     }
 
-    // Check for timer text on page
     const timerText = await page.evaluate(() => {
       const timerSelectors = [
-        '[class*="timer"]', '[id*="timer"]', '[class*="countdown"]',
-        '[class*="counter"]',
+        '[class*="timer"]', '[id*="timer"]', '[class*="countdown"]', '[class*="counter"]',
       ];
       for (const sel of timerSelectors) {
         const el = document.querySelector(sel);
         if (el && el.innerText) return el.innerText.trim();
       }
-      // Also check for "You will be able to continue in X seconds" text
-      const body = document.body.innerText || '';
+      const body  = document.body.innerText || '';
       const match = body.match(/you will be able to continue in (\d+)/i);
       if (match) return `Waiting ${match[1]}s`;
       return null;
@@ -387,12 +401,11 @@ const waitForNextButton = async (page, maxWaitMs = 120000) => {
     await page.waitForTimeout(2000);
   }
 
-  return null; // timed out
+  return null;
 };
 
 // ─── Click Next button (with timer awareness) ─────────────────────────────────
 const clickNext = async (page) => {
-  // First try immediate click
   const immediateSelectors = [
     'input[type="submit"]', 'button[type="submit"]',
     'input[value="Next"]', 'input[value="Continue"]',
@@ -416,7 +429,7 @@ const clickNext = async (page) => {
     } catch {}
   }
 
-  // Next button exists but is disabled — check for timer
+  // Next button visible but disabled — wait for timer
   for (const sel of immediateSelectors) {
     try {
       const btn = await page.$(sel);
@@ -424,9 +437,8 @@ const clickNext = async (page) => {
       const isVisible = await btn.isVisible().catch(() => false);
       if (!isVisible) continue;
 
-      // Button visible but disabled — wait for it to enable (timer page)
       console.log('[Engine] Next button is disabled — checking for timer...');
-      const enabledBtn = await waitForNextButton(page, 180000); // max 3 min wait
+      const enabledBtn = await waitForNextButton(page, 180000);
       if (enabledBtn) {
         console.log('[Engine] Timer expired — Next button now enabled');
         await page.waitForTimeout(500);
@@ -446,7 +458,6 @@ const capturePageOptions = async (page) => {
     return await page.evaluate(() => {
       const result = [];
 
-      // Radio groups
       const radioGroups = {};
       document.querySelectorAll('input[type="radio"]').forEach(radio => {
         const name = radio.name;
@@ -473,7 +484,6 @@ const capturePageOptions = async (page) => {
         result.push({ type: 'radio', name, options: group.options, selected: group.selected });
       });
 
-      // Checkboxes
       const checkboxes = document.querySelectorAll('input[type="checkbox"]');
       if (checkboxes.length > 0) {
         const cbOptions  = [];
@@ -496,7 +506,6 @@ const capturePageOptions = async (page) => {
         result.push({ type: 'checkbox', options: cbOptions, selected: cbSelected });
       }
 
-      // Selects
       document.querySelectorAll('select').forEach(select => {
         const options    = [...select.options].slice(1).map(o => (o.innerText || o.value).trim());
         const selectedEl = select.options[select.selectedIndex];
@@ -504,7 +513,6 @@ const capturePageOptions = async (page) => {
         if (options.length > 0) result.push({ type: 'select', options, selected });
       });
 
-      // Open-end text (for display only)
       const textareas  = [...document.querySelectorAll('textarea')];
       const textInputs = [...document.querySelectorAll('input[type="text"]')];
       [...textareas, ...textInputs].forEach(field => {
@@ -537,4 +545,12 @@ const answerPage = async (page, persona, readingSpeed = 'normal') => {
   return [radioResult, checkboxResult, selectResult, numericResult, openEndResult].filter(Boolean);
 };
 
-module.exports = { detectOutcome, answerPage, clickNext, readingDelay, capturePageOptions, isHintText };
+module.exports = {
+  detectOutcome,
+  detectOutcomeFromPage,
+  answerPage,
+  clickNext,
+  readingDelay,
+  capturePageOptions,
+  isHintText,
+};

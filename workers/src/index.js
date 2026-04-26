@@ -16,6 +16,7 @@ const {
 } = require("../../backend/src/services/proxyService");
 const {
   detectOutcome,
+  detectOutcomeFromPage,
   answerPage,
   clickNext,
   capturePageOptions,
@@ -47,6 +48,60 @@ const getPersona = async (personaId) => {
   } catch {
     return null;
   }
+};
+
+// ─── Build human-readable answer summary ─────────────────────────────────────
+const buildAnswerSummary = (pageOptions, answersGiven) => {
+  const summary = [];
+
+  for (const opt of pageOptions || []) {
+    if (opt.type === "radio" && opt.selected) {
+      const totalOpts = opt.options?.length || 0;
+      const selIdx = opt.options?.indexOf(opt.selected);
+      const selNum = selIdx >= 0 ? selIdx + 1 : "?";
+      summary.push({
+        type: "radio",
+        label: `Selected: ${opt.selected}`,
+        detail: `Option ${selNum} of ${totalOpts}`,
+        options: opt.options || [],
+        selected: opt.selected,
+      });
+    } else if (opt.type === "checkbox" && opt.selected?.length > 0) {
+      summary.push({
+        type: "checkbox",
+        label: `Selected ${opt.selected.length} of ${opt.options?.length || "?"}`,
+        detail: opt.selected.join(", "),
+        options: opt.options || [],
+        selected: opt.selected,
+      });
+    } else if (opt.type === "select" && opt.selected) {
+      summary.push({
+        type: "select",
+        label: `Selected: ${opt.selected}`,
+        options: opt.options || [],
+        selected: opt.selected,
+      });
+    }
+  }
+
+  for (const ans of answersGiven || []) {
+    if (ans?.type === "open-end" && ans.text) {
+      summary.push({
+        type: "open-end",
+        label: "Typed response",
+        detail: ans.text,
+      });
+    }
+    if (ans?.type === "numeric" && ans.values?.length > 0) {
+      summary.push({
+        type: "numeric",
+        label: "Entered value",
+        detail: ans.values.join(", "),
+      });
+    }
+  }
+
+  return summary;
 };
 
 // ─── Main session processor ───────────────────────────────────────────────────
@@ -101,16 +156,14 @@ const processSession = async (job) => {
   const proxy = await getProxyForSession(proxyProvider || "decodo", {
     country: proxyCountry || null,
     sessionId: proxySessionId,
-    sessionDuration: 60,
   });
 
   if (proxy) {
     console.log(`[Proxy] Server:   ${proxy.server}`);
     console.log(`[Proxy] Username: ${proxy.username}`);
     console.log(`[Proxy] Country:  ${proxyCountry || "none"}`);
-    // Print the exact curl command to test manually
     console.log(
-      `[Proxy] TEST CMD: curl -x "http://${proxy.username}:PASS@gate.decodo.com:10000" https://ip.decodo.com/json`,
+      `[Proxy] TEST CMD: curl -x "http://${proxy.username}:PASS@${proxy.server.replace("http://", "")}" https://ip.decodo.com/json`,
     );
   } else {
     console.log("[Proxy] DIRECT — no proxy configured");
@@ -211,6 +264,7 @@ const processSession = async (job) => {
 
       console.log(`[Worker] Page ${pageCount}: ${currentUrl}`);
 
+      // Check URL for outcome
       outcome = detectOutcome(currentUrl);
       if (outcome) {
         await logSessionEvent(sessionId, "redirect_detected", {
@@ -220,7 +274,29 @@ const processSession = async (job) => {
         break;
       }
 
-      // ── Capture question text BEFORE answering (clean DOM state) ───────────
+      // Also scan page content for Decipher exit pages (same URL)
+      const contentOutcome = await detectOutcomeFromPage(page);
+      if (contentOutcome) {
+        outcome = contentOutcome;
+        console.log(`[Worker] Exit page detected from content: ${outcome}`);
+        // Screenshot the exit page
+        const exitPath = path.join(
+          sessionScreenshotsDir,
+          `page_${pageCount}_exit.png`,
+        );
+        try {
+          await page.screenshot({ path: exitPath, fullPage: true });
+        } catch {}
+        await logSessionEvent(sessionId, "redirect_detected", {
+          url: currentUrl,
+          outcome,
+          detectedBy: "page_content",
+          screenshot: `${sessionId}/page_${pageCount}_exit.png`,
+        });
+        break;
+      }
+
+      // ── Capture question text BEFORE answering ────────────────────────────
       let pageTitle = "";
       let questionsOnPage = [];
       try {
@@ -246,24 +322,22 @@ const processSession = async (job) => {
           }
           return [...found];
         });
-        // Filter out hint texts like "Please select one"
         questionsOnPage = rawTexts.filter((t) => !isHintText(t)).slice(0, 5);
       } catch {}
 
-      // ── Capture all options BEFORE answering ──────────────────────────────
+      // ── Capture options BEFORE answering ──────────────────────────────────
       const pageOptionsBefore = await capturePageOptions(page);
 
       // ── Answer questions ──────────────────────────────────────────────────
       const answersGiven = await answerPage(page, persona, readingSpeed);
       questionCount++;
 
-      // ── Small pause so selections visually register ───────────────────────
       await page.waitForTimeout(800);
 
-      // ── Capture options AFTER answering (shows selected state) ────────────
+      // ── Capture options AFTER answering ───────────────────────────────────
       const pageOptionsAfter = await capturePageOptions(page);
 
-      // ── Screenshot AFTER answering — shows selections ─────────────────────
+      // ── Screenshot AFTER answering ────────────────────────────────────────
       const screenshotFilename = `page_${pageCount}.png`;
       const screenshotPath = path.join(
         sessionScreenshotsDir,
@@ -277,8 +351,6 @@ const processSession = async (job) => {
       }
 
       const pageTime = Math.round((Date.now() - pageStart) / 1000);
-
-      // Build structured answer summary for display
       const answerSummary = buildAnswerSummary(pageOptionsAfter, answersGiven);
 
       pages.push({
@@ -286,9 +358,9 @@ const processSession = async (job) => {
         url: currentUrl,
         title: pageTitle,
         questions: questionsOnPage,
-        options: pageOptionsAfter, // all options with selected state
-        answers: answersGiven, // raw answer objects
-        answerSummary, // human-readable summary
+        options: pageOptionsAfter,
+        answers: answersGiven,
+        answerSummary,
         timeTaken: pageTime,
         screenshot: `${sessionId}/${screenshotFilename}`,
       });
@@ -309,7 +381,10 @@ const processSession = async (job) => {
       const clicked = await clickNext(page);
       if (!clicked) {
         console.log(`[Worker] No next button on page ${pageCount}`);
-        outcome = detectOutcome(page.url()) || "completed";
+        // Check page content before defaulting to completed
+        const noNextOutcome = await detectOutcomeFromPage(page);
+        outcome = noNextOutcome || detectOutcome(page.url()) || "completed";
+        console.log(`[Worker] No next button — outcome: ${outcome}`);
         break;
       }
 
@@ -323,7 +398,21 @@ const processSession = async (job) => {
       }
 
       const newUrl = page.url();
+
+      // Check URL for outcome
       outcome = detectOutcome(newUrl);
+
+      // If URL doesn't reveal outcome, scan page text (Decipher exit pages)
+      if (!outcome) {
+        await page.waitForTimeout(1500); // let page fully render
+        outcome = await detectOutcomeFromPage(page);
+        if (outcome) {
+          console.log(
+            `[Worker] Outcome from page content after nav: ${outcome}`,
+          );
+        }
+      }
+
       if (outcome) {
         const finalPath = path.join(
           sessionScreenshotsDir,
@@ -384,61 +473,6 @@ const processSession = async (job) => {
     `[Worker] Session ${sessionId} → ${outcome} | ${durationS}s | ${pageCount} pages`,
   );
   return { sessionId, outcome, durationS, responseId };
-};
-
-// ─── Build human-readable answer summary ─────────────────────────────────────
-const buildAnswerSummary = (pageOptions, answersGiven) => {
-  const summary = [];
-
-  for (const opt of pageOptions || []) {
-    if (opt.type === "radio" && opt.selected) {
-      const totalOpts = opt.options?.length || 0;
-      const selIdx = opt.options?.indexOf(opt.selected);
-      const selNum = selIdx >= 0 ? selIdx + 1 : "?";
-      summary.push({
-        type: "radio",
-        label: `Selected: ${opt.selected}`,
-        detail: `Option ${selNum} of ${totalOpts}`,
-        options: opt.options || [],
-        selected: opt.selected,
-      });
-    } else if (opt.type === "checkbox" && opt.selected?.length > 0) {
-      summary.push({
-        type: "checkbox",
-        label: `Selected ${opt.selected.length} of ${opt.options?.length || "?"}`,
-        detail: opt.selected.join(", "),
-        options: opt.options || [],
-        selected: opt.selected,
-      });
-    } else if (opt.type === "select" && opt.selected) {
-      summary.push({
-        type: "select",
-        label: `Selected: ${opt.selected}`,
-        options: opt.options || [],
-        selected: opt.selected,
-      });
-    }
-  }
-
-  // Add open-end answers from answersGiven
-  for (const ans of answersGiven || []) {
-    if (ans?.type === "open-end" && ans.text) {
-      summary.push({
-        type: "open-end",
-        label: "Typed response",
-        detail: ans.text,
-      });
-    }
-    if (ans?.type === "numeric" && ans.values?.length > 0) {
-      summary.push({
-        type: "numeric",
-        label: "Entered value",
-        detail: ans.values.join(", "),
-      });
-    }
-  }
-
-  return summary;
 };
 
 // ─── Worker ───────────────────────────────────────────────────────────────────
