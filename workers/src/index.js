@@ -279,19 +279,34 @@ const processSession = async (job) => {
       if (contentOutcome) {
         outcome = contentOutcome;
         console.log(`[Worker] Exit page detected from content: ${outcome}`);
-        // Screenshot the exit page
-        const exitPath = path.join(
-          sessionScreenshotsDir,
-          `page_${pageCount}_exit.png`,
-        );
+
+        // Screenshot the exit page using standard naming so it shows in report
+        const exitFilename = `page_${pageCount}.png`;
+        const exitPath = path.join(sessionScreenshotsDir, exitFilename);
         try {
           await page.screenshot({ path: exitPath, fullPage: true });
         } catch {}
+
+        // Log as page_answered so it appears in the session report timeline
+        await logSessionEvent(sessionId, "page_answered", {
+          page: pageCount,
+          url: currentUrl,
+          title: await page.title().catch(() => "Exit Page"),
+          questions: [],
+          options: [],
+          answers: [],
+          answerSummary: [],
+          timeTaken: 0,
+          screenshot: `${sessionId}/${exitFilename}`,
+          isExitPage: true,
+          exitOutcome: contentOutcome,
+        });
+
         await logSessionEvent(sessionId, "redirect_detected", {
           url: currentUrl,
           outcome,
           detectedBy: "page_content",
-          screenshot: `${sessionId}/page_${pageCount}_exit.png`,
+          screenshot: `${sessionId}/${exitFilename}`,
         });
         break;
       }
@@ -414,17 +429,32 @@ const processSession = async (job) => {
       }
 
       if (outcome) {
-        const finalPath = path.join(
-          sessionScreenshotsDir,
-          `page_${pageCount + 1}_final.png`,
-        );
+        const finalNum = pageCount + 1;
+        const finalFilename = `page_${finalNum}.png`;
+        const finalPath = path.join(sessionScreenshotsDir, finalFilename);
         try {
           await page.screenshot({ path: finalPath, fullPage: true });
         } catch {}
+
+        // Log as page_answered so it appears in the session report timeline
+        await logSessionEvent(sessionId, "page_answered", {
+          page: finalNum,
+          url: newUrl,
+          title: await page.title().catch(() => "Exit Page"),
+          questions: [],
+          options: [],
+          answers: [],
+          answerSummary: [],
+          timeTaken: 0,
+          screenshot: `${sessionId}/${finalFilename}`,
+          isExitPage: true,
+          exitOutcome: outcome,
+        });
+
         await logSessionEvent(sessionId, "redirect_detected", {
           url: newUrl,
           outcome,
-          screenshot: `${sessionId}/page_${pageCount + 1}_final.png`,
+          screenshot: `${sessionId}/${finalFilename}`,
         });
         break;
       }

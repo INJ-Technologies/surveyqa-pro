@@ -12,7 +12,7 @@ import {
   FullCol,
   SectionHeader,
 } from "../components/FormElements";
-import { useCountries } from '../hooks/useCountries';
+import { useCountries } from "../hooks/useCountries";
 import {
   ArrowLeft,
   Users,
@@ -1166,8 +1166,37 @@ function SessionReportModal({ sessionId, onClose }) {
                       fontFamily: FONT,
                     }}
                   >
-                    Page {i + 1}
+                    {ev.payload?.isExitPage ? `Exit Page` : `Page ${i + 1}`}
                   </div>
+                  {ev.payload?.isExitPage && (
+                    <span
+                      style={{
+                        fontSize: "0.68rem",
+                        background:
+                          ev.payload?.exitOutcome === "terminated"
+                            ? "#fce7f3"
+                            : ev.payload?.exitOutcome === "over_quota"
+                              ? "#fef3c7"
+                              : "#dcfce7",
+                        color:
+                          ev.payload?.exitOutcome === "terminated"
+                            ? "#9d174d"
+                            : ev.payload?.exitOutcome === "over_quota"
+                              ? "#92400e"
+                              : "#166534",
+                        borderRadius: 4,
+                        padding: "1px 5px",
+                        fontFamily: FONT,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {ev.payload?.exitOutcome === "terminated"
+                        ? "⛔ Terminate"
+                        : ev.payload?.exitOutcome === "over_quota"
+                          ? "📊 Over Quota"
+                          : "✅ Complete"}
+                    </span>
+                  )}
                   <div
                     style={{
                       fontSize: "0.72rem",
@@ -1955,7 +1984,8 @@ function SurveyCardReadOnly({ survey, index }) {
 
 // ─── Survey Card (editable) ───────────────────────────────────────────────────
 function SurveyCardEdit({ survey, index, onChange, onRemove }) {
-  const { asOptions: countryOptions, loading: countriesLoading } = useCountries();
+  const { asOptions: countryOptions, loading: countriesLoading } =
+    useCountries();
   const languageOptions = [
     { value: "en", label: "English" },
     { value: "hi", label: "Hindi" },
@@ -2014,7 +2044,11 @@ function SurveyCardEdit({ survey, index, onChange, onRemove }) {
           />
         </FullCol>
         <Select
-          label={countriesLoading ? "Target Countries (loading...)" : `Target Countries (${countryOptions.length})`}
+          label={
+            countriesLoading
+              ? "Target Countries (loading...)"
+              : `Target Countries (${countryOptions.length})`
+          }
           isMulti
           options={countryOptions}
           value={norm(survey.countries)}
