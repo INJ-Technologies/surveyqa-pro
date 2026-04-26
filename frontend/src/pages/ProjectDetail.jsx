@@ -3423,9 +3423,11 @@ export default function ProjectDetail() {
           allocation: parseInt(sv.allocation) || 100,
         })),
       };
-      const res = await api.patch(`/projects/${id}`, payload);
-      setProject(res.data.project);
-      setSurveys(payload.surveys);
+      await api.patch(`/projects/${id}`, payload);
+      // Reload full project so computed fields (session_count, total_completes) are included
+      const fresh = await api.get(`/projects/${id}`);
+      setProject(fresh.data.project);
+      setSurveys(fresh.data.surveys || payload.surveys);
       showToast("Project saved successfully ✓");
       setActiveTab("overview");
     } catch (err) {
@@ -3437,8 +3439,9 @@ export default function ProjectDetail() {
 
   const handleStatusChange = async (newStatus) => {
     try {
-      const res = await api.patch(`/projects/${id}`, { status: newStatus });
-      setProject(res.data.project);
+      await api.patch(`/projects/${id}`, { status: newStatus });
+      const fresh = await api.get(`/projects/${id}`);
+      setProject(fresh.data.project);
       showToast(`Status updated to ${formatLabel(newStatus)} ✓`);
     } catch {
       showToast("Failed to update status", "error");
