@@ -3596,10 +3596,12 @@ export default function ProjectDetail() {
               {label}
             </button>
           ))}
-          {/* Run Sessions — always visible */}
-          <button style={s.runBtn} onClick={() => setShowRunModal(true)}>
-            <Zap size={15} /> Run Sessions
-          </button>
+          {/* Run Sessions — only visible when project is Active */}
+          {project.status === "active" && (
+            <button style={s.runBtn} onClick={() => setShowRunModal(true)}>
+              <Zap size={15} /> Run Sessions
+            </button>
+          )}
           <button
             style={s.deleteBtn}
             onClick={() => setShowDelete(true)}
