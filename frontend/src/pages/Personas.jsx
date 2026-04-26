@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import Layout from "../components/Layout";
 import api from "../api";
+import { useCountries } from "../hooks/useCountries";
 import { Textarea, NumberInput, FormGrid, FullCol, SectionHeader } from "../components/FormElements";
 import { Users, Plus, X, Monitor, Smartphone, Tablet, AlertCircle, Trash2, Search, ChevronUp, ChevronDown, Pencil, Copy, Eye } from "lucide-react";
 
@@ -8,30 +9,6 @@ const FONT = "'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans
 
 // ─── Lists ────────────────────────────────────────────────────────────────────
 const GENDER_LIST = ["Male", "Female", "Non-Binary", "Any"];
-
-const COUNTRY_LIST = [
-  "🇦🇫 Afghanistan","🇦🇱 Albania","🇩🇿 Algeria","🇦🇷 Argentina","🇦🇲 Armenia",
-  "🇦🇺 Australia","🇦🇹 Austria","🇦🇿 Azerbaijan","🇧🇭 Bahrain","🇧🇩 Bangladesh",
-  "🇧🇪 Belgium","🇧🇴 Bolivia","🇧🇦 Bosnia & Herzegovina","🇧🇷 Brazil","🇧🇬 Bulgaria",
-  "🇨🇲 Cameroon","🇨🇦 Canada","🇨🇱 Chile","🇨🇳 China","🇨🇴 Colombia",
-  "🇨🇷 Costa Rica","🇭🇷 Croatia","🇨🇿 Czech Republic","🇩🇰 Denmark","🇩🇴 Dominican Republic",
-  "🇪🇨 Ecuador","🇪🇬 Egypt","🇸🇻 El Salvador","🇪🇹 Ethiopia","🇫🇮 Finland",
-  "🇫🇷 France","🇬🇪 Georgia","🇩🇪 Germany","🇬🇭 Ghana","🇬🇷 Greece",
-  "🇬🇹 Guatemala","🇭🇳 Honduras","🇭🇰 Hong Kong","🇭🇺 Hungary","🇮🇳 India",
-  "🇮🇩 Indonesia","🇮🇷 Iran","🇮🇶 Iraq","🇮🇪 Ireland","🇮🇱 Israel",
-  "🇮🇹 Italy","🇨🇮 Ivory Coast","🇯🇲 Jamaica","🇯🇵 Japan","🇯🇴 Jordan",
-  "🇰🇿 Kazakhstan","🇰🇪 Kenya","🇰🇼 Kuwait","🇱🇧 Lebanon","🇱🇾 Libya",
-  "🇲🇾 Malaysia","🇲🇽 Mexico","🇲🇦 Morocco","🇲🇿 Mozambique","🇳🇵 Nepal",
-  "🇳🇱 Netherlands","🇳🇿 New Zealand","🇳🇬 Nigeria","🇳🇴 Norway","🇴🇲 Oman",
-  "🇵🇰 Pakistan","🇵🇦 Panama","🇵🇾 Paraguay","🇵🇪 Peru","🇵🇭 Philippines",
-  "🇵🇱 Poland","🇵🇹 Portugal","🇶🇦 Qatar","🇷🇴 Romania","🇷🇺 Russia",
-  "🇸🇦 Saudi Arabia","🇸🇳 Senegal","🇷🇸 Serbia","🇸🇬 Singapore","🇸🇰 Slovakia",
-  "🇿🇦 South Africa","🇰🇷 South Korea","🇪🇸 Spain","🇱🇰 Sri Lanka","🇸🇩 Sudan",
-  "🇸🇪 Sweden","🇨🇭 Switzerland","🇸🇾 Syria","🇹🇼 Taiwan","🇹🇿 Tanzania",
-  "🇹🇭 Thailand","🇹🇳 Tunisia","🇹🇷 Turkey","🇺🇦 Ukraine","🇦🇪 UAE",
-  "🇬🇧 United Kingdom","🇺🇸 United States","🇺🇾 Uruguay","🇺🇿 Uzbekistan",
-  "🇻🇪 Venezuela","🇻🇳 Vietnam","🇾🇪 Yemen","🇿🇲 Zambia","🇿🇼 Zimbabwe",
-];
 
 const LANGUAGE_LIST = [
   "English","Mandarin Chinese","Hindi","Spanish","Arabic",
@@ -267,6 +244,8 @@ const toProper = (str) => {
 // ─── PersonaForm (Create & Edit) ─────────────────────────────────────────────
 function PersonaForm({ initial, onSubmit, onClose, mode = "create" }) {
   const [step,    setStep]    = useState(1);
+  const { countries: dbCountries } = useCountries();
+  const countryNames = dbCountries.map(c => c.country);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState("");
 
@@ -364,7 +343,7 @@ function PersonaForm({ initial, onSubmit, onClose, mode = "create" }) {
               <div style={s.divider} />
               <SectionHeader title="Core Demographics" subtitle="All fields below are mandatory." />
               <FormGrid>
-                <CreatableSingle label="Country" required value={form.country} onChange={v => setF("country", v)} suggestions={COUNTRY_LIST} placeholder="Select or type country..." />
+                <CreatableSingle label="Country" required value={form.country} onChange={v => setF("country", v)} suggestions={countryNames} placeholder="Select or type country..." />
                 <CreatableSingle label="Language" required value={form.language} onChange={v => setF("language", v)} suggestions={LANGUAGE_LIST} placeholder="Select or type language..." />
                 <NumberInput label="Age Min" required min="16" max="80" placeholder="e.g. 28" value={form.ageMin} onChange={setFE("ageMin")} />
                 <NumberInput label="Age Max" required min="16" max="80" placeholder="e.g. 45" value={form.ageMax} onChange={setFE("ageMax")} />
@@ -471,7 +450,7 @@ function PersonaForm({ initial, onSubmit, onClose, mode = "create" }) {
 // ─── View Persona Modal ───────────────────────────────────────────────────────
 function ViewModal({ persona, onClose }) {
   const a = persona.behavioural_attrs || {};
-  const country = COUNTRY_LIST.find(c => c.includes(persona.country)) || persona.country;
+  const country = persona.country || "—";
 
   const Section = ({ title, rows }) => (
     <div style={{ marginBottom: 20 }}>
