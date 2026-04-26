@@ -6,14 +6,14 @@ const getProjects = async (workspaceId) => {
   const result = await pool.query(
     `SELECT
        p.*,
-       u.name AS owner_name,
+       u.full_name                                               AS owner_name,
        (SELECT COUNT(*) FROM sessions s
-        WHERE s.project_id = p.id)::int                AS session_count,
+        WHERE s.project_id = p.id)::int                         AS session_count,
        (SELECT COUNT(*) FROM sessions s
         WHERE s.project_id = p.id
-          AND s.outcome = 'completed')::int             AS total_completes,
+          AND s.outcome = 'completed')::int                     AS total_completes,
        (SELECT COALESCE(SUM(target), 0) FROM quota_cells qc
-        WHERE qc.project_id = p.id)::int               AS total_target
+        WHERE qc.project_id = p.id)::int                        AS total_target
      FROM projects p
      LEFT JOIN users u ON u.id = p.owner_id
      WHERE p.workspace_id = $1
@@ -28,15 +28,12 @@ const getProjectById = async (projectId, workspaceId) => {
   const result = await pool.query(
     `SELECT
        p.*,
-       u.name  AS owner_name,
-       -- Total sessions ever created for this project
+       u.full_name                                               AS owner_name,
        (SELECT COUNT(*) FROM sessions s
-        WHERE s.project_id = p.id)::int                          AS session_count,
-       -- Completed sessions (outcome = completed)
+        WHERE s.project_id = p.id)::int                         AS session_count,
        (SELECT COUNT(*) FROM sessions s
         WHERE s.project_id = p.id
-          AND s.outcome = 'completed')::int                      AS total_completes,
-       -- Sum of all quota cell targets
+          AND s.outcome = 'completed')::int                     AS total_completes,
        (SELECT COALESCE(SUM(target), 0) FROM quota_cells qc
         WHERE qc.project_id = p.id)::int                        AS total_target
      FROM projects p
