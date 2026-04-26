@@ -1,28 +1,20 @@
 "use strict";
 const express = require("express");
-const path = require("path");
-const fs = require("fs");
+const path    = require("path");
+const fs      = require("fs");
 const { requireAuth, requireRole } = require("../middleware/auth");
-const {
-  createSession,
-  getLiveSessions,
-  getSessionDetail,
-} = require("../db/sessions");
-const { sessionQueue } = require("../queues/index");
+const { createSession, getLiveSessions, getSessionDetail } = require("../db/sessions");
+const { sessionQueue }   = require("../queues/index");
 const { getProjectById, getProjectSurveys } = require("../db/projects");
 
 const router = express.Router();
 
 const SCREENSHOTS_DIR = process.env.SCREENSHOTS_DIR || "/app/screenshots";
 
-// ─── GET /api/sessions/:id/screenshot/:filename — Serve screenshot ────────────
+// ─── PUBLIC: Screenshot serving ───────────────────────────────────────────────
 router.get("/:id/screenshot/:filename", (req, res) => {
   try {
-    const filePath = path.join(
-      SCREENSHOTS_DIR,
-      req.params.id,
-      req.params.filename,
-    );
+    const filePath = path.join(SCREENSHOTS_DIR, req.params.id, req.params.filename);
     if (!fs.existsSync(filePath))
       return res.status(404).json({ error: "Screenshot not found" });
     res.setHeader("Content-Type", "image/png");
@@ -37,12 +29,32 @@ router.use(requireAuth);
 
 // ─── Generate 12-char alphanumeric response ID ────────────────────────────────
 const generateResponseId = () => {
-  const chars =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   let result = "";
   for (let i = 0; i < 12; i++)
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   return result;
+};
+
+// ─── Find the best survey URL for a given country code ───────────────────────
+// Matches country code against survey.countries array.
+// Falls back to Main survey if no match found.
+const getSurveyForCountry = (surveys, countryCode) => {
+  if (!countryCode) {
+    return surveys.find(s => s.label === 'Main') || surveys[0];
+  }
+  const code = countryCode.toUpperCase();
+
+  // Find survey whose countries list includes this country
+  const match = surveys.find(sv => {
+    const codes = Array.isArray(sv.countries)
+      ? sv.countries
+      : (sv.countries || '').split(',').map(c => c.trim()).filter(Boolean);
+    return codes.some(c => c.toUpperCase() === code);
+  });
+
+  // Fall back to Main or first survey if no country match
+  return match || surveys.find(s => s.label === 'Main') || surveys[0];
 };
 
 // ─── POST /api/sessions/trigger ───────────────────────────────────────────────
@@ -50,18 +62,18 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
   try {
     const { projectId, personaIds = [], count = 1, proxyCountry } = req.body;
 
-    if (!projectId) return res.status(400).json({ error: 'projectId is required' });
+    if (!projectId)
+      return res.status(400).json({ error: 'projectId is required' });
 
     const project = await getProjectById(projectId, req.user.workspace_id);
-    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!project)
+      return res.status(404).json({ error: 'Project not found' });
 
     const surveys = await getProjectSurveys(projectId);
-    if (!surveys.length) return res.status(400).json({ error: 'No survey URLs configured' });
+    if (!surveys.length)
+      return res.status(400).json({ error: 'No survey URLs configured' });
 
-    const survey = surveys.find(s => s.label === 'Main') || surveys[0];
-    if (!survey.url) return res.status(400).json({ error: 'Survey URL is empty' });
-
-    // ── Parse countries — supports "FR, DE" or "FR" or ["FR","DE"] ──────────
+    // ── Parse country list ────────────────────────────────────────────────────
     let countryList = [];
     if (Array.isArray(proxyCountry)) {
       countryList = proxyCountry.map(c => c.trim().toUpperCase()).filter(Boolean);
@@ -71,28 +83,42 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
         .map(c => c.trim().toUpperCase())
         .filter(Boolean);
     }
-    // Fall back to survey's configured countries if none provided
-    if (countryList.length === 0 && survey.countries?.length > 0) {
-      countryList = Array.isArray(survey.countries)
-        ? survey.countries
-        : survey.countries.split(',').map(c => c.trim().toUpperCase()).filter(Boolean);
+
+    // Fall back to countries from all surveys if none explicitly provided
+    if (countryList.length === 0) {
+      const allSurveyCodes = new Set();
+      surveys.forEach(sv => {
+        const codes = Array.isArray(sv.countries)
+          ? sv.countries
+          : (sv.countries || '').split(',').map(c => c.trim()).filter(Boolean);
+        codes.forEach(c => c && allSurveyCodes.add(c.toUpperCase()));
+      });
+      countryList = [...allSurveyCodes];
     }
 
     const sessionLimit = Math.min(parseInt(count) || 1, 20);
     const created = [];
 
     for (let i = 0; i < sessionLimit; i++) {
-      const personaId  = personaIds.length > 0 ? personaIds[i % personaIds.length] : null;
-      const responseId = generateResponseId();
-      const finalUrl   = survey.url.replace(/identifier/gi, responseId);
+      const personaId = personaIds.length > 0 ? personaIds[i % personaIds.length] : null;
 
-      // ── Round-robin country per session ─────────────────────────────────
-      // Session 0 → FR, Session 1 → DE, Session 2 → FR, etc.
+      // Round-robin country per session
       const country = countryList.length > 0
         ? countryList[i % countryList.length]
         : null;
 
-      console.log(`[Sessions] Session ${i + 1}/${sessionLimit} → country: ${country || 'none'}`);
+      // Pick the survey URL that matches this country
+      const survey = getSurveyForCountry(surveys, country);
+
+      if (!survey?.url) {
+        console.warn(`[Sessions] No survey URL found for country ${country} — skipping`);
+        continue;
+      }
+
+      const responseId = generateResponseId();
+      const finalUrl   = survey.url.replace(/identifier/gi, responseId);
+
+      console.log(`[Sessions] Session ${i + 1}/${sessionLimit} → country: ${country || 'none'} | survey: ${survey.label} | url: ${finalUrl.slice(0, 60)}...`);
 
       const session = await createSession({
         projectId,
@@ -109,22 +135,25 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
       });
 
       await sessionQueue.add('run-session', {
-        sessionId:    session.id,
+        sessionId:     session.id,
         projectId,
         personaId,
-        surveyUrl:    finalUrl,
+        surveyUrl:     finalUrl,
         responseId,
         proxyProvider: project.proxy_provider || 'decodo',
         proxyCountry:  country,
-        deviceType:    project.device_type || 'desktop',
-        aiStrategy:    project.ai_strategy || 'persona_true',
+        deviceType:    project.device_type    || 'desktop',
+        aiStrategy:    project.ai_strategy    || 'persona_true',
       }, { jobId: `session-${session.id}`, priority: 1 });
 
       created.push(session);
     }
 
     console.log(`[Sessions] Queued ${created.length} session(s) — countries: ${countryList.join(', ') || 'none'}`);
-    res.status(201).json({ message: `${created.length} session(s) queued`, sessions: created });
+    res.status(201).json({
+      message:  `${created.length} session(s) queued`,
+      sessions: created,
+    });
 
   } catch (err) {
     console.error('Trigger sessions error:', err.message);

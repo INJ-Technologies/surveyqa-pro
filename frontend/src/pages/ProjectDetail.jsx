@@ -320,19 +320,50 @@ function RunSessionsModal({ project, onClose, onTriggered }) {
   const [count, setCount] = useState(5);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [countries, setCountries] = useState([]); // all from DB
+  const [allCountries, setAllCountries] = useState([]);
   const [selected, setSelected] = useState([]); // selected codes [{code,country}]
   const [search, setSearch] = useState("");
   const [dropOpen, setDropOpen] = useState(false);
   const dropRef = useRef(null);
 
-  // Load countries from API on mount
+  // Derive available countries from project survey URLs
+  // Only show countries that are configured in at least one survey URL
   useEffect(() => {
     api
       .get("/proxy/countries")
-      .then((res) => setCountries(res.data.countries || []))
-      .catch(() => setCountries([]));
-  }, []);
+      .then((res) => {
+        const all = res.data.countries || [];
+
+        // Collect all country codes from project surveys
+        const surveyCodes = new Set();
+        surveys.forEach((sv) => {
+          const codes = Array.isArray(sv.countries)
+            ? sv.countries
+            : (sv.countries || "")
+                .split(",")
+                .map((c) => c.trim())
+                .filter(Boolean);
+          codes.forEach((c) => surveyCodes.add(c.toUpperCase()));
+        });
+
+        // Filter proxy_countries to only those in survey URLs
+        const filtered =
+          surveyCodes.size > 0
+            ? all.filter((c) => surveyCodes.has(c.code.toUpperCase()))
+            : all; // fallback to all if no countries configured
+
+        setAllCountries(filtered);
+
+        // Auto-select all available countries
+        setSelected(
+          filtered.map((c) => ({ code: c.code, country: c.country })),
+        );
+      })
+      .catch(() => setAllCountries([]));
+  }, [surveys]);
+
+  // Use allCountries for the dropdown
+  const countries = allCountries;
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -3944,6 +3975,7 @@ export default function ProjectDetail() {
       {showRunModal && (
         <RunSessionsModal
           project={project}
+          surveys={surveys}
           onClose={() => setShowRunModal(false)}
           onTriggered={() => {
             setShowRunModal(false);
