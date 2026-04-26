@@ -325,7 +325,6 @@ function RunSessionsModal({ project, onClose, onTriggered }) {
   const [dropOpen, setDropOpen] = useState(false);
   const dropRef = useRef(null);
 
-
   // Load countries from API on mount
   useEffect(() => {
     api
@@ -2442,31 +2441,35 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SESSIONS TAB — all fixes applied
+// SESSIONS TAB — fixed
 // ══════════════════════════════════════════════════════════════════════════════
 function SessionsTab({ projectId, showToast, autoRefresh = false }) {
   const [sessions, setSessions] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-
-  // ── Search state separate from API filter state to prevent focus loss ──────
-  const [searchCountry, setSearchCountry] = useState("");
+  const [countries, setCountries] = useState([]); // for country dropdown
   const [filters, setFilters] = useState({
     status: "",
     outcome: "",
     country: "",
   });
-
   const [viewSession, setViewSession] = useState(null);
 
-  // ── Pagination ────────────────────────────────────────────────────────────
+  // Pagination
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const PAGE_SIZE = 20;
 
-  // ── Auto-refresh interval (when sessions are active) ─────────────────────
   const intervalRef = useRef(null);
+
+  // Load countries for filter dropdown
+  useEffect(() => {
+    api
+      .get("/proxy/countries")
+      .then((res) => setCountries(res.data.countries || []))
+      .catch(() => {});
+  }, []);
 
   const load = useCallback(
     async (isRefresh = false, currentPage = page) => {
@@ -2500,7 +2503,7 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
     load();
   }, [load]);
 
-  // ── Auto-refresh when there are active sessions ───────────────────────────
+  // Auto-refresh when sessions are active
   useEffect(() => {
     const hasActive =
       stats && (parseInt(stats.active) > 0 || parseInt(stats.queued) > 0);
@@ -2510,21 +2513,13 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
     return () => clearInterval(intervalRef.current);
   }, [stats, autoRefresh]);
 
-  // ── Debounce country search — update filters after 400ms pause ────────────
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setFilters((f) => ({ ...f, country: searchCountry }));
-      setPage(1);
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [searchCountry]);
-
-  const setStatusFilter = (v) => {
-    setFilters((f) => ({ ...f, status: v }));
+  const setF = (k, v) => {
+    setFilters((f) => ({ ...f, [k]: v }));
     setPage(1);
   };
-  const setOutcomeFilter = (v) => {
-    setFilters((f) => ({ ...f, outcome: v }));
+  const hasFilters = filters.status || filters.outcome || filters.country;
+  const clearFilters = () => {
+    setFilters({ status: "", outcome: "", country: "" });
     setPage(1);
   };
 
@@ -2605,7 +2600,7 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
         <select
           style={s.filterSel}
           value={filters.status}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          onChange={(e) => setF("status", e.target.value)}
         >
           <option value="">All Statuses</option>
           {statusOpts.map((o) => (
@@ -2614,10 +2609,11 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
             </option>
           ))}
         </select>
+
         <select
           style={s.filterSel}
           value={filters.outcome}
-          onChange={(e) => setOutcomeFilter(e.target.value)}
+          onChange={(e) => setF("outcome", e.target.value)}
         >
           <option value="">All Outcomes</option>
           {outcomeOpts.map((o) => (
@@ -2626,13 +2622,21 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
             </option>
           ))}
         </select>
-        {/* Search uses separate local state — no focus loss */}
-        <input
+
+        {/* Country dropdown from proxy_countries table */}
+        <select
           style={s.filterSel}
-          placeholder="Country code (e.g. IN)"
-          value={searchCountry}
-          onChange={(e) => setSearchCountry(e.target.value.toUpperCase())}
-        />
+          value={filters.country}
+          onChange={(e) => setF("country", e.target.value)}
+        >
+          <option value="">All Countries</option>
+          {countries.map((c) => (
+            <option key={c.code} value={c.code}>
+              {c.code} — {c.country}
+            </option>
+          ))}
+        </select>
+
         <button
           style={s.refreshBtn}
           onClick={() => load(true)}
@@ -2646,6 +2650,30 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
           />
           {refreshing ? "Refreshing..." : "Refresh"}
         </button>
+
+        {/* Clear filters button — only shown when filters are active */}
+        {hasFilters && (
+          <button
+            onClick={clearFilters}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              background: "#fef2f2",
+              border: "1.5px solid #fecaca",
+              borderRadius: 8,
+              padding: "8px 14px",
+              fontSize: "0.82rem",
+              fontWeight: 600,
+              cursor: "pointer",
+              color: "#dc2626",
+              fontFamily: FONT,
+            }}
+          >
+            <X size={13} /> Clear Filters
+          </button>
+        )}
+
         {parseInt(stats?.active) > 0 && (
           <span
             style={{
@@ -2664,7 +2692,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                 borderRadius: "50%",
                 background: "#2563eb",
                 display: "inline-block",
-                animation: "pulse 1.5s infinite",
               }}
             />
             Auto-refreshing
@@ -2678,13 +2705,23 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
           <h4
             style={{ fontFamily: FONT, color: "#1e293b", margin: "12px 0 6px" }}
           >
-            No Sessions Yet
+            No Sessions Found
           </h4>
           <p
             style={{ fontFamily: FONT, color: "#64748b", fontSize: "0.88rem" }}
           >
-            Sessions will appear here once bot runs are triggered.
+            {hasFilters
+              ? "No sessions match your current filters."
+              : "Sessions will appear here once bot runs are triggered."}
           </p>
+          {hasFilters && (
+            <button
+              style={{ ...s.primaryBtn, marginTop: 12 }}
+              onClick={clearFilters}
+            >
+              Clear Filters
+            </button>
+          )}
         </div>
       ) : (
         <>
@@ -2699,13 +2736,17 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
               alignItems: "center",
             }}
           >
-            <span>💡 Click any row to view the full session report</span>
+            <span>
+              Use the <strong>View</strong> button on each row to open the
+              session report.
+            </span>
             <span>
               {totalCount > 0
                 ? `${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, totalCount)} of ${totalCount}`
                 : ""}
             </span>
           </div>
+
           <div style={s.tableWrap}>
             <table style={s.table}>
               <thead>
@@ -2734,21 +2775,12 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                 {sessions.map((session, idx) => (
                   <tr
                     key={session.id}
-                    onClick={() => setViewSession(session.id)}
                     style={{
                       ...s.tr,
                       background: idx % 2 === 0 ? "white" : "#f8fafc",
-                      cursor: "pointer",
                     }}
-                    onMouseEnter={(e) =>
-                      (e.currentTarget.style.background = "#f0f7ff")
-                    }
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.background =
-                        idx % 2 === 0 ? "white" : "#f8fafc")
-                    }
+                    // ── Row click removed — only View button opens report ──
                   >
-                    {/* Session ID */}
                     <td style={s.td}>
                       <span
                         style={{
@@ -2763,8 +2795,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                         {session.id.slice(0, 8)}
                       </span>
                     </td>
-
-                    {/* Response ID */}
                     <td style={s.td}>
                       {session.response_id ? (
                         <span
@@ -2785,8 +2815,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                         </span>
                       )}
                     </td>
-
-                    {/* IP Address */}
                     <td style={s.td}>
                       <span
                         style={{
@@ -2798,16 +2826,12 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                         {session.ip_address || "—"}
                       </span>
                     </td>
-
-                    {/* Status */}
                     <td style={s.td}>
                       <StatusBadge
                         status={session.status}
                         colors={SESSION_STATUS_COLORS}
                       />
                     </td>
-
-                    {/* Persona */}
                     <td style={s.td}>
                       <span
                         style={{
@@ -2819,8 +2843,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                         {session.persona_name || "—"}
                       </span>
                     </td>
-
-                    {/* Country */}
                     <td style={s.td}>
                       <span
                         style={{
@@ -2832,8 +2854,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                         {session.proxy_country || "—"}
                       </span>
                     </td>
-
-                    {/* Device */}
                     <td style={s.td}>
                       <span
                         style={{
@@ -2845,8 +2865,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                         {session.device_type || "—"}
                       </span>
                     </td>
-
-                    {/* Duration */}
                     <td style={s.td}>
                       <span
                         style={{
@@ -2858,8 +2876,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                         {fmtDuration(session.total_duration_s)}
                       </span>
                     </td>
-
-                    {/* Quality */}
                     <td style={s.td}>
                       {session.quality_score != null ? (
                         <div
@@ -2908,8 +2924,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                         </span>
                       )}
                     </td>
-
-                    {/* Outcome */}
                     <td style={s.td}>
                       {session.outcome ? (
                         <StatusBadge
@@ -2922,8 +2936,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                         </span>
                       )}
                     </td>
-
-                    {/* Started */}
                     <td style={s.td}>
                       <span
                         style={{
@@ -2935,14 +2947,9 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                         {fmtTime(session.started_at || session.created_at)}
                       </span>
                     </td>
-
-                    {/* Report */}
                     <td style={s.td}>
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setViewSession(session.id);
-                        }}
+                        onClick={() => setViewSession(session.id)}
                         style={{
                           display: "flex",
                           alignItems: "center",
@@ -2950,7 +2957,7 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                           background: "#f0f7ff",
                           border: "1px solid #dbeafe",
                           borderRadius: 6,
-                          padding: "5px 8px",
+                          padding: "5px 10px",
                           cursor: "pointer",
                           color: "#2563eb",
                           fontSize: "0.75rem",
@@ -2999,19 +3006,12 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
               >
                 ‹
               </button>
-
               {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
-                // Show pages around current page
                 let pageNum;
-                if (totalPages <= 7) {
-                  pageNum = i + 1;
-                } else if (page <= 4) {
-                  pageNum = i + 1;
-                } else if (page >= totalPages - 3) {
-                  pageNum = totalPages - 6 + i;
-                } else {
-                  pageNum = page - 3 + i;
-                }
+                if (totalPages <= 7) pageNum = i + 1;
+                else if (page <= 4) pageNum = i + 1;
+                else if (page >= totalPages - 3) pageNum = totalPages - 6 + i;
+                else pageNum = page - 3 + i;
                 return (
                   <button
                     key={pageNum}
@@ -3030,7 +3030,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                   </button>
                 );
               })}
-
               <button
                 onClick={() => {
                   const p = page + 1;
@@ -3052,7 +3051,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
               >
                 »
               </button>
-
               <span
                 style={{
                   fontSize: "0.78rem",
@@ -3742,7 +3740,11 @@ export default function ProjectDetail() {
         />
       )}
       {activeTab === "sessions" && (
-        <SessionsTab projectId={id} showToast={showToast} autoRefresh={autoRefreshSessions} />
+        <SessionsTab
+          projectId={id}
+          showToast={showToast}
+          autoRefresh={autoRefreshSessions}
+        />
       )}
       {activeTab === "costs" && (
         <CostsTab projectId={id} showToast={showToast} />
