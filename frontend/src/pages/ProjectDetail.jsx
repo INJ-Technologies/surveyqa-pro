@@ -316,7 +316,7 @@ function ConfirmModal({
 
 // ─── Run Sessions Modal ───────────────────────────────────────────────────────
 // Drop-in replacement for RunSessionsModal in ProjectDetail.jsx
-function RunSessionsModal({ project, onClose, onTriggered }) {
+function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
   const [count, setCount] = useState(5);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
