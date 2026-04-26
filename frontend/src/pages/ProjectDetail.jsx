@@ -42,12 +42,12 @@ import {
   Tablet,
   Hash,
   ChevronDown,
+  Pencil,
+  Copy,
 } from "lucide-react";
 
 const FONT =
   "'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-
-// ─── API base ─────────────────────────────────────────────────────────────────
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
 const formatLabel = (str) => {
@@ -315,26 +315,21 @@ function ConfirmModal({
 }
 
 // ─── Run Sessions Modal ───────────────────────────────────────────────────────
-// Drop-in replacement for RunSessionsModal in ProjectDetail.jsx
 function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
   const [count, setCount] = useState(5);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [allCountries, setAllCountries] = useState([]);
-  const [selected, setSelected] = useState([]); // selected codes [{code,country}]
+  const [selected, setSelected] = useState([]);
   const [search, setSearch] = useState("");
   const [dropOpen, setDropOpen] = useState(false);
   const dropRef = useRef(null);
 
-  // Derive available countries from project survey URLs
-  // Only show countries that are configured in at least one survey URL
   useEffect(() => {
     api
       .get("/proxy/countries")
       .then((res) => {
         const all = res.data.countries || [];
-
-        // Collect all country codes from project surveys
         const surveyCodes = new Set();
         surveys.forEach((sv) => {
           const codes = Array.isArray(sv.countries)
@@ -345,16 +340,11 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
                 .filter(Boolean);
           codes.forEach((c) => surveyCodes.add(c.toUpperCase()));
         });
-
-        // Filter proxy_countries to only those in survey URLs
         const filtered =
           surveyCodes.size > 0
             ? all.filter((c) => surveyCodes.has(c.code.toUpperCase()))
-            : all; // fallback to all if no countries configured
-
+            : all;
         setAllCountries(filtered);
-
-        // Auto-select all available countries
         setSelected(
           filtered.map((c) => ({ code: c.code, country: c.country })),
         );
@@ -362,10 +352,6 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
       .catch(() => setAllCountries([]));
   }, [surveys]);
 
-  // Use allCountries for the dropdown
-  const countries = allCountries;
-
-  // Close dropdown on outside click
   useEffect(() => {
     const handler = (e) => {
       if (dropRef.current && !dropRef.current.contains(e.target))
@@ -375,24 +361,20 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  const countries = allCountries;
   const filtered = countries.filter(
     (c) =>
       c.country.toLowerCase().includes(search.toLowerCase()) ||
       c.code.toLowerCase().includes(search.toLowerCase()),
   );
-
-  const toggleCountry = (c) => {
+  const toggleCountry = (c) =>
     setSelected((prev) => {
       const exists = prev.find((s) => s.code === c.code);
       if (exists) return prev.filter((s) => s.code !== c.code);
       return [...prev, { code: c.code, country: c.country }];
     });
-  };
-
   const removeCountry = (code) =>
     setSelected((prev) => prev.filter((s) => s.code !== code));
-
-  // How countries will be distributed across sessions
   const getDistribution = () => {
     if (selected.length === 0) return [];
     const n = parseInt(count) || 1;
@@ -434,7 +416,6 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
           overflowY: "auto",
         }}
       >
-        {/* Header */}
         <div
           style={{
             display: "flex",
@@ -467,7 +448,6 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
           </button>
         </div>
 
-        {/* Session count */}
         <div style={{ marginBottom: 18 }}>
           <label
             style={{
@@ -510,7 +490,6 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
           </div>
         </div>
 
-        {/* Country multi-select */}
         <div style={{ marginBottom: 18 }}>
           <label
             style={{
@@ -527,8 +506,6 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
               (optional — distributed round-robin)
             </span>
           </label>
-
-          {/* Selected chips */}
           {selected.length > 0 && (
             <div
               style={{
@@ -588,8 +565,6 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
               </button>
             </div>
           )}
-
-          {/* Dropdown */}
           <div ref={dropRef} style={{ position: "relative" }}>
             <div
               onClick={() => setDropOpen((o) => !o)}
@@ -622,7 +597,6 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
                 }}
               />
             </div>
-
             {dropOpen && (
               <div
                 style={{
@@ -641,7 +615,6 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
                   flexDirection: "column",
                 }}
               >
-                {/* Search */}
                 <div
                   style={{
                     padding: "8px 10px",
@@ -665,7 +638,6 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
                     }}
                   />
                 </div>
-                {/* Options */}
                 <div style={{ overflowY: "auto", flex: 1 }}>
                   {filtered.length === 0 ? (
                     <div
@@ -765,7 +737,6 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
           </div>
         </div>
 
-        {/* Distribution preview */}
         {selected.length > 0 && n > 0 && (
           <div
             style={{
@@ -810,7 +781,6 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
           </div>
         )}
 
-        {/* Project info */}
         <div
           style={{
             background: "#f0f7ff",
@@ -889,10 +859,1326 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SESSION REPORT MODAL — Drop-in replacement for the SessionReportModal
-// function inside ProjectDetail.jsx
+// SCENARIO CONSTANTS
 // ══════════════════════════════════════════════════════════════════════════════
-function SessionReportModal({ sessionId, onClose }) {
+const WHEN_TYPES = [
+  { value: "question_contains", label: "Question text contains" },
+  { value: "question_position", label: "Question position is" },
+  { value: "page_number", label: "Page number is" },
+  { value: "page_has_timer", label: "Page has timer" },
+  { value: "always", label: "Always (every page)" },
+];
+
+const ACTIONS = [
+  { value: "select_exact", label: "Select exact option(s)" },
+  { value: "select_one_of", label: "Select one of option(s)" },
+  { value: "select_not_in", label: "Avoid option(s), pick anything else" },
+  { value: "open_end", label: "Answer open-end field" },
+  { value: "wait", label: "Wait N seconds then next" },
+  { value: "skip", label: "Skip (click next without answering)" },
+  { value: "back", label: "Click back" },
+];
+
+const OPEN_END_MODES = [
+  { value: "persona_ai", label: "Persona AI (Claude)" },
+  { value: "predefined", label: "Use predefined response pool" },
+  { value: "specific", label: "Type specific text" },
+];
+
+const OUTCOME_OPTS = [
+  { value: "any", label: "Any outcome" },
+  { value: "completed", label: "Expected: Complete" },
+  { value: "terminated", label: "Expected: Terminate" },
+  { value: "over_quota", label: "Expected: Over Quota" },
+];
+
+const OUTCOME_COLORS = {
+  completed: { bg: "#dcfce7", text: "#166534" },
+  terminated: { bg: "#fce7f3", text: "#9d174d" },
+  over_quota: { bg: "#fef3c7", text: "#92400e" },
+  any: { bg: "#f1f5f9", text: "#64748b" },
+};
+
+const scenLabel = {
+  fontSize: "0.76rem",
+  fontWeight: 600,
+  color: "#374151",
+  fontFamily: FONT,
+  display: "block",
+  marginBottom: 5,
+};
+const scenInput = {
+  width: "100%",
+  padding: "8px 10px",
+  border: "1.5px solid #e2e8f0",
+  borderRadius: 8,
+  fontSize: "0.85rem",
+  fontFamily: FONT,
+  color: "#1e293b",
+  outline: "none",
+  boxSizing: "border-box",
+  background: "white",
+};
+const scenBtn = (bg, color) => ({
+  background: bg,
+  border: `1px solid ${color}22`,
+  borderRadius: 6,
+  padding: "5px 10px",
+  cursor: "pointer",
+  color,
+  fontFamily: FONT,
+  fontSize: "0.8rem",
+  fontWeight: 600,
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
+});
+
+// ─── Step Builder ─────────────────────────────────────────────────────────────
+function StepBuilder({
+  step,
+  index,
+  onChange,
+  onRemove,
+  onMoveUp,
+  onMoveDown,
+  isFirst,
+  isLast,
+}) {
+  const setF = (k, v) => onChange(index, { ...step, [k]: v });
+  const needsWhenValue = !["page_has_timer", "always"].includes(step.when_type);
+  const needsActionValues = [
+    "select_exact",
+    "select_one_of",
+    "select_not_in",
+  ].includes(step.action);
+  const needsOpenEndMode = step.action === "open_end";
+  const needsDuration = step.action === "wait";
+
+  const addActionValue = () =>
+    setF("action_values", [...(step.action_values || []), ""]);
+  const setActionValue = (i, v) => {
+    const vals = [...(step.action_values || [])];
+    vals[i] = v;
+    setF("action_values", vals);
+  };
+  const removeActionValue = (i) =>
+    setF(
+      "action_values",
+      (step.action_values || []).filter((_, idx) => idx !== i),
+    );
+
+  return (
+    <div
+      style={{
+        background: "white",
+        border: "1.5px solid #e2e8f0",
+        borderRadius: 12,
+        padding: 18,
+        marginBottom: 12,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 14,
+        }}
+      >
+        <span
+          style={{
+            fontSize: "0.78rem",
+            fontWeight: 700,
+            color: "#1e3a5f",
+            fontFamily: FONT,
+            background: "#f0f7ff",
+            border: "1px solid #dbeafe",
+            borderRadius: 6,
+            padding: "3px 10px",
+          }}
+        >
+          Step {index + 1}
+        </span>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button
+            onClick={() => onMoveUp(index)}
+            disabled={isFirst}
+            style={{
+              ...scenBtn("#f8fafc", "#94a3b8"),
+              opacity: isFirst ? 0.3 : 1,
+            }}
+          >
+            ↑
+          </button>
+          <button
+            onClick={() => onMoveDown(index)}
+            disabled={isLast}
+            style={{
+              ...scenBtn("#f8fafc", "#94a3b8"),
+              opacity: isLast ? 0.3 : 1,
+            }}
+          >
+            ↓
+          </button>
+          <button
+            onClick={() => onRemove(index)}
+            style={scenBtn("#fef2f2", "#ef4444")}
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div>
+          <label style={scenLabel}>WHEN</label>
+          <select
+            style={scenInput}
+            value={step.when_type}
+            onChange={(e) => setF("when_type", e.target.value)}
+          >
+            {WHEN_TYPES.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        {needsWhenValue && (
+          <div>
+            <label style={scenLabel}>
+              {step.when_type === "question_contains"
+                ? "Question contains text"
+                : step.when_type === "question_position"
+                  ? "Question number (e.g. 3)"
+                  : "Page number (e.g. 2)"}
+            </label>
+            <input
+              style={scenInput}
+              value={step.when_value || ""}
+              placeholder={
+                step.when_type === "question_contains"
+                  ? "e.g. age group"
+                  : "e.g. 2"
+              }
+              onChange={(e) => setF("when_value", e.target.value)}
+            />
+          </div>
+        )}
+        <div>
+          <label style={scenLabel}>THEN</label>
+          <select
+            style={scenInput}
+            value={step.action}
+            onChange={(e) => setF("action", e.target.value)}
+          >
+            {ACTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        {needsActionValues && (
+          <div>
+            <label style={scenLabel}>
+              {step.action === "select_exact"
+                ? "Option number(s) to select"
+                : step.action === "select_one_of"
+                  ? "Pick one of these option numbers"
+                  : "Avoid these option numbers"}
+            </label>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 6,
+                alignItems: "center",
+              }}
+            >
+              {(step.action_values || []).map((v, i) => (
+                <div
+                  key={i}
+                  style={{ display: "flex", alignItems: "center", gap: 4 }}
+                >
+                  <input
+                    type="number"
+                    min="1"
+                    value={v}
+                    style={{ ...scenInput, width: 60, padding: "6px 8px" }}
+                    onChange={(e) => setActionValue(i, e.target.value)}
+                  />
+                  <button
+                    onClick={() => removeActionValue(i)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      color: "#ef4444",
+                      fontSize: "1rem",
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <button
+                onClick={addActionValue}
+                style={{
+                  ...scenBtn("#f0f7ff", "#2563eb"),
+                  fontSize: "0.75rem",
+                  padding: "4px 10px",
+                }}
+              >
+                + Add
+              </button>
+            </div>
+            <div
+              style={{
+                fontSize: "0.7rem",
+                color: "#94a3b8",
+                fontFamily: FONT,
+                marginTop: 4,
+              }}
+            >
+              Enter option position numbers (1 = first option, 2 = second, etc.)
+            </div>
+          </div>
+        )}
+        {needsOpenEndMode && (
+          <>
+            <div>
+              <label style={scenLabel}>Open-End Mode</label>
+              <select
+                style={scenInput}
+                value={step.action_mode || "persona_ai"}
+                onChange={(e) => setF("action_mode", e.target.value)}
+              >
+                {OPEN_END_MODES.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {step.action_mode === "specific" && (
+              <div>
+                <label style={scenLabel}>Specific Text to Type</label>
+                <input
+                  style={scenInput}
+                  value={step.action_text || ""}
+                  placeholder="Type the exact response..."
+                  onChange={(e) => setF("action_text", e.target.value)}
+                />
+              </div>
+            )}
+          </>
+        )}
+        {needsDuration && (
+          <div>
+            <label style={scenLabel}>Wait Duration (seconds)</label>
+            <input
+              type="number"
+              min="1"
+              style={scenInput}
+              value={step.duration_s || ""}
+              placeholder="e.g. 65"
+              onChange={(e) =>
+                setF("duration_s", parseInt(e.target.value) || null)
+              }
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Scenario Edit Modal ──────────────────────────────────────────────────────
+function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
+  const isEdit = !!scenario?.id;
+  const [name, setName] = useState(scenario?.name || "");
+  const [description, setDescription] = useState(scenario?.description || "");
+  const [expectedOutcome, setExpectedOutcome] = useState(
+    scenario?.expected_outcome || "any",
+  );
+  const [steps, setSteps] = useState(scenario?.steps || []);
+  const [saving, setSaving] = useState(false);
+
+  const blankStep = () => ({
+    when_type: "question_contains",
+    when_value: "",
+    conditions: [],
+    action: "select_exact",
+    action_values: [],
+    action_mode: "persona_ai",
+    action_text: null,
+    duration_s: null,
+  });
+  const addStep = () => setSteps((s) => [...s, blankStep()]);
+  const removeStep = (i) => setSteps((s) => s.filter((_, idx) => idx !== i));
+  const updateStep = (i, updated) =>
+    setSteps((s) => s.map((step, idx) => (idx === i ? updated : step)));
+  const moveUp = (i) => {
+    if (i === 0) return;
+    const s = [...steps];
+    [s[i - 1], s[i]] = [s[i], s[i - 1]];
+    setSteps(s);
+  };
+  const moveDown = (i) => {
+    if (i === steps.length - 1) return;
+    const s = [...steps];
+    [s[i], s[i + 1]] = [s[i + 1], s[i]];
+    setSteps(s);
+  };
+
+  const handleSave = async () => {
+    if (!name.trim()) {
+      showToast("Scenario name is required", "error");
+      return;
+    }
+    setSaving(true);
+    try {
+      if (isEdit) {
+        await api.patch(`/scenarios/${scenario.id}`, {
+          name,
+          description,
+          expectedOutcome,
+          steps,
+        });
+      } else {
+        await api.post("/scenarios", {
+          projectId,
+          name,
+          description,
+          expectedOutcome,
+          steps,
+        });
+      }
+      showToast(`Scenario ${isEdit ? "updated" : "created"} ✓`);
+      onSaved();
+      onClose();
+    } catch (err) {
+      showToast(
+        err.response?.data?.error || "Failed to save scenario",
+        "error",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const oc = OUTCOME_COLORS[expectedOutcome] || OUTCOME_COLORS.any;
+
+  return (
+    <div style={s.overlay}>
+      <div
+        style={{
+          background: "white",
+          borderRadius: 16,
+          width: "100%",
+          maxWidth: 760,
+          maxHeight: "92vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 25px 50px rgba(0,0,0,0.3)",
+        }}
+      >
+        <div
+          style={{
+            padding: "22px 28px 0",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+          }}
+        >
+          <div>
+            <h2
+              style={{
+                fontFamily: FONT,
+                fontSize: "1.15rem",
+                fontWeight: 700,
+                color: "#1e293b",
+                margin: "0 0 4px",
+              }}
+            >
+              {isEdit ? "Edit Scenario" : "New Scenario"}
+            </h2>
+            <p
+              style={{
+                fontFamily: FONT,
+                fontSize: "0.82rem",
+                color: "#64748b",
+                margin: 0,
+              }}
+            >
+              Define conditions the bot should follow during survey sessions.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "#64748b",
+            }}
+          >
+            <X size={20} />
+          </button>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "20px 28px" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "2fr 1fr",
+              gap: 14,
+              marginBottom: 20,
+            }}
+          >
+            <div>
+              <label style={scenLabel}>Scenario Name *</label>
+              <input
+                style={scenInput}
+                value={name}
+                placeholder="e.g. Qualifying Male 35-44 UK"
+                onChange={(e) => setName(e.target.value)}
+              />
+            </div>
+            <div>
+              <label style={scenLabel}>Expected Outcome</label>
+              <select
+                style={{
+                  ...scenInput,
+                  background: oc.bg,
+                  color: oc.text,
+                  fontWeight: 600,
+                }}
+                value={expectedOutcome}
+                onChange={(e) => setExpectedOutcome(e.target.value)}
+              >
+                {OUTCOME_OPTS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={scenLabel}>Description (optional)</label>
+              <input
+                style={scenInput}
+                value={description}
+                placeholder="Describe what this scenario is testing..."
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </div>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 12,
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  fontFamily: FONT,
+                  fontSize: "0.9rem",
+                  fontWeight: 700,
+                  color: "#1e293b",
+                }}
+              >
+                Steps ({steps.length})
+              </div>
+              <div
+                style={{
+                  fontFamily: FONT,
+                  fontSize: "0.75rem",
+                  color: "#94a3b8",
+                  marginTop: 2,
+                }}
+              >
+                Bot checks steps in order — first match wins. Unmatched pages
+                follow default behaviour.
+              </div>
+            </div>
+            <button
+              onClick={addStep}
+              style={{ ...scenBtn("#f0f7ff", "#1e3a5f"), padding: "7px 14px" }}
+            >
+              <Plus size={14} /> Add Step
+            </button>
+          </div>
+          {steps.length === 0 ? (
+            <div
+              style={{
+                background: "#f8fafc",
+                border: "1.5px dashed #e2e8f0",
+                borderRadius: 10,
+                padding: "40px 20px",
+                textAlign: "center",
+              }}
+            >
+              <Target size={36} color="#cbd5e1" style={{ marginBottom: 10 }} />
+              <div
+                style={{
+                  fontFamily: FONT,
+                  fontSize: "0.88rem",
+                  color: "#94a3b8",
+                }}
+              >
+                No steps yet. Add a step to define what the bot should do at
+                specific questions.
+              </div>
+              <button
+                onClick={addStep}
+                style={{
+                  ...scenBtn("#f0f7ff", "#1e3a5f"),
+                  margin: "12px auto 0",
+                  padding: "8px 16px",
+                }}
+              >
+                <Plus size={14} /> Add First Step
+              </button>
+            </div>
+          ) : (
+            steps.map((step, i) => (
+              <StepBuilder
+                key={i}
+                step={step}
+                index={i}
+                onChange={updateStep}
+                onRemove={removeStep}
+                onMoveUp={moveUp}
+                onMoveDown={moveDown}
+                isFirst={i === 0}
+                isLast={i === steps.length - 1}
+              />
+            ))
+          )}
+        </div>
+        <div
+          style={{
+            padding: "16px 28px",
+            borderTop: "1px solid #f1f5f9",
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 12,
+          }}
+        >
+          <button style={s.cancelBtnFull} onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            style={{ ...s.saveBtn, opacity: saving ? 0.7 : 1 }}
+          >
+            <Save size={16} />{" "}
+            {saving ? "Saving..." : isEdit ? "Save Changes" : "Create Scenario"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Save as Scenario Modal ───────────────────────────────────────────────────
+function SaveAsScenarioModal({
+  sessionId,
+  sessionOutcome,
+  projectId,
+  onClose,
+  onSaved,
+  showToast,
+}) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [expectedOutcome, setExpectedOutcome] = useState(
+    sessionOutcome || "any",
+  );
+  const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [loadingPreview, setLoadingPreview] = useState(true);
+
+  useEffect(() => {
+    api
+      .get(`/sessions/${sessionId}`)
+      .then((res) => {
+        const events = (res.data.events || [])
+          .filter((e) => e.event_type === "page_answered")
+          .map((e) => ({
+            ...e,
+            payload:
+              typeof e.payload === "string" ? JSON.parse(e.payload) : e.payload,
+          }))
+          .filter((e) => !e.payload?.isExitPage);
+        setPreview(events);
+      })
+      .catch(() => setPreview([]))
+      .finally(() => setLoadingPreview(false));
+  }, [sessionId]);
+
+  const handleSave = async () => {
+    if (!name.trim()) {
+      showToast("Name is required", "error");
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.post(`/scenarios/from-session/${sessionId}`, {
+        name,
+        description,
+        expectedOutcome,
+        projectId,
+      });
+      showToast("Scenario created from session ✓");
+      onSaved();
+      onClose();
+    } catch (err) {
+      showToast(
+        err.response?.data?.error || "Failed to create scenario",
+        "error",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const oc = OUTCOME_COLORS[expectedOutcome] || OUTCOME_COLORS.any;
+
+  return (
+    <div style={s.overlay}>
+      <div
+        style={{
+          background: "white",
+          borderRadius: 16,
+          width: "100%",
+          maxWidth: 580,
+          maxHeight: "88vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 25px 50px rgba(0,0,0,0.3)",
+        }}
+      >
+        <div
+          style={{
+            padding: "22px 26px 0",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+          }}
+        >
+          <div>
+            <h2
+              style={{
+                fontFamily: FONT,
+                fontSize: "1.1rem",
+                fontWeight: 700,
+                color: "#1e293b",
+                margin: "0 0 4px",
+              }}
+            >
+              Save as Scenario
+            </h2>
+            <p
+              style={{
+                fontFamily: FONT,
+                fontSize: "0.8rem",
+                color: "#64748b",
+                margin: 0,
+              }}
+            >
+              Session{" "}
+              <code
+                style={{
+                  background: "#f1f5f9",
+                  padding: "1px 5px",
+                  borderRadius: 4,
+                  fontSize: "0.75rem",
+                }}
+              >
+                {sessionId.slice(0, 8)}
+              </code>{" "}
+              will be converted into a reusable scenario.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "#64748b",
+            }}
+          >
+            <X size={20} />
+          </button>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "18px 26px" }}>
+          <div style={{ display: "grid", gap: 12, marginBottom: 18 }}>
+            <div>
+              <label style={scenLabel}>Scenario Name *</label>
+              <input
+                style={scenInput}
+                value={name}
+                placeholder="e.g. Qualifying Male 35-44 UK"
+                onChange={(e) => setName(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div>
+              <label style={scenLabel}>Expected Outcome</label>
+              <select
+                style={{
+                  ...scenInput,
+                  background: oc.bg,
+                  color: oc.text,
+                  fontWeight: 600,
+                }}
+                value={expectedOutcome}
+                onChange={(e) => setExpectedOutcome(e.target.value)}
+              >
+                {OUTCOME_OPTS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={scenLabel}>Description (optional)</label>
+              <input
+                style={scenInput}
+                value={description}
+                placeholder="What is this scenario testing?"
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </div>
+          </div>
+          <div
+            style={{
+              fontFamily: FONT,
+              fontSize: "0.78rem",
+              fontWeight: 700,
+              color: "#94a3b8",
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+              marginBottom: 10,
+            }}
+          >
+            Steps that will be generated
+          </div>
+          {loadingPreview ? (
+            <div
+              style={{
+                fontFamily: FONT,
+                fontSize: "0.85rem",
+                color: "#94a3b8",
+                padding: "20px 0",
+              }}
+            >
+              Analysing session...
+            </div>
+          ) : (
+            <div
+              style={{
+                background: "#f8fafc",
+                border: "1.5px solid #e2e8f0",
+                borderRadius: 10,
+                overflow: "hidden",
+              }}
+            >
+              {(preview || []).length === 0 ? (
+                <div
+                  style={{
+                    padding: 20,
+                    fontFamily: FONT,
+                    fontSize: "0.85rem",
+                    color: "#94a3b8",
+                    textAlign: "center",
+                  }}
+                >
+                  No answerable pages found in this session.
+                </div>
+              ) : (
+                (preview || []).map((ev, i) => {
+                  const questions = ev.payload?.questions || [];
+                  const options = ev.payload?.options || [];
+                  const answered = options.filter(
+                    (o) =>
+                      o.selected &&
+                      (Array.isArray(o.selected)
+                        ? o.selected.length > 0
+                        : true),
+                  );
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        padding: "10px 14px",
+                        borderBottom: "1px solid #e2e8f0",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontFamily: FONT,
+                          fontSize: "0.75rem",
+                          fontWeight: 700,
+                          color: "#1e3a5f",
+                          marginBottom: 4,
+                        }}
+                      >
+                        Page {i + 1}
+                        {questions[0]
+                          ? ` — "${questions[0].slice(0, 60)}${questions[0].length > 60 ? "…" : ""}"`
+                          : ""}
+                      </div>
+                      {answered.map((o, j) => (
+                        <div
+                          key={j}
+                          style={{
+                            fontFamily: FONT,
+                            fontSize: "0.72rem",
+                            color: "#475569",
+                            display: "flex",
+                            gap: 6,
+                            alignItems: "center",
+                          }}
+                        >
+                          <span
+                            style={{
+                              background: "#dbeafe",
+                              color: "#1e3a5f",
+                              borderRadius: 4,
+                              padding: "1px 6px",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {o.type}
+                          </span>
+                          <span>
+                            →{" "}
+                            {Array.isArray(o.selected)
+                              ? o.selected.join(", ")
+                              : o.selected}
+                          </span>
+                        </div>
+                      ))}
+                      {answered.length === 0 && (
+                        <div
+                          style={{
+                            fontFamily: FONT,
+                            fontSize: "0.72rem",
+                            color: "#94a3b8",
+                          }}
+                        >
+                          No selections recorded
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+              <div
+                style={{
+                  padding: "8px 14px",
+                  background: "#f0f7ff",
+                  fontFamily: FONT,
+                  fontSize: "0.72rem",
+                  color: "#2563eb",
+                }}
+              >
+                ✦ You can edit individual steps after creating the scenario.
+              </div>
+            </div>
+          )}
+        </div>
+        <div
+          style={{
+            padding: "14px 26px",
+            borderTop: "1px solid #f1f5f9",
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 12,
+          }}
+        >
+          <button style={s.cancelBtnFull} onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving || loadingPreview}
+            style={{
+              ...s.saveBtn,
+              opacity: saving || loadingPreview ? 0.7 : 1,
+            }}
+          >
+            <Save size={16} /> {saving ? "Creating..." : "Create Scenario"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Scenarios Tab ────────────────────────────────────────────────────────────
+function ScenariosTab({ projectId, showToast }) {
+  const [scenarios, setScenarios] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [editScenario, setEditScenario] = useState(null);
+
+  const load = async () => {
+    try {
+      const res = await api.get(`/scenarios/project/${projectId}`);
+      setScenarios(res.data.scenarios || []);
+    } catch {
+      showToast("Failed to load scenarios", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+    load();
+  }, [projectId]);
+
+  const handleDelete = async (id, name) => {
+    if (!window.confirm(`Delete scenario "${name}"? This cannot be undone.`))
+      return;
+    try {
+      await api.delete(`/scenarios/${id}`);
+      setScenarios((prev) => prev.filter((s) => s.id !== id));
+      showToast("Scenario deleted");
+    } catch {
+      showToast("Failed to delete scenario", "error");
+    }
+  };
+
+  const handleDuplicate = async (id) => {
+    try {
+      await api.post(`/scenarios/${id}/duplicate`);
+      showToast("Scenario duplicated ✓");
+      load();
+    } catch {
+      showToast("Failed to duplicate scenario", "error");
+    }
+  };
+
+  const handleToggleActive = async (scenario) => {
+    try {
+      await api.patch(`/scenarios/${scenario.id}`, {
+        isActive: !scenario.project_active,
+      });
+      setScenarios((prev) =>
+        prev.map((s) =>
+          s.id === scenario.id
+            ? { ...s, project_active: !scenario.project_active }
+            : s,
+        ),
+      );
+    } catch {
+      showToast("Failed to update scenario", "error");
+    }
+  };
+
+  if (loading) return <div style={s.tabCenter}>Loading scenarios...</div>;
+
+  return (
+    <div>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          marginBottom: 20,
+        }}
+      >
+        <div>
+          <h3 style={s.sectionH}>Test Scenarios</h3>
+          <p style={s.sectionP}>
+            Define answer logic for the bot to follow. Multiple scenarios run
+            round-robin across sessions.
+          </p>
+        </div>
+        <button style={s.primaryBtn} onClick={() => setShowCreate(true)}>
+          <Plus size={16} /> New Scenario
+        </button>
+      </div>
+
+      {scenarios.length === 0 ? (
+        <div style={s.emptyQuota}>
+          <Target size={48} color="#cbd5e1" />
+          <h4
+            style={{ fontFamily: FONT, color: "#1e293b", margin: "12px 0 6px" }}
+          >
+            No Scenarios Yet
+          </h4>
+          <p
+            style={{
+              fontFamily: FONT,
+              color: "#64748b",
+              fontSize: "0.88rem",
+              marginBottom: 16,
+            }}
+          >
+            Create scenarios to define bot behaviour, or save a completed
+            session as a scenario.
+          </p>
+          <button style={s.primaryBtn} onClick={() => setShowCreate(true)}>
+            <Plus size={16} /> Create First Scenario
+          </button>
+        </div>
+      ) : (
+        <div>
+          <div
+            style={{
+              background: "#f0f7ff",
+              border: "1.5px solid #dbeafe",
+              borderRadius: 8,
+              padding: "10px 14px",
+              marginBottom: 16,
+              fontSize: "0.82rem",
+              color: "#1e3a5f",
+              fontFamily: FONT,
+            }}
+          >
+            ✦ Active scenarios run round-robin. Session 1 → Scenario A, Session
+            2 → Scenario B, etc. Toggle active/inactive to include or exclude
+            from runs.
+          </div>
+          <div style={s.tableWrap}>
+            <table style={s.table}>
+              <thead>
+                <tr style={s.theadRow}>
+                  {[
+                    "Scenario Name",
+                    "Expected Outcome",
+                    "Steps",
+                    "Source",
+                    "Active",
+                    "Actions",
+                  ].map((h) => (
+                    <th key={h} style={s.th}>
+                      <div style={s.thInner}>{h}</div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {scenarios.map((sc, idx) => {
+                  const oc =
+                    OUTCOME_COLORS[sc.expected_outcome] || OUTCOME_COLORS.any;
+                  return (
+                    <tr
+                      key={sc.id}
+                      style={{
+                        ...s.tr,
+                        background: idx % 2 === 0 ? "white" : "#f8fafc",
+                      }}
+                    >
+                      <td style={s.td}>
+                        <div
+                          style={{
+                            fontFamily: FONT,
+                            fontSize: "0.88rem",
+                            fontWeight: 600,
+                            color: "#1e293b",
+                          }}
+                        >
+                          {sc.name}
+                        </div>
+                        {sc.description && (
+                          <div
+                            style={{
+                              fontFamily: FONT,
+                              fontSize: "0.75rem",
+                              color: "#94a3b8",
+                              marginTop: 2,
+                            }}
+                          >
+                            {sc.description.slice(0, 60)}
+                            {sc.description.length > 60 ? "…" : ""}
+                          </div>
+                        )}
+                      </td>
+                      <td style={s.td}>
+                        <span
+                          style={{
+                            background: oc.bg,
+                            color: oc.text,
+                            borderRadius: 20,
+                            padding: "3px 10px",
+                            fontSize: "0.72rem",
+                            fontWeight: 600,
+                            fontFamily: FONT,
+                          }}
+                        >
+                          {OUTCOME_OPTS.find(
+                            (o) => o.value === sc.expected_outcome,
+                          )?.label || sc.expected_outcome}
+                        </span>
+                      </td>
+                      <td style={s.td}>
+                        <span
+                          style={{
+                            fontFamily: FONT,
+                            fontSize: "0.85rem",
+                            fontWeight: 700,
+                            color: "#1e3a5f",
+                          }}
+                        >
+                          {sc.step_count || 0}
+                        </span>
+                        <span
+                          style={{
+                            fontFamily: FONT,
+                            fontSize: "0.75rem",
+                            color: "#94a3b8",
+                          }}
+                        >
+                          {" "}
+                          steps
+                        </span>
+                      </td>
+                      <td style={s.td}>
+                        {sc.source_session_id ? (
+                          <span
+                            style={{
+                              fontFamily: "monospace",
+                              fontSize: "0.72rem",
+                              color: "#2563eb",
+                              background: "#eff6ff",
+                              padding: "2px 6px",
+                              borderRadius: 4,
+                            }}
+                          >
+                            From session
+                          </span>
+                        ) : (
+                          <span
+                            style={{
+                              fontFamily: FONT,
+                              fontSize: "0.75rem",
+                              color: "#94a3b8",
+                            }}
+                          >
+                            Manual
+                          </span>
+                        )}
+                      </td>
+                      <td style={s.td}>
+                        <button
+                          onClick={() => handleToggleActive(sc)}
+                          style={{
+                            background: sc.project_active
+                              ? "#dcfce7"
+                              : "#f1f5f9",
+                            color: sc.project_active ? "#166534" : "#94a3b8",
+                            border: "none",
+                            borderRadius: 20,
+                            padding: "3px 12px",
+                            fontSize: "0.72rem",
+                            fontWeight: 700,
+                            cursor: "pointer",
+                            fontFamily: FONT,
+                          }}
+                        >
+                          {sc.project_active ? "● Active" : "○ Inactive"}
+                        </button>
+                      </td>
+                      <td style={s.td}>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button
+                            title="Edit scenario"
+                            onClick={() => setEditScenario(sc)}
+                            style={{
+                              background: "#f0f7ff",
+                              border: "1px solid #dbeafe",
+                              borderRadius: 6,
+                              padding: "5px 8px",
+                              cursor: "pointer",
+                              color: "#2563eb",
+                              display: "flex",
+                            }}
+                          >
+                            <Pencil size={13} />
+                          </button>
+                          <button
+                            title="Duplicate"
+                            onClick={() => handleDuplicate(sc.id)}
+                            style={{
+                              background: "#f0fdf4",
+                              border: "1px solid #bbf7d0",
+                              borderRadius: 6,
+                              padding: "5px 8px",
+                              cursor: "pointer",
+                              color: "#059669",
+                              display: "flex",
+                            }}
+                          >
+                            <Copy size={13} />
+                          </button>
+                          <button
+                            title="Delete"
+                            onClick={() => handleDelete(sc.id, sc.name)}
+                            style={{
+                              background: "#fef2f2",
+                              border: "1px solid #fecaca",
+                              borderRadius: 6,
+                              padding: "5px 8px",
+                              cursor: "pointer",
+                              color: "#ef4444",
+                              display: "flex",
+                            }}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {showCreate && (
+        <ScenarioModal
+          projectId={projectId}
+          onClose={() => setShowCreate(false)}
+          onSaved={load}
+          showToast={showToast}
+        />
+      )}
+      {editScenario && (
+        <ScenarioModal
+          scenario={editScenario}
+          projectId={projectId}
+          onClose={() => setEditScenario(null)}
+          onSaved={load}
+          showToast={showToast}
+        />
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SESSION REPORT MODAL
+// ══════════════════════════════════════════════════════════════════════════════
+function SessionReportModal({
+  sessionId,
+  projectId,
+  onClose,
+  showToast = () => {},
+}) {
+  const [showSaveScenario, setShowSaveScenario] = useState(false);
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activePageIdx, setActivePageIdx] = useState(0);
@@ -917,7 +2203,6 @@ function SessionReportModal({ sessionId, onClose }) {
           typeof e.payload === "string" ? JSON.parse(e.payload) : e.payload,
       }));
   };
-
   const getMetaEvent = (type) => {
     if (!detail?.events) return null;
     const ev = detail.events.find((e) => e.event_type === type);
@@ -927,17 +2212,9 @@ function SessionReportModal({ sessionId, onClose }) {
 
   const handlePrint = () => {
     const w = window.open("", "_blank");
-    w.document
-      .write(`<html><head><title>Session Report — ${sessionId.slice(0, 8)}</title>
-      <style>body{font-family:Arial,sans-serif;font-size:13px;color:#1e293b;padding:24px}
-      h1{font-size:1.2rem}h2{font-size:0.95rem;border-bottom:1px solid #e2e8f0;padding-bottom:6px}
-      .card{border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:12px;page-break-inside:avoid}
-      img{max-width:100%;border:1px solid #e2e8f0}
-      .opt{padding:4px 8px;border-radius:4px;margin:2px 0;font-size:0.82rem}
-      .selected{background:#dcfce7;color:#166534;font-weight:600}
-      .unselected{background:#f8fafc;color:#64748b}
-      @media print{body{padding:12px}}</style>
-      </head><body>${printRef.current?.innerHTML || ""}</body></html>`);
+    w.document.write(
+      `<html><head><title>Session Report — ${sessionId.slice(0, 8)}</title><style>body{font-family:Arial,sans-serif;font-size:13px;color:#1e293b;padding:24px}img{max-width:100%;border:1px solid #e2e8f0}.selected{background:#dcfce7;color:#166534;font-weight:600}@media print{body{padding:12px}}</style></head><body>${printRef.current?.innerHTML || ""}</body></html>`,
+    );
     w.document.close();
     w.print();
   };
@@ -959,7 +2236,6 @@ function SessionReportModal({ sessionId, onClose }) {
         </div>
       </div>
     );
-
   if (!detail)
     return (
       <div style={s.overlay}>
@@ -998,6 +2274,10 @@ function SessionReportModal({ sessionId, onClose }) {
   };
   const oc = outcomeColors[session.outcome] || outcomeColors.error;
 
+  const canSaveAsScenario = ["completed", "terminated", "over_quota"].includes(
+    session.outcome,
+  );
+
   return (
     <div style={{ ...s.overlay, alignItems: "flex-start", paddingTop: 20 }}>
       <div
@@ -1012,7 +2292,7 @@ function SessionReportModal({ sessionId, onClose }) {
           boxShadow: "0 25px 50px rgba(0,0,0,0.3)",
         }}
       >
-        {/* ── Header ── */}
+        {/* Header */}
         <div
           style={{
             padding: "20px 24px",
@@ -1099,6 +2379,27 @@ function SessionReportModal({ sessionId, onClose }) {
             </div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
+            {canSaveAsScenario && (
+              <button
+                onClick={() => setShowSaveScenario(true)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  background: "#f0fdf4",
+                  border: "1.5px solid #bbf7d0",
+                  borderRadius: 8,
+                  padding: "7px 14px",
+                  fontSize: "0.82rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  color: "#059669",
+                  fontFamily: FONT,
+                }}
+              >
+                <Save size={14} /> Save as Scenario
+              </button>
+            )}
             <button
               onClick={handlePrint}
               style={{
@@ -1133,7 +2434,7 @@ function SessionReportModal({ sessionId, onClose }) {
           </div>
         </div>
 
-        {/* ── Body ── */}
+        {/* Body */}
         <div style={{ flex: 1, overflow: "hidden", display: "flex" }}>
           {/* Left panel */}
           <div
@@ -1197,7 +2498,7 @@ function SessionReportModal({ sessionId, onClose }) {
                       fontFamily: FONT,
                     }}
                   >
-                    {ev.payload?.isExitPage ? `Exit Page` : `Page ${i + 1}`}
+                    {ev.payload?.isExitPage ? "Exit Page" : `Page ${i + 1}`}
                   </div>
                   {ev.payload?.isExitPage && (
                     <span
@@ -1334,7 +2635,6 @@ function SessionReportModal({ sessionId, onClose }) {
                 </div>
               </div>
             )}
-
             {pageEvents.length === 0 ? (
               <div
                 style={{
@@ -1362,7 +2662,6 @@ function SessionReportModal({ sessionId, onClose }) {
               </div>
             ) : activePage ? (
               <div>
-                {/* Page header */}
                 <div
                   style={{
                     display: "flex",
@@ -1410,8 +2709,6 @@ function SessionReportModal({ sessionId, onClose }) {
                     </span>
                   </div>
                 </div>
-
-                {/* URL */}
                 {activePage.payload?.url && (
                   <div
                     style={{
@@ -1428,8 +2725,6 @@ function SessionReportModal({ sessionId, onClose }) {
                     🔗 {activePage.payload.url}
                   </div>
                 )}
-
-                {/* Screenshot */}
                 <div
                   style={{
                     marginBottom: 20,
@@ -1485,8 +2780,6 @@ function SessionReportModal({ sessionId, onClose }) {
                     </div>
                   )}
                 </div>
-
-                {/* Questions detected */}
                 {activePage.payload?.questions?.length > 0 && (
                   <div style={{ marginBottom: 16 }}>
                     <div
@@ -1525,8 +2818,6 @@ function SessionReportModal({ sessionId, onClose }) {
                     ))}
                   </div>
                 )}
-
-                {/* Options + Answers — structured view */}
                 {activePage.payload?.options?.length > 0 && (
                   <div style={{ marginBottom: 16 }}>
                     <div
@@ -1553,7 +2844,6 @@ function SessionReportModal({ sessionId, onClose }) {
                           marginBottom: 12,
                         }}
                       >
-                        {/* Type badge */}
                         <div
                           style={{
                             display: "flex",
@@ -1613,8 +2903,6 @@ function SessionReportModal({ sessionId, onClose }) {
                             </span>
                           )}
                         </div>
-
-                        {/* Options list */}
                         {optGroup.options?.length > 0 && (
                           <div
                             style={{
@@ -1712,8 +3000,6 @@ function SessionReportModal({ sessionId, onClose }) {
                             })}
                           </div>
                         )}
-
-                        {/* Open-end / numeric text */}
                         {(optGroup.type === "open-end" ||
                           optGroup.type === "numeric") &&
                           optGroup.selected && (
@@ -1735,8 +3021,6 @@ function SessionReportModal({ sessionId, onClose }) {
                     ))}
                   </div>
                 )}
-
-                {/* Fallback: open-end answers from answersGiven */}
                 {activePage.payload?.answers?.some(
                   (a) => a?.type === "open-end",
                 ) && (
@@ -1775,8 +3059,6 @@ function SessionReportModal({ sessionId, onClose }) {
                       ))}
                   </div>
                 )}
-
-                {/* Page navigation */}
                 <div
                   style={{
                     display: "flex",
@@ -1903,6 +3185,17 @@ function SessionReportModal({ sessionId, onClose }) {
           ))}
         </div>
       </div>
+
+      {showSaveScenario && (
+        <SaveAsScenarioModal
+          sessionId={session.id}
+          sessionOutcome={session.outcome}
+          projectId={projectId || session.project_id}
+          onClose={() => setShowSaveScenario(false)}
+          onSaved={() => {}}
+          showToast={showToast}
+        />
+      )}
     </div>
   );
 }
@@ -2028,6 +3321,8 @@ function SurveyCardEdit({ survey, index, onChange, onRemove }) {
     { value: "ja", label: "Japanese" },
     { value: "zh", label: "Chinese" },
     { value: "ko", label: "Korean" },
+    { value: "id", label: "Indonesian" },
+    { value: "ms", label: "Malay" },
   ];
   const norm = (v) =>
     Array.isArray(v)
@@ -2086,7 +3381,6 @@ function SurveyCardEdit({ survey, index, onChange, onRemove }) {
           onChange={set("countries")}
           placeholder="Search and select countries..."
         />
-
         <Select
           label="Languages"
           isMulti
@@ -2140,7 +3434,6 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
       setLoading(false);
     }
   };
-
   useEffect(() => {
     load();
   }, [projectId]);
@@ -2181,7 +3474,6 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
       n[di] = { ...n[di], values: n[di].values.filter((_, i) => i !== vi) };
       return n;
     });
-
   const setValueField = (di, vi, field, val) =>
     setDimensions((d) => {
       const n = [...d];
@@ -2251,7 +3543,6 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
           <Plus size={16} /> Add Dimension
         </button>
       </div>
-
       {dimensions.length > 0 && (
         <div style={s.quotaSummaryBar}>
           <span
@@ -2272,7 +3563,6 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
           </span>
         </div>
       )}
-
       {dimensions.length === 0 ? (
         <div style={s.emptyQuota}>
           <Target size={48} color="#cbd5e1" />
@@ -2471,7 +3761,6 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
           </div>
         ))
       )}
-
       <div style={{ ...s.saveBar, marginTop: 20 }}>
         <button
           style={{ ...s.saveBtn, opacity: saving ? 0.7 : 1 }}
@@ -2491,29 +3780,25 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SESSIONS TAB — fixed
+// SESSIONS TAB
 // ══════════════════════════════════════════════════════════════════════════════
 function SessionsTab({ projectId, showToast, autoRefresh = false }) {
   const [sessions, setSessions] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [countries, setCountries] = useState([]); // for country dropdown
+  const [countries, setCountries] = useState([]);
   const [filters, setFilters] = useState({
     status: "",
     outcome: "",
     country: "",
   });
   const [viewSession, setViewSession] = useState(null);
-
-  // Pagination
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const PAGE_SIZE = 20;
-
   const intervalRef = useRef(null);
 
-  // Load countries for filter dropdown
   useEffect(() => {
     api
       .get("/proxy/countries")
@@ -2532,7 +3817,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
         if (filters.country) params.append("country", filters.country);
         params.append("limit", PAGE_SIZE);
         params.append("offset", (currentPage - 1) * PAGE_SIZE);
-
         const res = await api.get(`/projects/${projectId}/sessions?${params}`);
         setSessions(res.data.sessions || []);
         setStats(res.data.stats || null);
@@ -2553,7 +3837,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
     load();
   }, [load]);
 
-  // Auto-refresh when sessions are active
   useEffect(() => {
     const hasActive =
       stats && (parseInt(stats.active) > 0 || parseInt(stats.queued) > 0);
@@ -2572,7 +3855,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
     setFilters({ status: "", outcome: "", country: "" });
     setPage(1);
   };
-
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   const statusOpts = [
@@ -2591,7 +3873,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
 
   return (
     <div>
-      {/* Stats row */}
       {stats && (
         <div style={s.sessionStatsRow}>
           {[
@@ -2645,7 +3926,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
         </div>
       )}
 
-      {/* Filters */}
       <div style={s.sessionFilters}>
         <select
           style={s.filterSel}
@@ -2659,7 +3939,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
             </option>
           ))}
         </select>
-
         <select
           style={s.filterSel}
           value={filters.outcome}
@@ -2672,8 +3951,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
             </option>
           ))}
         </select>
-
-        {/* Country dropdown from proxy_countries table */}
         <select
           style={s.filterSel}
           value={filters.country}
@@ -2686,7 +3963,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
             </option>
           ))}
         </select>
-
         <button
           style={s.refreshBtn}
           onClick={() => load(true)}
@@ -2697,11 +3973,9 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
             style={{
               animation: refreshing ? "spin 1s linear infinite" : "none",
             }}
-          />
+          />{" "}
           {refreshing ? "Refreshing..." : "Refresh"}
         </button>
-
-        {/* Clear filters button — only shown when filters are active */}
         {hasFilters && (
           <button
             onClick={clearFilters}
@@ -2723,7 +3997,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
             <X size={13} /> Clear Filters
           </button>
         )}
-
         {parseInt(stats?.active) > 0 && (
           <span
             style={{
@@ -2796,7 +4069,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                 : ""}
             </span>
           </div>
-
           <div style={s.tableWrap}>
             <table style={s.table}>
               <thead>
@@ -2829,7 +4101,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
                       ...s.tr,
                       background: idx % 2 === 0 ? "white" : "#f8fafc",
                     }}
-                    // ── Row click removed — only View button opens report ──
                   >
                     <td style={s.td}>
                       <span
@@ -3023,8 +4294,6 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
               </tbody>
             </table>
           </div>
-
-          {/* Pagination */}
           {totalPages > 1 && (
             <div
               style={{
@@ -3115,18 +4384,18 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
           )}
         </>
       )}
-
       {viewSession && (
         <SessionReportModal
           sessionId={viewSession}
+          projectId={projectId}
           onClose={() => setViewSession(null)}
+          showToast={showToast}
         />
       )}
     </div>
   );
 }
 
-// Pagination button style helper
 const paginationBtn = (disabled) => ({
   minWidth: 32,
   height: 32,
@@ -3202,7 +4471,6 @@ function CostsTab({ projectId, showToast }) {
           color="#ef4444"
         />
       </div>
-
       {target > 0 && (
         <div style={s.progressCard}>
           <div
@@ -3258,7 +4526,6 @@ function CostsTab({ projectId, showToast }) {
           </div>
         </div>
       )}
-
       <div style={{ ...s.detailCard, marginBottom: 16 }}>
         <div style={s.detailCardTitle}>Session Breakdown</div>
         {[
@@ -3279,7 +4546,6 @@ function CostsTab({ projectId, showToast }) {
           </div>
         ))}
       </div>
-
       <div style={s.detailCard}>
         <div style={s.detailCardTitle}>Cost Breakdown</div>
         <div style={s.costNotice}>
@@ -3401,7 +4667,6 @@ export default function ProjectDetail() {
       setLoading(false);
     }
   };
-
   useEffect(() => {
     load();
   }, [id]);
@@ -3455,7 +4720,6 @@ export default function ProjectDetail() {
         })),
       };
       await api.patch(`/projects/${id}`, payload);
-      // Reload full project so computed fields (session_count, total_completes) are included
       const fresh = await api.get(`/projects/${id}`);
       setProject(fresh.data.project);
       setSurveys(fresh.data.surveys || payload.surveys);
@@ -3554,6 +4818,7 @@ export default function ProjectDetail() {
   const TABS = [
     { key: "overview", label: "Overview", icon: Eye },
     { key: "quota", label: "Quota", icon: Target },
+    { key: "scenarios", label: "Scenarios", icon: Zap },
     { key: "sessions", label: "Sessions", icon: Activity },
     { key: "costs", label: "Costs", icon: DollarSign },
     { key: "edit", label: "Edit", icon: Edit2 },
@@ -3596,7 +4861,6 @@ export default function ProjectDetail() {
               {label}
             </button>
           ))}
-          {/* Run Sessions — only visible when project is Active */}
           {project.status === "active" && (
             <button style={s.runBtn} onClick={() => setShowRunModal(true)}>
               <Zap size={15} /> Run Sessions
@@ -3643,9 +4907,9 @@ export default function ProjectDetail() {
             <StatCard
               label="URL Hits"
               value={project.session_count || 0}
+              sub="Total survey attempts"
               icon={Activity}
               color="#f59e0b"
-              sub="Total survey attempts"
             />
             <StatCard
               label="Completes"
@@ -3661,7 +4925,6 @@ export default function ProjectDetail() {
               color="#0891b2"
             />
           </div>
-
           {project.target_completes > 0 && (
             <div style={s.progressCard}>
               <div
@@ -3723,7 +4986,6 @@ export default function ProjectDetail() {
               </div>
             </div>
           )}
-
           <div style={s.twoCol}>
             <div style={s.detailCard}>
               <div style={s.detailCardTitle}>Project Details</div>
@@ -3767,7 +5029,6 @@ export default function ProjectDetail() {
               )}
             </div>
           </div>
-
           {project.description && (
             <div style={{ ...s.detailCard, marginTop: 16 }}>
               <div style={s.detailCardTitle}>Description</div>
@@ -3793,6 +5054,9 @@ export default function ProjectDetail() {
           targetCompletes={project.target_completes}
           showToast={showToast}
         />
+      )}
+      {activeTab === "scenarios" && (
+        <ScenariosTab projectId={id} showToast={showToast} />
       )}
       {activeTab === "sessions" && (
         <SessionsTab
