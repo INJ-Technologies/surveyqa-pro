@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../components/Layout";
 import api from "../api";
+import { useCountries } from "../hooks/useCountries";
 import {
   FolderKanban,
   Plus,
@@ -84,24 +85,7 @@ function SurveyCard({ survey, index, onChange, onRemove }) {
   const set = (k) => (val) => onChange(index, k, val);
   const setVal = (k) => (e) => onChange(index, k, e.target.value);
 
-  const countryOptions = [
-    { value: "IN", label: "🇮🇳 India" },
-    { value: "US", label: "🇺🇸 United States" },
-    { value: "GB", label: "🇬🇧 United Kingdom" },
-    { value: "AU", label: "🇦🇺 Australia" },
-    { value: "CA", label: "🇨🇦 Canada" },
-    { value: "DE", label: "🇩🇪 Germany" },
-    { value: "FR", label: "🇫🇷 France" },
-    { value: "SG", label: "🇸🇬 Singapore" },
-    { value: "AE", label: "🇦🇪 UAE" },
-    { value: "JP", label: "🇯🇵 Japan" },
-    { value: "BR", label: "🇧🇷 Brazil" },
-    { value: "MX", label: "🇲🇽 Mexico" },
-    { value: "ZA", label: "🇿🇦 South Africa" },
-    { value: "NG", label: "🇳🇬 Nigeria" },
-    { value: "ID", label: "🇮🇩 Indonesia" },
-    { value: "PH", label: "🇵🇭 Philippines" },
-  ];
+  const { asOptions: countryOptions, loading: countriesLoading } = useCountries();
 
   const languageOptions = [
     { value: "en", label: "English" },
@@ -163,12 +147,12 @@ function SurveyCard({ survey, index, onChange, onRemove }) {
           />
         </FullCol>
         <Select
-          label="Target Countries"
+          label={countriesLoading ? "Target Countries (loading...)" : `Target Countries (${countryOptions.length})`}
           isMulti
           options={countryOptions}
           value={normaliseArr(survey.countries)}
           onChange={set("countries")}
-          placeholder="Select countries..."
+          placeholder="Search and select countries..."
         />
         <Select
           label="Languages"
