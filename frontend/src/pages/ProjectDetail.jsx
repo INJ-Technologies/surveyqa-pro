@@ -1205,6 +1205,15 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
   const [steps, setSteps] = useState(scenario?.steps || []);
   const [saving, setSaving] = useState(false);
 
+    // Fetch full scenario (with steps) when editing
+  useEffect(() => {
+    if (isEdit && scenario?.id) {
+      api.get(`/scenarios/${scenario.id}`)
+        .then(res => setSteps(res.data.scenario?.steps || res.data.steps || []))
+        .catch(() => {});
+    }
+  }, []);
+
   const blankStep = () => ({
     when_type: "question_contains",
     when_value: "",
