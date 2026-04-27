@@ -873,6 +873,8 @@ const ACTIONS = [
   { value: "select_exact", label: "Select exact option(s)" },
   { value: "select_one_of", label: "Select one of option(s)" },
   { value: "select_not_in", label: "Avoid option(s), pick anything else" },
+  { value: "select_random", label: "Select randomly (pick any N options)" },
+  { value: "numeric_fill",  label: "Fill numeric / allocation field" },
   { value: "open_end", label: "Answer open-end field" },
   { value: "wait", label: "Wait N seconds then next" },
   { value: "skip", label: "Skip (click next without answering)" },
@@ -947,13 +949,15 @@ function StepBuilder({
 }) {
   const setF = (k, v) => onChange(index, { ...step, [k]: v });
   const needsWhenValue = !["page_has_timer", "always"].includes(step.when_type);
-  const needsActionValues = [
+    const needsActionValues = [
     "select_exact",
     "select_one_of",
     "select_not_in",
   ].includes(step.action);
-  const needsOpenEndMode = step.action === "open_end";
-  const needsDuration = step.action === "wait";
+  const needsMaxSelections = step.action === "select_random";
+  const needsNumericFill   = step.action === "numeric_fill";
+  const needsOpenEndMode   = step.action === "open_end";
+  const needsDuration      = step.action === "wait";
 
   const addActionValue = () =>
     setF("action_values", [...(step.action_values || []), ""]);
@@ -1188,6 +1192,68 @@ function StepBuilder({
               }
             />
           </div>
+        )}
+
+        {needsMaxSelections && (
+          <div>
+            <label style={scenLabel}>Max Selections</label>
+            <input
+              type="number"
+              min="1"
+              style={scenInput}
+              value={step.action_values?.[0] || ""}
+              placeholder="e.g. 2 (leave blank for exactly 1)"
+              onChange={(e) => setF("action_values", e.target.value ? [parseInt(e.target.value)] : [])}
+            />
+            <div style={{ fontSize: "0.7rem", color: "#94a3b8", fontFamily: FONT, marginTop: 4 }}>
+              Bot will randomly pick up to this many options. Leave blank to pick exactly 1.
+            </div>
+          </div>
+        )}
+
+        {needsNumericFill && (
+          <>
+            <div>
+              <label style={scenLabel}>Min Value</label>
+              <input
+                type="number"
+                style={scenInput}
+                value={step.action_values?.[0] ?? ""}
+                placeholder="e.g. 0"
+                onChange={(e) => {
+                  const vals = [...(step.action_values || [null, null])];
+                  vals[0] = e.target.value === "" ? null : parseFloat(e.target.value);
+                  setF("action_values", vals);
+                }}
+              />
+            </div>
+            <div>
+              <label style={scenLabel}>Max Value</label>
+              <input
+                type="number"
+                style={scenInput}
+                value={step.action_values?.[1] ?? ""}
+                placeholder="e.g. 100"
+                onChange={(e) => {
+                  const vals = [...(step.action_values || [null, null])];
+                  vals[1] = e.target.value === "" ? null : parseFloat(e.target.value);
+                  setF("action_values", vals);
+                }}
+              />
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={scenLabel}>Round to multiple of</label>
+              <input
+                style={scenInput}
+                value={step.action_text || ""}
+                placeholder="e.g. 5 — means values like 0, 5, 10, 15... (leave blank for any integer)"
+                onChange={(e) => setF("action_text", e.target.value)}
+              />
+              <div style={{ fontSize: "0.7rem", color: "#94a3b8", fontFamily: FONT, marginTop: 4 }}>
+                For allocation questions (must sum to 100%), set Min: 0, Max: 100, Round: 5 or 10.
+              </div>
+            </div>
+          </>
         )}
       </div>
     </div>
