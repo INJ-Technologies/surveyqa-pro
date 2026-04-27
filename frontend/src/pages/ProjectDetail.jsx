@@ -1204,14 +1204,15 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
   );
   const [steps, setSteps] = useState(scenario?.steps || []);
   const [saving, setSaving] = useState(false);
+  const [loadingSteps, setLoadingSteps] = useState(isEdit);
 
-    // Fetch full scenario (with steps) when editing
+  // Fetch full scenario (with steps) when editing
   useEffect(() => {
-    if (isEdit && scenario?.id) {
-      api.get(`/scenarios/${scenario.id}`)
-        .then(res => setSteps(res.data.scenario?.steps || res.data.steps || []))
-        .catch(() => {});
-    }
+    if (!isEdit || !scenario?.id) return;
+    api.get(`/scenarios/${scenario.id}`)
+      .then(res => setSteps(res.data.scenario?.steps || []))
+      .catch(() => {})
+      .finally(() => setLoadingSteps(false));
   }, []);
 
   const blankStep = () => ({
@@ -1421,7 +1422,11 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
               <Plus size={14} /> Add Step
             </button>
           </div>
-          {steps.length === 0 ? (
+          {loadingSteps ? (
+            <div style={{ padding: "40px 20px", textAlign: "center", fontFamily: FONT, fontSize: "0.85rem", color: "#94a3b8" }}>
+              Loading steps...
+            </div>
+          ) : steps.length === 0 ? (
             <div
               style={{
                 background: "#f8fafc",
@@ -2221,9 +2226,78 @@ function SessionReportModal({
 
   const handlePrint = () => {
     const w = window.open("", "_blank");
-    w.document.write(
-      `<html><head><title>Session Report — ${sessionId.slice(0, 8)}</title><style>body{font-family:Arial,sans-serif;font-size:13px;color:#1e293b;padding:24px}img{max-width:100%;border:1px solid #e2e8f0}.selected{background:#dcfce7;color:#166534;font-weight:600}@media print{body{padding:12px}}</style></head><body>${printRef.current?.innerHTML || ""}</body></html>`,
-    );
+    const allPagesHtml = pageEvents.map((ev, i) => {
+      const payload = ev.payload || {};
+      const questions = payload.questions || [];
+      const options = payload.options || [];
+      const isExit = payload.isExitPage;
+
+      let html = `<div style="page-break-after:always;margin-bottom:40px;border:1px solid #e2e8f0;border-radius:8px;padding:20px;">`;
+      html += `<h2 style="font-size:1rem;color:#1e293b;border-bottom:1px solid #e2e8f0;padding-bottom:8px;margin-bottom:16px;">
+        ${isExit ? "Exit Page" : `Page ${i + 1}`}
+        ${payload.timeTaken ? `<span style="font-size:0.8rem;color:#94a3b8;margin-left:8px;">⏱ ${fmtDuration(payload.timeTaken)}</span>` : ""}
+      </h2>`;
+
+      if (payload.url) {
+        html += `<div style="font-size:0.78rem;color:#2563eb;background:#f0f7ff;padding:6px 10px;border-radius:6px;margin-bottom:12px;word-break:break-all;">🔗 ${payload.url}</div>`;
+      }
+
+      html += `<div style="margin-bottom:16px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+        <div style="padding:6px 10px;background:#f8fafc;font-size:0.72rem;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Screenshot</div>
+        <img src="${API_BASE}/sessions/${session.id}/screenshot/page_${i + 1}.png" style="width:100%;display:block;" onerror="this.parentElement.style.display='none'" />
+      </div>`;
+
+      if (questions.length > 0) {
+        html += `<div style="margin-bottom:12px;"><div style="font-size:0.72rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:8px;">Questions Detected</div>`;
+        questions.forEach((q, qi) => {
+          html += `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-bottom:4px;font-size:0.85rem;color:#1e293b;"><span style="color:#94a3b8;">Q${qi + 1}.</span> ${q}</div>`;
+        });
+        html += `</div>`;
+      }
+
+      if (options.length > 0) {
+        html += `<div style="margin-bottom:12px;"><div style="font-size:0.72rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:8px;">All Options & Selection</div>`;
+        options.forEach(optGroup => {
+          html += `<div style="background:white;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:8px;">
+            <div style="margin-bottom:8px;"><span style="font-size:0.7rem;font-weight:700;background:#f0f7ff;color:#2563eb;border-radius:4px;padding:2px 8px;text-transform:uppercase;">${optGroup.type}</span></div>`;
+          if (optGroup.options) {
+            optGroup.options.forEach(opt => {
+              const isSel = optGroup.type === "checkbox" ? optGroup.selected?.includes(opt) : optGroup.selected === opt;
+              html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;margin-bottom:2px;background:${isSel ? "#f0fdf4" : "#f8fafc"};border:1px solid ${isSel ? "#86efac" : "#e2e8f0"};">
+                <span style="font-size:0.83rem;color:${isSel ? "#166534" : "#475569"};font-weight:${isSel ? "600" : "400"};flex:1;">${opt}</span>
+                ${isSel ? `<span style="font-size:0.7rem;background:#059669;color:white;border-radius:4px;padding:1px 6px;font-weight:700;">SELECTED</span>` : ""}
+              </div>`;
+            });
+          }
+          if ((optGroup.type === "open-end" || optGroup.type === "numeric") && optGroup.selected) {
+            html += `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:4px;padding:8px 12px;font-size:0.85rem;color:#166534;">${optGroup.selected}</div>`;
+          }
+          html += `</div>`;
+        });
+        html += `</div>`;
+      }
+
+      html += `</div>`;
+      return html;
+    }).join("");
+
+    w.document.write(`<html><head><title>Session Report — ${session.id.slice(0, 8)}</title>
+      <style>
+        body{font-family:Arial,sans-serif;font-size:13px;color:#1e293b;padding:24px;max-width:900px;margin:0 auto;}
+        h1{font-size:1.2rem;margin-bottom:4px;}
+        .meta{font-size:0.82rem;color:#64748b;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid #e2e8f0;}
+        @media print{body{padding:12px}}
+      </style></head><body>
+      <h1>Session Report — ${session.id.slice(0, 8)}</h1>
+      <div class="meta">
+        Outcome: <strong>${formatLabel(session.outcome)}</strong> &nbsp;|&nbsp;
+        Country: ${session.proxy_country || "—"} &nbsp;|&nbsp;
+        Duration: ${fmtDuration(session.total_duration_s)} &nbsp;|&nbsp;
+        Response ID: ${session.response_id || "—"} &nbsp;|&nbsp;
+        IP: ${getMetaEvent("ip_assigned")?.ip || "—"}
+      </div>
+      ${allPagesHtml || "<p>No page data recorded.</p>"}
+    </body></html>`);
     w.document.close();
     w.print();
   };
