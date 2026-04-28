@@ -2371,7 +2371,11 @@ function SessionReportModal({
   onClose,
   showToast = () => {},
 }) {
-  const [showSaveScenario, setShowSaveScenario] = useState(false);
+  const [showSaveScenario,    setShowSaveScenario]    = useState(false);
+  const [showCountryScenario, setShowCountryScenario] = useState(false);
+  const [countryScenarioPage, setCountryScenarioPage] = useState(null);
+  const [countryLogicExists,  setCountryLogicExists]  = useState(false);
+  const [countryLogicChecked, setCountryLogicChecked] = useState(false);
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activePageIdx, setActivePageIdx] = useState(0);
@@ -2385,6 +2389,14 @@ function SessionReportModal({
       .catch(() => setDetail(null))
       .finally(() => setLoading(false));
   }, [sessionId]);
+
+    useEffect(() => {
+    if (!projectId) return;
+    api.get(`/scenarios/country-logic/${projectId}`)
+      .then(res => setCountryLogicExists(res.data.exists))
+      .catch(() => {})
+      .finally(() => setCountryLogicChecked(true));
+  }, [projectId]);
 
   const getPageEvents = () => {
     if (!detail?.events) return [];
@@ -2800,15 +2812,22 @@ function SessionReportModal({
                           : "✅ Complete"}
                     </span>
                   )}
-                  <div
-                    style={{
-                      fontSize: "0.72rem",
-                      color: "#94a3b8",
-                      fontFamily: FONT,
-                    }}
-                  >
+                  <div style={{ fontSize: "0.72rem", color: "#94a3b8", fontFamily: FONT }}>
                     {fmtDuration(ev.payload?.timeTaken)}
                   </div>
+                  {!ev.payload?.isExitPage && (ev.payload?.questions?.length > 0) && !countryLogicExists && countryLogicChecked && (
+                    <button
+                      onClick={e => { e.stopPropagation(); setCountryScenarioPage({ index: i, payload: ev.payload }); setShowCountryScenario(true); }}
+                      style={{ display: "flex", alignItems: "center", gap: 3, background: "#f0f7ff", border: "1px solid #dbeafe", borderRadius: 5, padding: "3px 8px", cursor: "pointer", color: "#2563eb", fontSize: "0.68rem", fontFamily: FONT, fontWeight: 600, marginTop: 2, width: "100%" }}
+                    >
+                      <Globe size={10} /> Country Logic
+                    </button>
+                  )}
+                  {countryLogicExists && !ev.payload?.isExitPage && (ev.payload?.questions?.length > 0) && (
+                    <div style={{ fontSize: "0.65rem", color: "#059669", fontFamily: FONT, marginTop: 2, display: "flex", alignItems: "center", gap: 3 }}>
+                      <CheckCircle size={9} /> Country Logic set
+                    </div>
+                  )}
                   {ev.payload?.screenshot && (
                     <div
                       style={{
@@ -3457,13 +3476,13 @@ function SessionReportModal({
         </div>
       </div>
 
-      {showSaveScenario && (
-        <SaveAsScenarioModal
+      {showCountryScenario && countryScenarioPage && (
+        <SaveAsCountryScenarioModal
           sessionId={session.id}
-          sessionOutcome={session.outcome}
+          pagePayload={countryScenarioPage.payload}
           projectId={projectId || session.project_id}
-          onClose={() => setShowSaveScenario(false)}
-          onSaved={() => {}}
+          onClose={() => { setShowCountryScenario(false); setCountryScenarioPage(null); }}
+          onSaved={() => { setCountryLogicExists(true); }}
           showToast={showToast}
         />
       )}
