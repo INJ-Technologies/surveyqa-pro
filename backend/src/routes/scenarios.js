@@ -10,9 +10,11 @@ const {
   updateScenario,
   deleteScenario,
   duplicateScenario,
+  getScenariosByIds,
 } = require("../db/scenarios");
 const { getSessionDetail } = require("../db/sessions");
-const { getScenariosByIds } = require('../db/scenarios');
+const { pool } = require("../db/index");
+
 
 const router = express.Router();
 router.use(requireAuth);
