@@ -137,6 +137,64 @@ const loadSessionScenario = async (projectId, sessionId, scenarioIds = null) => 
   }
 };
 
+// ─── Apply country mapping ────────────────────────────────────────────────────
+const applyCountryMapping = async (page, scenario, proxyCountry, questionsOnPage) => {
+  if (!scenario?.country_mapping) return false;
+  const { questionContains, mappings } = scenario.country_mapping;
+  if (!questionContains || !mappings?.length) return false;
+
+  // Check if this page has the country question
+  const hasCountryQ = questionsOnPage.some(q =>
+    q.toLowerCase().includes(questionContains.toLowerCase())
+  );
+  if (!hasCountryQ) return false;
+
+  // Find mapping for this session's country
+  const mapping = mappings.find(m =>
+    m.country.toUpperCase() === (proxyCountry || '').toUpperCase()
+  );
+  if (!mapping) {
+    console.log(`[CountryLogic] No mapping for country "${proxyCountry}" — skipping`);
+    return false;
+  }
+
+  const answer = mapping.answer;
+  console.log(`[CountryLogic] Applying mapping: ${proxyCountry} → "${answer}"`);
+
+  // Try radio buttons
+  const radios = await page.locator('input[type="radio"]').all();
+  for (const radio of radios) {
+    const id = await radio.getAttribute('id').catch(() => null);
+    let labelText = '';
+    if (id) {
+      const lbl = page.locator(`label[for="${id}"]`);
+      labelText = (await lbl.textContent().catch(() => '')) || '';
+    }
+    if (!labelText) {
+      const parentLabel = await radio.locator('xpath=ancestor::label').textContent().catch(() => '');
+      labelText = parentLabel || '';
+    }
+    if (labelText.trim() === answer) {
+      await radio.click({ force: true }).catch(() => {});
+      console.log(`[CountryLogic] Clicked radio: "${answer}"`);
+      return true;
+    }
+  }
+
+  // Try select/dropdown
+  const selects = await page.locator('select').all();
+  for (const sel of selects) {
+    try {
+      await sel.selectOption({ label: answer });
+      console.log(`[CountryLogic] Selected dropdown: "${answer}"`);
+      return true;
+    } catch {}
+  }
+
+  console.warn(`[CountryLogic] Could not find option "${answer}" on page`);
+  return false;
+};
+
 // ─── Match a scenario step against the current page ───────────────────────────
 const matchStep = (step, questionsOnPage, pageNum) => {
   const { when_type, when_value } = step;
@@ -526,17 +584,24 @@ const processSession = async (job) => {
       // ── Capture options BEFORE answering ──────────────────────────────────
       const pageOptionsBefore = await capturePageOptions(page);
 
-      // ── Scenario step matching ────────────────────────────────────────────
+// ── Scenario step matching ────────────────────────────────────────────────
       let answersGiven = null;
       let scenarioStepUsed = null;
 
       if (scenario) {
-        const matchedStep = findMatchingStep(scenario, questionsOnPage, pageCount);
-        if (matchedStep) {
-          scenarioStepUsed = matchedStep.action;
-          answersGiven = await executeScenarioAction(page, matchedStep);
-          if (answersGiven === null) {
-            console.log(`[Scenario] Action "${matchedStep.action}" returned null — falling through to default`);
+        // Country mapping takes priority over regular steps
+        const countryHandled = await applyCountryMapping(page, scenario, proxyCountry, questionsOnPage);
+        if (countryHandled) {
+          scenarioStepUsed = 'country_mapping';
+          answersGiven = [{ type: 'country_mapping', country: proxyCountry }];
+        } else {
+          const matchedStep = findMatchingStep(scenario, questionsOnPage, pageCount);
+          if (matchedStep) {
+            scenarioStepUsed = matchedStep.action;
+            answersGiven = await executeScenarioAction(page, matchedStep);
+            if (answersGiven === null) {
+              console.log(`[Scenario] Action "${matchedStep.action}" returned null — falling through to default`);
+            }
           }
         }
       }

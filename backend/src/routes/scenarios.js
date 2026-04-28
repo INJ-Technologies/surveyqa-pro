@@ -12,6 +12,7 @@ const {
   duplicateScenario,
 } = require("../db/scenarios");
 const { getSessionDetail } = require("../db/sessions");
+const { getScenariosByIds } = require('../db/scenarios');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -264,5 +265,63 @@ router.delete(
     }
   },
 );
+
+// ─── GET /api/scenarios/country-logic/:projectId ──────────────────────────────
+// Check if a Country Logic scenario exists for a project
+router.get('/country-logic/:projectId', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, name, country_mapping FROM scenarios
+       WHERE project_id = $1 AND name = 'Country Logic' AND is_active = true
+       LIMIT 1`,
+      [req.params.projectId]
+    );
+    const scenario = result.rows[0] || null;
+    if (scenario && typeof scenario.country_mapping === 'string') {
+      scenario.country_mapping = JSON.parse(scenario.country_mapping);
+    }
+    res.json({ exists: !!scenario, scenario });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to check country logic' });
+  }
+});
+
+// ─── POST /api/scenarios/country-logic ────────────────────────────────────────
+// Create a Country Logic scenario from a session page
+router.post('/country-logic', requireRole('admin', 'project_manager'), async (req, res) => {
+  try {
+    const { projectId, questionContains, mappings } = req.body;
+    if (!projectId || !questionContains || !mappings?.length) {
+      return res.status(400).json({ error: 'projectId, questionContains and mappings are required' });
+    }
+    // Check if Country Logic already exists
+    const existing = await pool.query(
+      `SELECT id FROM scenarios WHERE project_id = $1 AND name = 'Country Logic'`,
+      [projectId]
+    );
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'Country Logic scenario already exists for this project. Delete it first.' });
+    }
+    const scenario = await createScenario({
+      projectId,
+      workspaceId: req.user.workspace_id,
+      name: 'Country Logic',
+      description: `Auto-generated country routing. Question: "${questionContains}"`,
+      expectedOutcome: 'any',
+      createdBy: req.user.id,
+      steps: [],
+      countryMapping: { questionContains, mappings },
+    });
+    // Add to project_scenarios
+    await pool.query(
+      `INSERT INTO project_scenarios (project_id, scenario_id, is_active) VALUES ($1, $2, true) ON CONFLICT DO NOTHING`,
+      [projectId, scenario.id]
+    );
+    res.json({ scenario });
+  } catch (err) {
+    console.error('Create country logic error:', err);
+    res.status(500).json({ error: 'Failed to create country logic scenario' });
+  }
+});
 
 module.exports = router;
