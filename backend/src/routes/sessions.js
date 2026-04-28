@@ -2,6 +2,7 @@
 const express = require("express");
 const path    = require("path");
 const fs      = require("fs");
+const { pool } = require('../db');
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { createSession, getLiveSessions, getSessionDetail } = require("../db/sessions");
 const { sessionQueue }   = require("../queues/index");
@@ -180,6 +181,21 @@ router.get("/:id", async (req, res) => {
   } catch (err) {
     console.error("Get session detail error:", err.message);
     res.status(500).json({ error: "Failed to fetch session detail" });
+  }
+});
+
+// ─── DELETE /api/sessions/project/:projectId/all — Admin only ─────────────────
+router.delete('/project/:projectId/all', requireRole('admin'), async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const result = await pool.query(
+      `DELETE FROM sessions WHERE project_id = $1 RETURNING id`,
+      [projectId]
+    );
+    res.json({ deleted: result.rowCount, message: `${result.rowCount} session(s) deleted` });
+  } catch (err) {
+    console.error('Clear sessions error:', err);
+    res.status(500).json({ error: 'Failed to clear sessions' });
   }
 });
 

@@ -3932,6 +3932,8 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
 // SESSIONS TAB
 // ══════════════════════════════════════════════════════════════════════════════
 function SessionsTab({ projectId, showToast, autoRefresh = false }) {
+  const currentUser = (() => { try { return JSON.parse(localStorage.getItem('squser') || '{}'); } catch { return {}; } })();
+  const isAdmin = currentUser?.role === 'admin';
   const [sessions, setSessions] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -3942,7 +3944,10 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
     outcome: "",
     country: "",
   });
+
   const [viewSession, setViewSession] = useState(null);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const PAGE_SIZE = 20;
@@ -3994,6 +3999,22 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
     }
     return () => clearInterval(intervalRef.current);
   }, [stats, autoRefresh]);
+
+  const handleClearSessions = async () => {
+    setClearing(true);
+    try {
+      const res = await api.delete(`/sessions/project/${projectId}/all`);
+      showToast(`${res.data.deleted} session(s) cleared ✓`);
+      setShowClearConfirm(false);
+      setSessions([]);
+      setStats(null);
+      setTotalCount(0);
+    } catch (err) {
+      showToast(err.response?.data?.error || "Failed to clear sessions", "error");
+    } finally {
+      setClearing(false);
+    }
+  };
 
   const setF = (k, v) => {
     setFilters((f) => ({ ...f, [k]: v }));
@@ -4125,6 +4146,27 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
           />{" "}
           {refreshing ? "Refreshing..." : "Refresh"}
         </button>
+        {isAdmin && sessions.length > 0 && (
+          <button
+            onClick={() => setShowClearConfirm(true)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              background: "#fef2f2",
+              border: "1.5px solid #fecaca",
+              borderRadius: 8,
+              padding: "8px 14px",
+              fontSize: "0.82rem",
+              fontWeight: 600,
+              cursor: "pointer",
+              color: "#dc2626",
+              fontFamily: FONT,
+            }}
+          >
+            <Trash2 size={13} /> Clear All Sessions
+          </button>
+        )}
         {hasFilters && (
           <button
             onClick={clearFilters}
@@ -4539,6 +4581,18 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
           projectId={projectId}
           onClose={() => setViewSession(null)}
           showToast={showToast}
+        />
+      )}
+      {showClearConfirm && (
+        <ConfirmModal
+          title="Clear All Sessions"
+          message={`This will permanently delete <strong>all ${totalCount} session(s)</strong> for this project, including all events, screenshots, and logs.<br/><br/><strong>This cannot be undone.</strong>`}
+          confirmLabel="Yes, Clear All Sessions"
+          confirmColor="#ef4444"
+          icon={Trash2}
+          onConfirm={handleClearSessions}
+          onCancel={() => setShowClearConfirm(false)}
+          loading={clearing}
         />
       )}
     </div>
