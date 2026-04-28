@@ -177,9 +177,6 @@ const applyCountryMapping = async (page, scenario, proxyCountry, questionsOnPage
 
   // Try radio buttons
   const radios = await page.locator('input[type="radio"]').all();
-
-  // Try radio buttons
-  const radios = await page.locator('input[type="radio"]').all();
   for (const radio of radios) {
     const id = await radio.getAttribute('id').catch(() => null);
     let labelText = '';
