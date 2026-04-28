@@ -61,7 +61,7 @@ const getSurveyForCountry = (surveys, countryCode) => {
 // ─── POST /api/sessions/trigger ───────────────────────────────────────────────
 router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res) => {
   try {
-    const { projectId, personaIds = [], count = 1, proxyCountry } = req.body;
+    const { projectId, personaIds = [], count = 1, proxyCountry, scenarioIds  } = req.body;
 
     if (!projectId)
       return res.status(400).json({ error: 'projectId is required' });
@@ -138,6 +138,7 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
       await sessionQueue.add('run-session', {
         sessionId:     session.id,
         projectId,
+        scenarioIds: scenarioIds || null,
         personaId,
         surveyUrl:     finalUrl,
         responseId,

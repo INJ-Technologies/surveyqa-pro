@@ -324,6 +324,10 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
   const [search, setSearch] = useState("");
   const [dropOpen, setDropOpen] = useState(false);
   const dropRef = useRef(null);
+  // ── Scenarios ──
+  const [allScenarios, setAllScenarios] = useState([]);
+  const [selectedScenarios, setSelectedScenarios] = useState([]);
+  const [scenariosLoading, setScenariosLoading] = useState(true);
 
   useEffect(() => {
     api
@@ -381,6 +385,20 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
     return Array.from({ length: n }, (_, i) => selected[i % selected.length]);
   };
 
+  useEffect(() => {
+    api
+      .get(`/scenarios/project/${project.id}`)
+      .then((res) => {
+        const active = (res.data.scenarios || []).filter(
+          (s) => s.project_active,
+        );
+        setAllScenarios(active);
+        setSelectedScenarios(active.map((s) => s.id)); // default: all active selected
+      })
+      .catch(() => {})
+      .finally(() => setScenariosLoading(false));
+  }, [project.id]);
+
   const handleRun = async () => {
     setError("");
     setLoading(true);
@@ -390,6 +408,7 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
         projectId: project.id,
         count: parseInt(count),
         proxyCountry: countryCodes.length > 0 ? countryCodes : null,
+        scenarioIds: selectedScenarios.length > 0 ? selectedScenarios : null,
       });
       onTriggered();
     } catch (err) {
@@ -781,6 +800,68 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
           </div>
         )}
 
+                {/* Scenario selector */}
+        <div style={{ marginBottom: 18 }}>
+          <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#374151", fontFamily: FONT, display: "block", marginBottom: 6 }}>
+            Scenarios{" "}
+            <span style={{ color: "#94a3b8", fontWeight: 400 }}>(select which to include — round-robin)</span>
+          </label>
+          {scenariosLoading ? (
+            <div style={{ fontSize: "0.82rem", color: "#94a3b8", fontFamily: FONT, padding: "8px 0" }}>Loading scenarios...</div>
+          ) : allScenarios.length === 0 ? (
+            <div style={{ fontSize: "0.82rem", color: "#94a3b8", fontFamily: FONT, background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 8, padding: "10px 14px" }}>
+              No active scenarios — sessions will use default random answering.
+            </div>
+          ) : (
+            <div style={{ background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+              {allScenarios.map((sc, i) => {
+                const isSel = selectedScenarios.includes(sc.id);
+                const oc = OUTCOME_COLORS[sc.expected_outcome] || OUTCOME_COLORS.any;
+                return (
+                  <div
+                    key={sc.id}
+                    onClick={() => setSelectedScenarios(prev =>
+                      isSel ? prev.filter(id => id !== sc.id) : [...prev, sc.id]
+                    )}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 10,
+                      padding: "10px 14px",
+                      borderBottom: i < allScenarios.length - 1 ? "1px solid #f1f5f9" : "none",
+                      cursor: "pointer",
+                      background: isSel ? "#f0f7ff" : "white",
+                    }}
+                    onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = "#f8fafc"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = isSel ? "#f0f7ff" : "white"; }}
+                  >
+                    <div style={{
+                      width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                      border: `2px solid ${isSel ? "#2563eb" : "#cbd5e1"}`,
+                      background: isSel ? "#2563eb" : "white",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>
+                      {isSel && <CheckCircle size={10} color="white" />}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "#1e293b", fontFamily: FONT }}>{sc.name}</div>
+                      {sc.description && <div style={{ fontSize: "0.72rem", color: "#94a3b8", fontFamily: FONT, marginTop: 1 }}>{sc.description.slice(0, 60)}{sc.description.length > 60 ? "…" : ""}</div>}
+                    </div>
+                    <span style={{ fontSize: "0.68rem", fontWeight: 700, background: oc.bg, color: oc.text, borderRadius: 4, padding: "2px 7px", whiteSpace: "nowrap", fontFamily: FONT }}>{sc.step_count || 0} steps</span>
+                  </div>
+                );
+              })}
+              <div style={{ padding: "8px 14px", borderTop: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: "0.72rem", color: "#94a3b8", fontFamily: FONT }}>
+                  {selectedScenarios.length} of {allScenarios.length} selected
+                </span>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => setSelectedScenarios(allScenarios.map(s => s.id))} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "0.72rem", color: "#2563eb", fontFamily: FONT, fontWeight: 600 }}>Select all</button>
+                  <button onClick={() => setSelectedScenarios([])} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "0.72rem", color: "#94a3b8", fontFamily: FONT }}>Clear</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
         <div
           style={{
             background: "#f0f7ff",
@@ -874,7 +955,7 @@ const ACTIONS = [
   { value: "select_one_of", label: "Select one of option(s)" },
   { value: "select_not_in", label: "Avoid option(s), pick anything else" },
   { value: "select_random", label: "Select randomly (pick any N options)" },
-  { value: "numeric_fill",  label: "Fill numeric / allocation field" },
+  { value: "numeric_fill", label: "Fill numeric / allocation field" },
   { value: "open_end", label: "Answer open-end field" },
   { value: "wait", label: "Wait N seconds then next" },
   { value: "skip", label: "Skip (click next without answering)" },
@@ -949,15 +1030,15 @@ function StepBuilder({
 }) {
   const setF = (k, v) => onChange(index, { ...step, [k]: v });
   const needsWhenValue = !["page_has_timer", "always"].includes(step.when_type);
-    const needsActionValues = [
+  const needsActionValues = [
     "select_exact",
     "select_one_of",
     "select_not_in",
   ].includes(step.action);
   const needsMaxSelections = step.action === "select_random";
-  const needsNumericFill   = step.action === "numeric_fill";
-  const needsOpenEndMode   = step.action === "open_end";
-  const needsDuration      = step.action === "wait";
+  const needsNumericFill = step.action === "numeric_fill";
+  const needsOpenEndMode = step.action === "open_end";
+  const needsDuration = step.action === "wait";
 
   const addActionValue = () =>
     setF("action_values", [...(step.action_values || []), ""]);
@@ -1203,10 +1284,23 @@ function StepBuilder({
               style={scenInput}
               value={step.action_values?.[0] || ""}
               placeholder="e.g. 2 (leave blank for exactly 1)"
-              onChange={(e) => setF("action_values", e.target.value ? [parseInt(e.target.value)] : [])}
+              onChange={(e) =>
+                setF(
+                  "action_values",
+                  e.target.value ? [parseInt(e.target.value)] : [],
+                )
+              }
             />
-            <div style={{ fontSize: "0.7rem", color: "#94a3b8", fontFamily: FONT, marginTop: 4 }}>
-              Bot will randomly pick up to this many options. Leave blank to pick exactly 1.
+            <div
+              style={{
+                fontSize: "0.7rem",
+                color: "#94a3b8",
+                fontFamily: FONT,
+                marginTop: 4,
+              }}
+            >
+              Bot will randomly pick up to this many options. Leave blank to
+              pick exactly 1.
             </div>
           </div>
         )}
@@ -1222,7 +1316,8 @@ function StepBuilder({
                 placeholder="e.g. 0"
                 onChange={(e) => {
                   const vals = [...(step.action_values || [null, null])];
-                  vals[0] = e.target.value === "" ? null : parseFloat(e.target.value);
+                  vals[0] =
+                    e.target.value === "" ? null : parseFloat(e.target.value);
                   setF("action_values", vals);
                 }}
               />
@@ -1236,7 +1331,8 @@ function StepBuilder({
                 placeholder="e.g. 100"
                 onChange={(e) => {
                   const vals = [...(step.action_values || [null, null])];
-                  vals[1] = e.target.value === "" ? null : parseFloat(e.target.value);
+                  vals[1] =
+                    e.target.value === "" ? null : parseFloat(e.target.value);
                   setF("action_values", vals);
                 }}
               />
@@ -1249,8 +1345,16 @@ function StepBuilder({
                 placeholder="e.g. 5 — means values like 0, 5, 10, 15... (leave blank for any integer)"
                 onChange={(e) => setF("action_text", e.target.value)}
               />
-              <div style={{ fontSize: "0.7rem", color: "#94a3b8", fontFamily: FONT, marginTop: 4 }}>
-                For allocation questions (must sum to 100%), set Min: 0, Max: 100, Round: 5 or 10.
+              <div
+                style={{
+                  fontSize: "0.7rem",
+                  color: "#94a3b8",
+                  fontFamily: FONT,
+                  marginTop: 4,
+                }}
+              >
+                For allocation questions (must sum to 100%), set Min: 0, Max:
+                100, Round: 5 or 10.
               </div>
             </div>
           </>
@@ -1275,8 +1379,9 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
   // Fetch full scenario (with steps) when editing
   useEffect(() => {
     if (!isEdit || !scenario?.id) return;
-    api.get(`/scenarios/${scenario.id}`)
-      .then(res => setSteps(res.data.scenario?.steps || []))
+    api
+      .get(`/scenarios/${scenario.id}`)
+      .then((res) => setSteps(res.data.scenario?.steps || []))
       .catch(() => {})
       .finally(() => setLoadingSteps(false));
   }, []);
@@ -1489,7 +1594,15 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
             </button>
           </div>
           {loadingSteps ? (
-            <div style={{ padding: "40px 20px", textAlign: "center", fontFamily: FONT, fontSize: "0.85rem", color: "#94a3b8" }}>
+            <div
+              style={{
+                padding: "40px 20px",
+                textAlign: "center",
+                fontFamily: FONT,
+                fontSize: "0.85rem",
+                color: "#94a3b8",
+              }}
+            >
               Loading steps...
             </div>
           ) : steps.length === 0 ? (
@@ -2292,62 +2405,71 @@ function SessionReportModal({
 
   const handlePrint = () => {
     const w = window.open("", "_blank");
-    const allPagesHtml = pageEvents.map((ev, i) => {
-      const payload = ev.payload || {};
-      const questions = payload.questions || [];
-      const options = payload.options || [];
-      const isExit = payload.isExitPage;
+    const allPagesHtml = pageEvents
+      .map((ev, i) => {
+        const payload = ev.payload || {};
+        const questions = payload.questions || [];
+        const options = payload.options || [];
+        const isExit = payload.isExitPage;
 
-      let html = `<div style="page-break-after:always;margin-bottom:40px;border:1px solid #e2e8f0;border-radius:8px;padding:20px;">`;
-      html += `<h2 style="font-size:1rem;color:#1e293b;border-bottom:1px solid #e2e8f0;padding-bottom:8px;margin-bottom:16px;">
+        let html = `<div style="page-break-after:always;margin-bottom:40px;border:1px solid #e2e8f0;border-radius:8px;padding:20px;">`;
+        html += `<h2 style="font-size:1rem;color:#1e293b;border-bottom:1px solid #e2e8f0;padding-bottom:8px;margin-bottom:16px;">
         ${isExit ? "Exit Page" : `Page ${i + 1}`}
         ${payload.timeTaken ? `<span style="font-size:0.8rem;color:#94a3b8;margin-left:8px;">⏱ ${fmtDuration(payload.timeTaken)}</span>` : ""}
       </h2>`;
 
-      if (payload.url) {
-        html += `<div style="font-size:0.78rem;color:#2563eb;background:#f0f7ff;padding:6px 10px;border-radius:6px;margin-bottom:12px;word-break:break-all;">🔗 ${payload.url}</div>`;
-      }
+        if (payload.url) {
+          html += `<div style="font-size:0.78rem;color:#2563eb;background:#f0f7ff;padding:6px 10px;border-radius:6px;margin-bottom:12px;word-break:break-all;">🔗 ${payload.url}</div>`;
+        }
 
-      html += `<div style="margin-bottom:16px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+        html += `<div style="margin-bottom:16px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
         <div style="padding:6px 10px;background:#f8fafc;font-size:0.72rem;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Screenshot</div>
         <img src="${API_BASE}/sessions/${session.id}/screenshot/page_${i + 1}.png" style="width:100%;display:block;" onerror="this.parentElement.style.display='none'" />
       </div>`;
 
-      if (questions.length > 0) {
-        html += `<div style="margin-bottom:12px;"><div style="font-size:0.72rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:8px;">Questions Detected</div>`;
-        questions.forEach((q, qi) => {
-          html += `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-bottom:4px;font-size:0.85rem;color:#1e293b;"><span style="color:#94a3b8;">Q${qi + 1}.</span> ${q}</div>`;
-        });
-        html += `</div>`;
-      }
+        if (questions.length > 0) {
+          html += `<div style="margin-bottom:12px;"><div style="font-size:0.72rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:8px;">Questions Detected</div>`;
+          questions.forEach((q, qi) => {
+            html += `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-bottom:4px;font-size:0.85rem;color:#1e293b;"><span style="color:#94a3b8;">Q${qi + 1}.</span> ${q}</div>`;
+          });
+          html += `</div>`;
+        }
 
-      if (options.length > 0) {
-        html += `<div style="margin-bottom:12px;"><div style="font-size:0.72rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:8px;">All Options & Selection</div>`;
-        options.forEach(optGroup => {
-          html += `<div style="background:white;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:8px;">
+        if (options.length > 0) {
+          html += `<div style="margin-bottom:12px;"><div style="font-size:0.72rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:8px;">All Options & Selection</div>`;
+          options.forEach((optGroup) => {
+            html += `<div style="background:white;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:8px;">
             <div style="margin-bottom:8px;"><span style="font-size:0.7rem;font-weight:700;background:#f0f7ff;color:#2563eb;border-radius:4px;padding:2px 8px;text-transform:uppercase;">${optGroup.type}</span></div>`;
-          if (optGroup.options) {
-            optGroup.options.forEach(opt => {
-              const isSel = optGroup.type === "checkbox" ? optGroup.selected?.includes(opt) : optGroup.selected === opt;
-              html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;margin-bottom:2px;background:${isSel ? "#f0fdf4" : "#f8fafc"};border:1px solid ${isSel ? "#86efac" : "#e2e8f0"};">
+            if (optGroup.options) {
+              optGroup.options.forEach((opt) => {
+                const isSel =
+                  optGroup.type === "checkbox"
+                    ? optGroup.selected?.includes(opt)
+                    : optGroup.selected === opt;
+                html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;margin-bottom:2px;background:${isSel ? "#f0fdf4" : "#f8fafc"};border:1px solid ${isSel ? "#86efac" : "#e2e8f0"};">
                 <span style="font-size:0.83rem;color:${isSel ? "#166534" : "#475569"};font-weight:${isSel ? "600" : "400"};flex:1;">${opt}</span>
                 ${isSel ? `<span style="font-size:0.7rem;background:#059669;color:white;border-radius:4px;padding:1px 6px;font-weight:700;">SELECTED</span>` : ""}
               </div>`;
-            });
-          }
-          if ((optGroup.type === "open-end" || optGroup.type === "numeric") && optGroup.selected) {
-            html += `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:4px;padding:8px 12px;font-size:0.85rem;color:#166534;">${optGroup.selected}</div>`;
-          }
+              });
+            }
+            if (
+              (optGroup.type === "open-end" || optGroup.type === "numeric") &&
+              optGroup.selected
+            ) {
+              html += `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:4px;padding:8px 12px;font-size:0.85rem;color:#166534;">${optGroup.selected}</div>`;
+            }
+            html += `</div>`;
+          });
           html += `</div>`;
-        });
+        }
+
         html += `</div>`;
-      }
+        return html;
+      })
+      .join("");
 
-      html += `</div>`;
-      return html;
-    }).join("");
-
-    w.document.write(`<html><head><title>Session Report — ${session.id.slice(0, 8)}</title>
+    w.document
+      .write(`<html><head><title>Session Report — ${session.id.slice(0, 8)}</title>
       <style>
         body{font-family:Arial,sans-serif;font-size:13px;color:#1e293b;padding:24px;max-width:900px;margin:0 auto;}
         h1{font-size:1.2rem;margin-bottom:4px;}
@@ -3931,9 +4053,20 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
 // ══════════════════════════════════════════════════════════════════════════════
 // SESSIONS TAB
 // ══════════════════════════════════════════════════════════════════════════════
-function SessionsTab({ projectId, showToast, autoRefresh = false, refreshTrigger = 0 }) {
-  const currentUser = (() => { try { return JSON.parse(localStorage.getItem('squser') || '{}'); } catch { return {}; } })();
-  const isAdmin = currentUser?.role === 'admin';
+function SessionsTab({
+  projectId,
+  showToast,
+  autoRefresh = false,
+  refreshTrigger = 0,
+}) {
+  const currentUser = (() => {
+    try {
+      return JSON.parse(localStorage.getItem("squser") || "{}");
+    } catch {
+      return {};
+    }
+  })();
+  const isAdmin = currentUser?.role === "admin";
   const [sessions, setSessions] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -3984,7 +4117,7 @@ function SessionsTab({ projectId, showToast, autoRefresh = false, refreshTrigger
         setRefreshing(false);
       }
     },
-    [projectId, filters, page, refreshTrigger]
+    [projectId, filters, page, refreshTrigger],
   );
 
   useEffect(() => {
@@ -4010,7 +4143,10 @@ function SessionsTab({ projectId, showToast, autoRefresh = false, refreshTrigger
       setStats(null);
       setTotalCount(0);
     } catch (err) {
-      showToast(err.response?.data?.error || "Failed to clear sessions", "error");
+      showToast(
+        err.response?.data?.error || "Failed to clear sessions",
+        "error",
+      );
     } finally {
       setClearing(false);
     }
@@ -5452,7 +5588,7 @@ export default function ProjectDetail() {
             setShowRunModal(false);
             setActiveTab("sessions");
             setAutoRefreshSessions(true);
-            setSessionRefreshTrigger(t => t + 1);
+            setSessionRefreshTrigger((t) => t + 1);
             setTimeout(() => setAutoRefreshSessions(false), 60000);
             showToast("Sessions queued successfully ✓");
           }}
