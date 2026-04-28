@@ -70,16 +70,6 @@ const createScenario = async ({ projectId, workspaceId, name, description, expec
     );
     const scenario = scenRes.rows[0];
 
-    const scenRes = await client.query(
-      `INSERT INTO scenarios (project_id, workspace_id, name, description, expected_outcome, source_session_id, is_active, created_by, country_mapping)
-       VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8)
-       RETURNING id`,
-      [projectId, workspaceId, name, description, expectedOutcome, sourceSessionId || null, createdBy, countryMapping ? JSON.stringify(countryMapping) : null]
-    );
-
-
-    const scenario = scenRes.rows[0];
-
     // Insert steps
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
