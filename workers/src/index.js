@@ -161,6 +161,23 @@ const applyCountryMapping = async (page, scenario, proxyCountry, questionsOnPage
   const answer = mapping.answer;
   console.log(`[CountryLogic] Applying mapping: ${proxyCountry} → "${answer}"`);
 
+    // Try clicking the visible label first (most reliable for Decipher styled radios)
+  try {
+    const allLabels = await page.locator('label').all();
+    for (const label of allLabels) {
+      const text = (await label.textContent().catch(() => '')) || '';
+      if (text.trim() === answer) {
+        await label.click().catch(() => {});
+        await page.waitForTimeout(500);
+        console.log(`[CountryLogic] Clicked label: "${answer}"`);
+        return true;
+      }
+    }
+  } catch {}
+
+  // Try radio buttons
+  const radios = await page.locator('input[type="radio"]').all();
+
   // Try radio buttons
   const radios = await page.locator('input[type="radio"]').all();
   for (const radio of radios) {
@@ -175,7 +192,11 @@ const applyCountryMapping = async (page, scenario, proxyCountry, questionsOnPage
       labelText = parentLabel || '';
     }
     if (labelText.trim() === answer) {
-      await radio.click({ force: true }).catch(() => {});
+      // Use check() first — properly fires change/click events Decipher JS needs
+      await radio.check().catch(async () => {
+        await radio.click({ force: true }).catch(() => {});
+      });
+      await page.waitForTimeout(500);
       console.log(`[CountryLogic] Clicked radio: "${answer}"`);
       return true;
     }
@@ -593,7 +614,10 @@ const processSession = async (job) => {
         const countryHandled = await applyCountryMapping(page, scenario, proxyCountry, questionsOnPage);
         if (countryHandled) {
           scenarioStepUsed = 'country_mapping';
-          answersGiven = [{ type: 'country_mapping', country: proxyCountry }];
+          // Still answer any OTHER questions on this page — country mapping only handles the country question
+          const otherAnswers = await answerPage(page, persona, readingSpeed).catch(() => []);
+          answersGiven = [{ type: 'country_mapping', country: proxyCountry }, ...(otherAnswers || [])];
+          questionCount++;
         } else {
           const matchedStep = findMatchingStep(scenario, questionsOnPage, pageCount);
           if (matchedStep) {

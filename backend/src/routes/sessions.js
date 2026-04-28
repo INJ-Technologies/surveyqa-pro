@@ -222,4 +222,45 @@ router.delete('/project/:projectId/all', requireRole('admin'), async (req, res) 
   }
 });
 
+// ─── POST /api/sessions/project/:projectId/stop ───────────────────────────────
+// Stop all queued and in-progress sessions
+router.post('/project/:projectId/stop', requireRole('admin', 'project_manager'), async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    // Mark all queued/in_progress sessions as stopped in DB
+    const result = await pool.query(
+      `UPDATE sessions
+       SET status = 'terminated', outcome = 'error',
+           error_log = 'Manually stopped by user',
+           updated_at = NOW()
+       WHERE project_id = $1
+         AND status IN ('queued', 'initialising', 'in_progress')
+       RETURNING id`,
+      [projectId]
+    );
+    const stoppedIds = result.rows.map(r => r.id);
+
+    // Drain all waiting jobs from the queue for this project
+    try {
+      const { queue } = require('../queues/index');
+      const waiting = await queue.getJobs(['waiting', 'delayed']);
+      let drained = 0;
+      for (const job of waiting) {
+        if (job.data?.projectId === projectId) {
+          await job.remove().catch(() => {});
+          drained++;
+        }
+      }
+      console.log(`[Stop] Drained ${drained} queued jobs for project ${projectId}`);
+    } catch (qErr) {
+      console.warn('[Stop] Could not drain queue jobs:', qErr.message);
+    }
+
+    res.json({ stopped: stoppedIds.length, message: `${stoppedIds.length} session(s) stopped` });
+  } catch (err) {
+    console.error('Stop sessions error:', err);
+    res.status(500).json({ error: 'Failed to stop sessions' });
+  }
+});
+
 module.exports = router;
