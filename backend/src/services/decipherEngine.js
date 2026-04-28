@@ -458,11 +458,11 @@ const capturePageOptions = async (page) => {
     return await page.evaluate(() => {
       const result = [];
 
-      const radioGroups = {};
+const radioGroups = {};
       document.querySelectorAll('input[type="radio"]').forEach(radio => {
         const name = radio.name;
         if (!name) return;
-        if (!radioGroups[name]) radioGroups[name] = { options: [], selected: null };
+        if (!radioGroups[name]) radioGroups[name] = { options: [], selected: null, rowLabel: null };
 
         const id = radio.id;
         let labelText = '';
@@ -478,10 +478,33 @@ const capturePageOptions = async (page) => {
 
         radioGroups[name].options.push(labelText);
         if (radio.checked) radioGroups[name].selected = labelText;
+
+        // ── Capture row label for grid/matrix questions ──
+        if (!radioGroups[name].rowLabel) {
+          const row = radio.closest('tr');
+          if (row) {
+            const firstCell = row.querySelector('td:first-child, th:first-child');
+            if (firstCell) {
+              const cellText = (firstCell.innerText || firstCell.textContent || '').trim();
+              if (cellText && cellText.length > 1) radioGroups[name].rowLabel = cellText;
+            }
+          }
+          // Decipher also uses div-based grids — try parent container label
+          if (!radioGroups[name].rowLabel) {
+            const rowDiv = radio.closest('[class*="row"],[class*="item"],[class*="grid-row"]');
+            if (rowDiv) {
+              const span = rowDiv.querySelector('span,label,div');
+              if (span) {
+                const t = (span.innerText || span.textContent || '').trim();
+                if (t && t.length > 1 && !t.match(/^\d+$/)) radioGroups[name].rowLabel = t;
+              }
+            }
+          }
+        }
       });
 
       Object.entries(radioGroups).forEach(([name, group]) => {
-        result.push({ type: 'radio', name, options: group.options, selected: group.selected });
+        result.push({ type: 'radio', name, options: group.options, selected: group.selected, rowLabel: group.rowLabel || null });
       });
 
       const checkboxes = document.querySelectorAll('input[type="checkbox"]');
