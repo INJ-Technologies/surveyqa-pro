@@ -4283,6 +4283,8 @@ function SessionsTab({
   const [viewSession, setViewSession] = useState(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [showStopConfirm,  setShowStopConfirm]  = useState(false);
+  const [stopping,         setStopping]         = useState(false);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const PAGE_SIZE = 20;
@@ -4351,6 +4353,20 @@ function SessionsTab({
       );
     } finally {
       setClearing(false);
+    }
+  };
+
+  const handleStopSessions = async () => {
+    setStopping(true);
+    try {
+      const res = await api.post(`/sessions/project/${projectId}/stop`);
+      showToast(`${res.data.stopped} session(s) stopped ✓`);
+      setShowStopConfirm(false);
+      load(true);
+    } catch (err) {
+      showToast(err.response?.data?.error || "Failed to stop sessions", "error");
+    } finally {
+      setStopping(false);
     }
   };
 
@@ -4526,28 +4542,25 @@ function SessionsTab({
             <X size={13} /> Clear Filters
           </button>
         )}
-        {parseInt(stats?.active) > 0 && (
-          <span
-            style={{
-              fontSize: "0.75rem",
-              color: "#2563eb",
-              fontFamily: FONT,
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-            }}
-          >
-            <span
+        {(parseInt(stats?.active) > 0 || parseInt(stats?.queued) > 0) && (
+          <>
+            <button
+              onClick={() => setShowStopConfirm(true)}
               style={{
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
-                background: "#2563eb",
-                display: "inline-block",
+                display: "flex", alignItems: "center", gap: 5,
+                background: "#fff7ed", border: "1.5px solid #fed7aa",
+                borderRadius: 8, padding: "8px 14px",
+                fontSize: "0.82rem", fontWeight: 600,
+                cursor: "pointer", color: "#c2410c", fontFamily: FONT,
               }}
-            />
-            Auto-refreshing
-          </span>
+            >
+              <StopCircle size={13} /> Stop All Running
+            </button>
+            <span style={{ fontSize: "0.75rem", color: "#2563eb", fontFamily: FONT, display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#2563eb", display: "inline-block" }} />
+              Auto-refreshing
+            </span>
+          </>
         )}
       </div>
 
@@ -4931,6 +4944,18 @@ function SessionsTab({
           onConfirm={handleClearSessions}
           onCancel={() => setShowClearConfirm(false)}
           loading={clearing}
+        />
+      )}
+      {showStopConfirm && (
+        <ConfirmModal
+          title="Stop All Running Sessions"
+          message={`This will immediately terminate all <strong>queued and in-progress sessions</strong> for this project.<br/><br/>Already-running browser sessions will be marked as stopped. <strong>This cannot be undone.</strong>`}
+          confirmLabel="Yes, Stop All Sessions"
+          confirmColor="#c2410c"
+          icon={StopCircle}
+          onConfirm={handleStopSessions}
+          onCancel={() => setShowStopConfirm(false)}
+          loading={stopping}
         />
       )}
     </div>
