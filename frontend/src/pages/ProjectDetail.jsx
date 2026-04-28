@@ -3931,7 +3931,7 @@ function QuotaTab({ projectId, targetCompletes, showToast }) {
 // ══════════════════════════════════════════════════════════════════════════════
 // SESSIONS TAB
 // ══════════════════════════════════════════════════════════════════════════════
-function SessionsTab({ projectId, showToast, autoRefresh = false }) {
+function SessionsTab({ projectId, showToast, autoRefresh = false, refreshTrigger = 0 }) {
   const currentUser = (() => { try { return JSON.parse(localStorage.getItem('squser') || '{}'); } catch { return {}; } })();
   const isAdmin = currentUser?.role === 'admin';
   const [sessions, setSessions] = useState([]);
@@ -3984,7 +3984,7 @@ function SessionsTab({ projectId, showToast, autoRefresh = false }) {
         setRefreshing(false);
       }
     },
-    [projectId, filters, page],
+    [projectId, filters, page, refreshTrigger]
   );
 
   useEffect(() => {
@@ -4825,6 +4825,7 @@ export default function ProjectDetail() {
   const [toast, setToast] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const [autoRefreshSessions, setAutoRefreshSessions] = useState(false);
+  const [sessionRefreshTrigger, setSessionRefreshTrigger] = useState(0);
 
   const showToast = (message, type = "success") => setToast({ message, type });
 
@@ -5266,6 +5267,7 @@ export default function ProjectDetail() {
           projectId={id}
           showToast={showToast}
           autoRefresh={autoRefreshSessions}
+          refreshTrigger={sessionRefreshTrigger}
         />
       )}
       {activeTab === "costs" && (
@@ -5450,6 +5452,7 @@ export default function ProjectDetail() {
             setShowRunModal(false);
             setActiveTab("sessions");
             setAutoRefreshSessions(true);
+            setSessionRefreshTrigger(t => t + 1);
             setTimeout(() => setAutoRefreshSessions(false), 60000);
             showToast("Sessions queued successfully ✓");
           }}
