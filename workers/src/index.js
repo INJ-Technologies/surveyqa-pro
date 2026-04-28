@@ -132,6 +132,29 @@ const loadSessionScenario = async (projectId, sessionId, scenarioIds = null) => 
   }
 };
 
+// ─── Load Country Logic for this project (always applied globally) ────────────
+const loadCountryLogic = async (projectId) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM scenarios
+       WHERE project_id = $1 AND name = 'Country Logic' AND is_active = true
+       LIMIT 1`,
+      [projectId]
+    );
+    if (!result.rows[0]) return null;
+    const row = result.rows[0];
+    const cm = typeof row.country_mapping === 'string'
+      ? JSON.parse(row.country_mapping)
+      : row.country_mapping;
+    if (!cm?.mappings?.length) return null;
+    console.log(`[CountryLogic] Loaded global mapping: ${cm.mappings.length} countries`);
+    return { ...row, country_mapping: cm };
+  } catch (e) {
+    console.warn('[CountryLogic] Could not load country logic:', e.message);
+    return null;
+  }
+};
+
 // ─── Apply country mapping ────────────────────────────────────────────────────
 const applyCountryMapping = async (page, scenario, proxyCountry, questionsOnPage) => {
   if (!scenario?.country_mapping) return false;
@@ -405,6 +428,7 @@ const processSession = async (job) => {
 
   // ── Load scenario for this session ─────────────────────────────────────────
   const scenario = await loadSessionScenario(projectId, sessionId, scenarioIds);
+  const countryLogic = await loadCountryLogic(projectId);
   if (scenario) {
     await logSessionEvent(sessionId, "scenario_assigned", {
       scenarioId:   scenario.id,
@@ -594,22 +618,24 @@ const processSession = async (job) => {
       let answersGiven = null;
       let scenarioStepUsed = null;
 
-      if (scenario) {
-        // Country mapping takes priority over regular steps
-        const countryHandled = await applyCountryMapping(page, scenario, proxyCountry, questionsOnPage);
+      // ── Country Logic always runs first (global, project-level) ──────────
+      if (countryLogic) {
+        const countryHandled = await applyCountryMapping(page, countryLogic, proxyCountry, questionsOnPage);
         if (countryHandled) {
-          // Country mapping handled — do NOT call answerPage as it would overwrite the selection
           scenarioStepUsed = 'country_mapping';
           answersGiven = [{ type: 'country_mapping', country: proxyCountry }];
           questionCount++;
-        } else {
-          const matchedStep = findMatchingStep(scenario, questionsOnPage, pageCount);
-          if (matchedStep) {
-            scenarioStepUsed = matchedStep.action;
-            answersGiven = await executeScenarioAction(page, matchedStep);
-            if (answersGiven === null) {
-              console.log(`[Scenario] Action "${matchedStep.action}" returned null — falling through to default`);
-            }
+        }
+      }
+
+      // ── Scenario steps run after country logic ────────────────────────────
+      if (answersGiven === null && scenario) {
+        const matchedStep = findMatchingStep(scenario, questionsOnPage, pageCount);
+        if (matchedStep) {
+          scenarioStepUsed = matchedStep.action;
+          answersGiven = await executeScenarioAction(page, matchedStep);
+          if (answersGiven === null) {
+            console.log(`[Scenario] Action "${matchedStep.action}" returned null — falling through to default`);
           }
         }
       }
