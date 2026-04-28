@@ -72,11 +72,9 @@ const buildAnswerSummary = (pageOptions, answersGiven) => {
 };
 
 // ─── Screenshot with retry ────────────────────────────────────────────────────
-// Takes screenshot, retrying once after a short wait if the page is mid-navigate.
 const takeScreenshot = async (page, screenshotPath, currentUrl) => {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      // If URL has changed from when we started the page, capture what we have
       await page.screenshot({ path: screenshotPath, fullPage: true, timeout: 8000 });
       return true;
     } catch (e) {
@@ -100,13 +98,11 @@ const loadSessionScenario = async (projectId, sessionId, scenarioIds = null) => 
   try {
     let scenarios = await getActiveScenarios(projectId);
     if (!scenarios || scenarios.length === 0) return null;
-    // Filter to only user-selected scenarios if provided
     if (scenarioIds && scenarioIds.length > 0) {
       scenarios = scenarios.filter(s => scenarioIds.includes(s.id));
     }
     if (scenarios.length === 0) return null;
 
-    // Determine session position for round-robin
     const posResult = await pool.query(
       `SELECT COUNT(*) AS pos FROM sessions
        WHERE project_id = $1 AND created_at <= (SELECT created_at FROM sessions WHERE id = $2)`,
@@ -115,7 +111,6 @@ const loadSessionScenario = async (projectId, sessionId, scenarioIds = null) => 
     const pos = Math.max(0, parseInt(posResult.rows[0]?.pos || 1) - 1);
     const scenario = scenarios[pos % scenarios.length];
 
-    // Ensure steps are loaded (getActiveScenarios may return them as json_agg)
     let steps = scenario.steps;
     if (!steps || !Array.isArray(steps) || steps.length === 0) {
       const stepsResult = await pool.query(
@@ -143,13 +138,11 @@ const applyCountryMapping = async (page, scenario, proxyCountry, questionsOnPage
   const { questionContains, mappings } = scenario.country_mapping;
   if (!questionContains || !mappings?.length) return false;
 
-  // Check if this page has the country question
   const hasCountryQ = questionsOnPage.some(q =>
     q.toLowerCase().includes(questionContains.toLowerCase())
   );
   if (!hasCountryQ) return false;
 
-  // Find mapping for this session's country
   const mapping = mappings.find(m =>
     m.country.toUpperCase() === (proxyCountry || '').toUpperCase()
   );
@@ -161,7 +154,7 @@ const applyCountryMapping = async (page, scenario, proxyCountry, questionsOnPage
   const answer = mapping.answer;
   console.log(`[CountryLogic] Applying mapping: ${proxyCountry} → "${answer}"`);
 
-    // Try clicking the visible label first (most reliable for Decipher styled radios)
+  // Strategy 1: click the visible label (most reliable for Decipher styled radios)
   try {
     const allLabels = await page.locator('label').all();
     for (const label of allLabels) {
@@ -175,7 +168,7 @@ const applyCountryMapping = async (page, scenario, proxyCountry, questionsOnPage
     }
   } catch {}
 
-  // Try radio buttons
+  // Strategy 2: find radio by associated label text
   const radios = await page.locator('input[type="radio"]').all();
   for (const radio of radios) {
     const id = await radio.getAttribute('id').catch(() => null);
@@ -189,7 +182,6 @@ const applyCountryMapping = async (page, scenario, proxyCountry, questionsOnPage
       labelText = parentLabel || '';
     }
     if (labelText.trim() === answer) {
-      // Use check() first — properly fires change/click events Decipher JS needs
       await radio.check().catch(async () => {
         await radio.click({ force: true }).catch(() => {});
       });
@@ -199,7 +191,7 @@ const applyCountryMapping = async (page, scenario, proxyCountry, questionsOnPage
     }
   }
 
-  // Try select/dropdown
+  // Strategy 3: select/dropdown
   const selects = await page.locator('select').all();
   for (const sel of selects) {
     try {
@@ -229,20 +221,16 @@ const matchStep = (step, questionsOnPage, pageNum) => {
 };
 
 // ─── Execute a scenario action ────────────────────────────────────────────────
-// Returns: array of answers (even empty) = action handled
-//          null = fall through to default random answering
 const executeScenarioAction = async (page, step) => {
   const { action, action_values, action_mode, action_text, duration_s } = step;
   const vals = Array.isArray(action_values) ? action_values.map(v => parseInt(v)) : [];
 
   try {
-    // ── skip: click next without answering ──────────────────────────────────
     if (action === "skip") {
       console.log("[Scenario] Action: skip");
       return [];
     }
 
-    // ── wait: pause N seconds ───────────────────────────────────────────────
     if (action === "wait") {
       const secs = duration_s || 5;
       console.log(`[Scenario] Action: wait ${secs}s`);
@@ -250,7 +238,6 @@ const executeScenarioAction = async (page, step) => {
       return [];
     }
 
-    // ── back: click back button ─────────────────────────────────────────────
     if (action === "back") {
       console.log("[Scenario] Action: back");
       const backBtn = page.locator('input[value="Back"], button:has-text("Back"), .back-button').first();
@@ -258,7 +245,6 @@ const executeScenarioAction = async (page, step) => {
       return [];
     }
 
-    // ── open_end: type specific text ────────────────────────────────────────
     if (action === "open_end") {
       if (action_mode === "specific" && action_text) {
         console.log(`[Scenario] Action: open_end specific → "${action_text.slice(0,40)}"`);
@@ -269,11 +255,9 @@ const executeScenarioAction = async (page, step) => {
         }
         return [{ type: "open-end", text: action_text }];
       }
-      // For persona_ai / predefined — fall through to default
       return null;
     }
 
-    // ── Helpers: get all radio groups in DOM order ───────────────────────────
     const getRadioGroups = async () => {
       const radios = await page.locator("input[type='radio']").all();
       const groupMap = {};
@@ -287,11 +271,9 @@ const executeScenarioAction = async (page, step) => {
       return { groupMap, groupOrder };
     };
 
-    // ── select_exact: click specific option position(s) ─────────────────────
     if (action === "select_exact") {
       const { groupMap, groupOrder } = await getRadioGroups();
       if (groupOrder.length === 0) return null;
-      // Apply to first group (single question)
       const options = groupMap[groupOrder[0]];
       for (const colIdx of vals) {
         const idx = colIdx - 1;
@@ -303,7 +285,6 @@ const executeScenarioAction = async (page, step) => {
       return [{ type: "radio", scenarioControlled: true }];
     }
 
-    // ── select_one_of: pick one randomly from listed positions ───────────────
     if (action === "select_one_of") {
       const { groupMap, groupOrder } = await getRadioGroups();
       if (groupOrder.length === 0) return null;
@@ -317,7 +298,6 @@ const executeScenarioAction = async (page, step) => {
       return [{ type: "radio", scenarioControlled: true }];
     }
 
-    // ── select_not_in: avoid listed positions, pick from the rest ───────────
     if (action === "select_not_in") {
       const { groupMap, groupOrder } = await getRadioGroups();
       if (groupOrder.length === 0) return null;
@@ -332,7 +312,6 @@ const executeScenarioAction = async (page, step) => {
       return [{ type: "radio", scenarioControlled: true }];
     }
 
-    // ── select_random: pick N random options ────────────────────────────────
     if (action === "select_random") {
       const { groupMap, groupOrder } = await getRadioGroups();
       if (groupOrder.length === 0) return null;
@@ -346,13 +325,11 @@ const executeScenarioAction = async (page, step) => {
       return [{ type: "radio", scenarioControlled: true }];
     }
 
-    // ── select_grid: per-row selections for matrix questions ─────────────────
     if (action === "select_grid") {
       let rowSelections = [];
       try { rowSelections = JSON.parse(action_text || "[]"); } catch {}
       const { groupMap, groupOrder } = await getRadioGroups();
       if (groupOrder.length === 0 || rowSelections.length === 0) return null;
-
       for (let ri = 0; ri < rowSelections.length && ri < groupOrder.length; ri++) {
         const sel = rowSelections[ri];
         const options = groupMap[groupOrder[ri]];
@@ -365,7 +342,6 @@ const executeScenarioAction = async (page, step) => {
       return [{ type: "grid", scenarioControlled: true }];
     }
 
-    // ── numeric_fill: fill numeric/allocation fields ─────────────────────────
     if (action === "numeric_fill") {
       const min = parseFloat(vals[0] ?? 0);
       const max = parseFloat(vals[1] ?? 100);
@@ -386,7 +362,7 @@ const executeScenarioAction = async (page, step) => {
 
   } catch (e) {
     console.warn(`[Scenario] Action "${action}" failed: ${e.message}`);
-    return null; // fall through to default
+    return null;
   }
 
   return null;
@@ -540,6 +516,20 @@ const processSession = async (job) => {
 
       console.log(`[Worker] Page ${pageCount}: ${currentUrl}`);
 
+      // ── Check if session was manually stopped ─────────────────────────────
+      try {
+        const statusCheck = await pool.query(
+          `SELECT status, error_log FROM sessions WHERE id = $1`,
+          [sessionId]
+        );
+        const currentStatus = statusCheck.rows[0]?.status;
+        if (currentStatus === 'error' && statusCheck.rows[0]?.error_log === 'Manually stopped by user') {
+          console.log(`[Worker] Session ${sessionId} was manually stopped — exiting`);
+          outcome = 'error';
+          break;
+        }
+      } catch {}
+
       // Check URL for outcome
       outcome = detectOutcome(currentUrl);
       if (outcome) {
@@ -592,17 +582,15 @@ const processSession = async (job) => {
         questionsOnPage = rawTexts.filter(t => !isHintText(t)).slice(0, 5);
       } catch {}
 
-      // ── Screenshot BEFORE answering (captures the clean page state) ───────
-      // This ensures we always get a screenshot even on timer pages that
-      // auto-advance before we can screenshot after answering.
+      // ── Screenshot BEFORE answering ───────────────────────────────────────
       const screenshotFilename = `page_${pageCount}.png`;
       const screenshotPath = path.join(sessionScreenshotsDir, screenshotFilename);
-      const screenshotBeforeTaken = await takeScreenshot(page, screenshotPath, currentUrl);
+      await takeScreenshot(page, screenshotPath, currentUrl);
 
       // ── Capture options BEFORE answering ──────────────────────────────────
       const pageOptionsBefore = await capturePageOptions(page);
 
-// ── Scenario step matching ────────────────────────────────────────────────
+      // ── Scenario step matching ────────────────────────────────────────────
       let answersGiven = null;
       let scenarioStepUsed = null;
 
@@ -610,8 +598,9 @@ const processSession = async (job) => {
         // Country mapping takes priority over regular steps
         const countryHandled = await applyCountryMapping(page, scenario, proxyCountry, questionsOnPage);
         if (countryHandled) {
+          // Country mapping handled — do NOT call answerPage as it would overwrite the selection
           scenarioStepUsed = 'country_mapping';
-          answersGiven = [{ type: 'country_mapping', country: proxyCountry }, ...(otherAnswers || [])];
+          answersGiven = [{ type: 'country_mapping', country: proxyCountry }];
           questionCount++;
         } else {
           const matchedStep = findMatchingStep(scenario, questionsOnPage, pageCount);
@@ -636,9 +625,7 @@ const processSession = async (job) => {
       // ── Capture options AFTER answering ───────────────────────────────────
       const pageOptionsAfter = await capturePageOptions(page);
 
-      // ── Screenshot AFTER answering (overwrites pre-answer screenshot) ─────
-      // This captures the selected state. If the page has auto-navigated
-      // (timer pages), the pre-answer screenshot already exists as fallback.
+      // ── Screenshot AFTER answering ────────────────────────────────────────
       await takeScreenshot(page, screenshotPath, currentUrl);
 
       const pageTime = Math.round((Date.now() - pageStart) / 1000);
