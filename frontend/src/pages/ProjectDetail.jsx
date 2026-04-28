@@ -4358,7 +4358,7 @@ function SessionsTab({
           value={filters.status}
           onChange={(e) => setF("status", e.target.value)}
         >
-          <option value="">All Statuses</option>
+          <option value="">All Status</option>
           {statusOpts.map((o) => (
             <option key={o} value={o}>
               {formatLabel(o)}

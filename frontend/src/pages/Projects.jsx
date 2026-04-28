@@ -582,7 +582,7 @@ export default function Projects() {
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
         >
-          <option value="">All Statuses</option>
+          <option value="">All Status</option>
           {activeStatuses.map((st) => (
             <option key={st} value={st}>
               {formatLabel(st)}
