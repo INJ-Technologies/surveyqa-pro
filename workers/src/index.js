@@ -611,8 +611,6 @@ const processSession = async (job) => {
         const countryHandled = await applyCountryMapping(page, scenario, proxyCountry, questionsOnPage);
         if (countryHandled) {
           scenarioStepUsed = 'country_mapping';
-          // Still answer any OTHER questions on this page — country mapping only handles the country question
-          const otherAnswers = await answerPage(page, persona, readingSpeed).catch(() => []);
           answersGiven = [{ type: 'country_mapping', country: proxyCountry }, ...(otherAnswers || [])];
           questionCount++;
         } else {
