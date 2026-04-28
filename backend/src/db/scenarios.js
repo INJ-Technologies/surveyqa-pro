@@ -55,18 +55,29 @@ const getScenarioById = async (scenarioId) => {
 };
 
 // ─── Create scenario ──────────────────────────────────────────────────────────
-const createScenario = async ({ projectId, workspaceId, name, description, expectedOutcome, sourceSessionId, createdBy, steps = [] }) => {
+const createScenario = async ({ projectId, workspaceId, name, description, expectedOutcome, sourceSessionId, createdBy, steps = [], countryMapping = null }) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     const scenRes = await client.query(
       `INSERT INTO scenarios
-         (project_id, workspace_id, name, description, expected_outcome, source_session_id, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (project_id, workspace_id, name, description, expected_outcome, source_session_id, created_by, country_mapping)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [projectId, workspaceId, name, description || null, expectedOutcome || 'any', sourceSessionId || null, createdBy]
+      [projectId, workspaceId, name, description || null, expectedOutcome || 'any', sourceSessionId || null, createdBy,
+       countryMapping ? JSON.stringify(countryMapping) : null]
     );
+    const scenario = scenRes.rows[0];
+
+    const scenRes = await client.query(
+      `INSERT INTO scenarios (project_id, workspace_id, name, description, expected_outcome, source_session_id, is_active, created_by, country_mapping)
+       VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8)
+       RETURNING id`,
+      [projectId, workspaceId, name, description, expectedOutcome, sourceSessionId || null, createdBy, countryMapping ? JSON.stringify(countryMapping) : null]
+    );
+
+
     const scenario = scenRes.rows[0];
 
     // Insert steps
@@ -108,7 +119,7 @@ const createScenario = async ({ projectId, workspaceId, name, description, expec
 };
 
 // ─── Update scenario ──────────────────────────────────────────────────────────
-const updateScenario = async (scenarioId, { name, description, expectedOutcome, isActive, steps }) => {
+const updateScenario = async (scenarioId, { name, description, expectedOutcome, isActive, steps, countryMapping }) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -118,9 +129,10 @@ const updateScenario = async (scenarioId, { name, description, expectedOutcome, 
          name             = COALESCE($2, name),
          description      = COALESCE($3, description),
          expected_outcome = COALESCE($4, expected_outcome),
+         country_mapping  = COALESCE($5, country_mapping),
          updated_at       = NOW()
        WHERE id = $1`,
-      [scenarioId, name, description, expectedOutcome]
+      [scenarioId, name, description, expectedOutcome, countryMapping !== undefined ? JSON.stringify(countryMapping) : null]
     );
 
     if (isActive !== undefined) {
@@ -200,6 +212,18 @@ const getActiveScenarios = async (projectId) => {
   return result.rows;
 };
 
+const getScenariosByIds = async (ids) => {
+  if (!ids || ids.length === 0) return [];
+  const result = await pool.query(
+    `SELECT * FROM scenarios WHERE id = ANY($1)`,
+    [ids]
+  );
+  return result.rows.map(r => ({
+    ...r,
+    country_mapping: typeof r.country_mapping === 'string' ? JSON.parse(r.country_mapping) : r.country_mapping,
+  }));
+};
+
 module.exports = {
   getProjectScenarios,
   getScenarioById,
@@ -208,4 +232,5 @@ module.exports = {
   deleteScenario,
   duplicateScenario,
   getActiveScenarios,
+  getScenariosByIds,
 };

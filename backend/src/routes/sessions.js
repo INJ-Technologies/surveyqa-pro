@@ -7,6 +7,7 @@ const { requireAuth, requireRole } = require("../middleware/auth");
 const { createSession, getLiveSessions, getSessionDetail } = require("../db/sessions");
 const { sessionQueue }   = require("../queues/index");
 const { getProjectById, getProjectSurveys } = require("../db/projects");
+const { getScenariosByIds } = require('../db/scenarios');
 
 const router = express.Router();
 
@@ -74,7 +75,7 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
     if (!surveys.length)
       return res.status(400).json({ error: 'No survey URLs configured' });
 
-    // ── Parse country list ────────────────────────────────────────────────────
+// ── Parse country list ────────────────────────────────────────────────────
     let countryList = [];
     if (Array.isArray(proxyCountry)) {
       countryList = proxyCountry.map(c => c.trim().toUpperCase()).filter(Boolean);
@@ -83,6 +84,27 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
         .split(/[,\s]+/)
         .map(c => c.trim().toUpperCase())
         .filter(Boolean);
+    }
+
+    // ── Country Logic filter — restrict to mapped countries only ─────────────
+    if (scenarioIds && scenarioIds.length > 0) {
+      try {
+        const selectedScenarios = await getScenariosByIds(scenarioIds);
+        const countryLogic = selectedScenarios.find(s =>
+          s.name === 'Country Logic' && s.country_mapping?.mappings?.length > 0
+        );
+        if (countryLogic) {
+          const mappedCountries = countryLogic.country_mapping.mappings.map(m => m.country.toUpperCase());
+          if (countryList.length > 0) {
+            countryList = countryList.filter(c => mappedCountries.includes(c.toUpperCase()));
+          } else {
+            countryList = mappedCountries;
+          }
+          console.log(`[Trigger] Country Logic applied — allowed: ${countryList.join(', ')}`);
+        }
+      } catch (e) {
+        console.warn('[Trigger] Could not apply country logic:', e.message);
+      }
     }
 
     // Fall back to countries from all surveys if none explicitly provided
