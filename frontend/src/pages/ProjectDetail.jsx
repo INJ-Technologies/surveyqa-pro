@@ -1376,6 +1376,26 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
   const [saving, setSaving] = useState(false);
   const [loadingSteps, setLoadingSteps] = useState(isEdit);
 
+  const isCountryLogic = scenario?.name === 'Country Logic';
+  const [countryMapping, setCountryMapping] = useState(scenario?.country_mapping || null);
+  const [cmQuestionContains, setCmQuestionContains] = useState(scenario?.country_mapping?.questionContains || '');
+  const [cmMappings, setCmMappings] = useState(scenario?.country_mapping?.mappings || []);
+  const [cmOptions, setCmOptions] = useState([]);
+
+  // Load full country_mapping when editing Country Logic
+  useEffect(() => {
+    if (!isEdit || !scenario?.id || !isCountryLogic) return;
+    api.get(`/scenarios/${scenario.id}`)
+      .then(res => {
+        const cm = res.data.scenario?.country_mapping;
+        if (cm) {
+          setCmQuestionContains(cm.questionContains || '');
+          setCmMappings(cm.mappings || []);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Fetch full scenario (with steps) when editing
   useEffect(() => {
     if (!isEdit || !scenario?.id) return;
@@ -1426,6 +1446,7 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
           description,
           expectedOutcome,
           steps,
+          ...(isCountryLogic ? { countryMapping: { questionContains: cmQuestionContains, mappings: cmMappings } } : {}),
         });
       } else {
         await api.post("/scenarios", {
@@ -1593,6 +1614,40 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
               <Plus size={14} /> Add Step
             </button>
           </div>
+          {/* Country Logic mapping section */}
+          {isCountryLogic && (
+            <div style={{ marginBottom: 24, background: "#f0f7ff", border: "1.5px solid #dbeafe", borderRadius: 12, padding: 20 }}>
+              <div style={{ fontFamily: FONT, fontSize: "0.9rem", fontWeight: 700, color: "#1e3a5f", marginBottom: 4 }}>Country Answer Mapping</div>
+              <div style={{ fontFamily: FONT, fontSize: "0.75rem", color: "#64748b", marginBottom: 14 }}>Maps each project country to the correct answer on the country question.</div>
+              <div style={{ marginBottom: 14 }}>
+                <label style={scenLabel}>Question contains text</label>
+                <input style={scenInput} value={cmQuestionContains} onChange={e => setCmQuestionContains(e.target.value)} placeholder="e.g. country of residence" />
+              </div>
+              <label style={scenLabel}>Country → Answer</label>
+              <div style={{ border: "1.5px solid #dbeafe", borderRadius: 8, overflow: "hidden" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", background: "#dbeafe" }}>
+                  <div style={{ padding: "7px 12px", fontSize: "0.72rem", fontWeight: 700, color: "#1e3a5f", fontFamily: FONT }}>COUNTRY</div>
+                  <div style={{ padding: "7px 12px", fontSize: "0.72rem", fontWeight: 700, color: "#1e3a5f", fontFamily: FONT }}>ANSWER TEXT</div>
+                </div>
+                {cmMappings.map((m, i) => (
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "120px 1fr", borderTop: "1px solid #dbeafe", alignItems: "center" }}>
+                    <div style={{ padding: "8px 12px", fontFamily: "monospace", fontSize: "0.82rem", fontWeight: 700, color: "#1e3a5f", background: "#eff6ff" }}>{m.country}</div>
+                    <div style={{ padding: "6px 10px" }}>
+                      <input
+                        style={{ ...scenInput, margin: 0 }}
+                        value={m.answer}
+                        onChange={e => setCmMappings(prev => prev.map((r, ri) => ri === i ? { ...r, answer: e.target.value } : r))}
+                        placeholder="Exact option text from survey"
+                      />
+                    </div>
+                  </div>
+                ))}
+                {cmMappings.length === 0 && (
+                  <div style={{ padding: "12px 14px", fontFamily: FONT, fontSize: "0.82rem", color: "#94a3b8" }}>No country mappings found.</div>
+                )}
+              </div>
+            </div>
+          )}
           {loadingSteps ? (
             <div
               style={{
@@ -2125,6 +2180,7 @@ function ScenariosTab({ projectId, showToast }) {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [editScenario, setEditScenario] = useState(null);
+  const [countryLogicScenario, setCountryLogicScenario] = useState(null);
 
   const load = async () => {
     try {
@@ -2139,6 +2195,11 @@ function ScenariosTab({ projectId, showToast }) {
   useEffect(() => {
     load();
   }, [projectId]);
+
+  useEffect(() => {
+    const cl = scenarios.find(s => s.name === 'Country Logic');
+    setCountryLogicScenario(cl || null);
+  }, [scenarios]);
 
   const handleDelete = async (id, name) => {
     if (!window.confirm(`Delete scenario "${name}"? This cannot be undone.`))
@@ -2198,9 +2259,19 @@ function ScenariosTab({ projectId, showToast }) {
             round-robin across sessions.
           </p>
         </div>
-        <button style={s.primaryBtn} onClick={() => setShowCreate(true)}>
-          <Plus size={16} /> New Scenario
-        </button>
+        <div style={{ display: "flex", gap: 10 }}>
+          {countryLogicScenario && (
+            <button
+              onClick={() => setEditScenario(countryLogicScenario)}
+              style={{ display: "flex", alignItems: "center", gap: 6, background: "#f0f7ff", border: "1.5px solid #dbeafe", borderRadius: 8, padding: "9px 16px", fontSize: "0.88rem", fontWeight: 600, cursor: "pointer", color: "#1e3a5f", fontFamily: FONT }}
+            >
+              <Globe size={15} /> Edit Country Logic
+            </button>
+          )}
+          <button style={s.primaryBtn} onClick={() => setShowCreate(true)}>
+            <Plus size={16} /> New Scenario
+          </button>
+        </div>
       </div>
 
       {scenarios.length === 0 ? (
@@ -3584,6 +3655,17 @@ function SessionReportModal({
           projectId={projectId || session.project_id}
           onClose={() => { setShowCountryScenario(false); setCountryScenarioPage(null); }}
           onSaved={() => { setCountryLogicExists(true); }}
+          showToast={showToast}
+        />
+      )}
+
+      {showSaveScenario && (
+        <SaveAsScenarioModal
+          sessionId={session.id}
+          sessionOutcome={session.outcome}
+          projectId={projectId || session.project_id}
+          onClose={() => setShowSaveScenario(false)}
+          onSaved={() => {}}
           showToast={showToast}
         />
       )}
