@@ -2018,6 +2018,107 @@ function SaveAsScenarioModal({
   );
 }
 
+// ─── Save as Country Scenario Modal ──────────────────────────────────────────
+function SaveAsCountryScenarioModal({ sessionId, pagePayload, projectId, onClose, onSaved, showToast }) {
+  const questionText  = pagePayload?.questions?.[0] || "";
+  const pageOptions   = pagePayload?.options || [];
+  const allOptionTexts = [...new Set(pageOptions.flatMap(og => og.options || []).filter(Boolean))];
+
+  const [questionContains, setQuestionContains] = useState(questionText);
+  const [mappings,  setMappings]  = useState([]);
+  const [saving,    setSaving]    = useState(false);
+
+  useEffect(() => {
+    api.get(`/projects/${projectId}`)
+      .then(res => {
+        const svs = res.data.surveys || [];
+        const codes = [...new Set(svs.flatMap(sv =>
+          Array.isArray(sv.countries)
+            ? sv.countries
+            : (sv.countries || '').split(',').map(c => c.trim()).filter(Boolean)
+        ))];
+        setMappings(codes.map(c => ({ country: c, answer: '' })));
+      })
+      .catch(() => {});
+  }, [projectId]);
+
+  const setAnswer = (idx, val) =>
+    setMappings(prev => prev.map((m, i) => i === idx ? { ...m, answer: val } : m));
+
+  const handleSave = async () => {
+    if (!questionContains.trim()) { showToast("Question text is required", "error"); return; }
+    const incomplete = mappings.filter(m => !m.answer);
+    if (incomplete.length > 0) { showToast("All countries must have an answer selected", "error"); return; }
+    setSaving(true);
+    try {
+      await api.post('/scenarios/country-logic', { projectId, questionContains, mappings });
+      showToast("Country Logic scenario created ✓");
+      onSaved();
+      onClose();
+    } catch (err) {
+      showToast(err.response?.data?.error || "Failed to create Country Logic", "error");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div style={s.overlay}>
+      <div style={{ background: "white", borderRadius: 16, width: "100%", maxWidth: 560, maxHeight: "88vh", display: "flex", flexDirection: "column", boxShadow: "0 25px 50px rgba(0,0,0,0.3)" }}>
+        <div style={{ padding: "22px 26px 0", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <h2 style={{ fontFamily: FONT, fontSize: "1.1rem", fontWeight: 700, color: "#1e293b", margin: "0 0 4px" }}>Save as Country Logic</h2>
+            <p style={{ fontFamily: FONT, fontSize: "0.8rem", color: "#64748b", margin: 0 }}>Maps each project country to the correct survey answer for this question.</p>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#64748b" }}><X size={20} /></button>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "18px 26px" }}>
+          <div style={{ marginBottom: 14 }}>
+            <label style={scenLabel}>Scenario Name</label>
+            <div style={{ ...scenInput, background: "#f8fafc", color: "#94a3b8", cursor: "not-allowed", display: "flex", alignItems: "center" }}>Country Logic</div>
+          </div>
+          <div style={{ marginBottom: 18 }}>
+            <label style={scenLabel}>Question contains text *</label>
+            <input style={scenInput} value={questionContains} onChange={e => setQuestionContains(e.target.value)} placeholder="e.g. country of residence" />
+            <div style={{ fontSize: "0.7rem", color: "#94a3b8", fontFamily: FONT, marginTop: 4 }}>Bot uses this to identify the country question on any page.</div>
+          </div>
+          <div>
+            <label style={scenLabel}>Country Answer Mapping</label>
+            <div style={{ fontSize: "0.72rem", color: "#94a3b8", fontFamily: FONT, marginBottom: 10 }}>
+              Select the exact option the bot should choose for each country. Sessions from unmapped countries will naturally terminate via survey logic.
+            </div>
+            {mappings.length === 0 ? (
+              <div style={{ padding: 16, background: "#f8fafc", borderRadius: 8, textAlign: "center", fontSize: "0.82rem", color: "#94a3b8", fontFamily: FONT }}>Loading project countries...</div>
+            ) : (
+              <div style={{ border: "1.5px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "100px 1fr", background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+                  <div style={{ padding: "8px 14px", fontSize: "0.72rem", fontWeight: 700, color: "#94a3b8", fontFamily: FONT, textTransform: "uppercase" }}>Country</div>
+                  <div style={{ padding: "8px 14px", fontSize: "0.72rem", fontWeight: 700, color: "#94a3b8", fontFamily: FONT, textTransform: "uppercase" }}>Select option containing</div>
+                </div>
+                {mappings.map((m, i) => (
+                  <div key={m.country} style={{ display: "grid", gridTemplateColumns: "100px 1fr", borderBottom: i < mappings.length - 1 ? "1px solid #f1f5f9" : "none", alignItems: "center" }}>
+                    <div style={{ padding: "10px 14px", fontFamily: "monospace", fontSize: "0.82rem", fontWeight: 700, color: "#1e3a5f", background: "#f0f7ff" }}>{m.country}</div>
+                    <div style={{ padding: "8px 12px" }}>
+                      <select style={{ ...scenInput, margin: 0 }} value={m.answer} onChange={e => setAnswer(i, e.target.value)}>
+                        <option value="">— select option —</option>
+                        {allOptionTexts.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        <div style={{ padding: "14px 26px", borderTop: "1px solid #f1f5f9", display: "flex", justifyContent: "flex-end", gap: 12 }}>
+          <button style={s.cancelBtnFull} onClick={onClose}>Cancel</button>
+          <button onClick={handleSave} disabled={saving || mappings.length === 0} style={{ ...s.saveBtn, opacity: (saving || mappings.length === 0) ? 0.7 : 1 }}>
+            <Save size={16} /> {saving ? "Creating..." : "Create Country Logic"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Scenarios Tab ────────────────────────────────────────────────────────────
 function ScenariosTab({ projectId, showToast }) {
   const [scenarios, setScenarios] = useState([]);
