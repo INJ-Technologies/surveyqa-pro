@@ -72,18 +72,62 @@ const buildAnswerSummary = (pageOptions, answersGiven) => {
 };
 
 // ─── Screenshot with retry ────────────────────────────────────────────────────
-const takeScreenshot = async (page, screenshotPath, currentUrl) => {
+const takeScreenshot = async (page, screenshotPath) => {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       await page.screenshot({ path: screenshotPath, fullPage: true, timeout: 8000 });
       return true;
     } catch (e) {
-      if (attempt < 3) {
-        await new Promise(r => setTimeout(r, 1000));
-      } else {
-        console.warn(`[Worker] Screenshot failed after 3 attempts: ${e.message}`);
-        return false;
+      if (attempt < 3) await new Promise(r => setTimeout(r, 1000));
+      else console.warn(`[Worker] Screenshot failed: ${e.message}`);
+    }
+  }
+  return false;
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CLICK HELPERS — label-first strategy so Decipher JS events fire correctly
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Click a radio option by trying: associated label → check() → force click
+const clickRadioOption = async (page, radio) => {
+  try {
+    const id = await radio.getAttribute('id').catch(() => null);
+    if (id) {
+      const lbl = page.locator(`label[for="${id}"]`);
+      const visible = await lbl.isVisible().catch(() => false);
+      if (visible) {
+        await lbl.click();
+        await page.waitForTimeout(200);
+        return;
       }
+    }
+    // Try parent label
+    const parentLbl = radio.locator('xpath=ancestor::label').first();
+    const parentVisible = await parentLbl.isVisible().catch(() => false);
+    if (parentVisible) {
+      await parentLbl.click();
+      await page.waitForTimeout(200);
+      return;
+    }
+    // Fall back to check()
+    await radio.check();
+    await page.waitForTimeout(200);
+  } catch {
+    await radio.click({ force: true }).catch(() => {});
+    await page.waitForTimeout(200);
+  }
+};
+
+// Click a visible text label on the page (for country mapping)
+const clickLabelByText = async (page, text) => {
+  const allLabels = await page.locator('label').all();
+  for (const label of allLabels) {
+    const t = (await label.textContent().catch(() => '')) || '';
+    if (t.trim() === text) {
+      await label.click().catch(() => {});
+      await page.waitForTimeout(400);
+      return true;
     }
   }
   return false;
@@ -93,54 +137,11 @@ const takeScreenshot = async (page, screenshotPath, currentUrl) => {
 // SCENARIO ENGINE
 // ══════════════════════════════════════════════════════════════════════════════
 
-// ─── Load the scenario assigned to this session (round-robin) ─────────────────
-const loadSessionScenario = async (projectId, sessionId, scenarioIds = null) => {
-  try {
-    let scenarios = await getActiveScenarios(projectId);
-    if (!scenarios || scenarios.length === 0) return null;
-    if (scenarioIds && scenarioIds.length > 0) {
-      scenarios = scenarios.filter(s => scenarioIds.includes(s.id));
-    }
-    // Country Logic is applied globally — exclude from round-robin assignment
-    scenarios = scenarios.filter(s => s.name !== 'Country Logic');
-    if (scenarios.length === 0) return null;
-
-    const posResult = await pool.query(
-      `SELECT COUNT(*) AS pos FROM sessions
-       WHERE project_id = $1 AND created_at <= (SELECT created_at FROM sessions WHERE id = $2)`,
-      [projectId, sessionId]
-    );
-    const pos = Math.max(0, parseInt(posResult.rows[0]?.pos || 1) - 1);
-    const scenario = scenarios[pos % scenarios.length];
-
-    let steps = scenario.steps;
-    if (!steps || !Array.isArray(steps) || steps.length === 0) {
-      const stepsResult = await pool.query(
-        `SELECT * FROM scenario_steps WHERE scenario_id = $1 ORDER BY step_order ASC`,
-        [scenario.id]
-      );
-      steps = stepsResult.rows.map(r => ({
-        ...r,
-        conditions:    typeof r.conditions    === "string" ? JSON.parse(r.conditions)    : r.conditions    || [],
-        action_values: typeof r.action_values === "string" ? JSON.parse(r.action_values) : r.action_values || [],
-      }));
-    }
-
-    console.log(`[Scenario] Assigned: "${scenario.name}" (${steps.length} steps) → session ${sessionId.slice(0,8)}`);
-    return { ...scenario, steps };
-  } catch (e) {
-    console.warn("[Scenario] Could not load scenario:", e.message);
-    return null;
-  }
-};
-
-// ─── Load Country Logic for this project (always applied globally) ────────────
+// ─── Load Country Logic globally (always applied, not round-robin) ────────────
 const loadCountryLogic = async (projectId) => {
   try {
     const result = await pool.query(
-      `SELECT * FROM scenarios
-       WHERE project_id = $1 AND name = 'Country Logic' AND is_active = true
-       LIMIT 1`,
+      `SELECT * FROM scenarios WHERE project_id = $1 AND name = 'Country Logic' AND is_active = true LIMIT 1`,
       [projectId]
     );
     if (!result.rows[0]) return null;
@@ -149,18 +150,63 @@ const loadCountryLogic = async (projectId) => {
       ? JSON.parse(row.country_mapping)
       : row.country_mapping;
     if (!cm?.mappings?.length) return null;
-    console.log(`[CountryLogic] Loaded global mapping: ${cm.mappings.length} countries`);
+    console.log(`[CountryLogic] Loaded — question: "${cm.questionContains}", countries: ${cm.mappings.map(m => m.country).join(', ')}`);
     return { ...row, country_mapping: cm };
   } catch (e) {
-    console.warn('[CountryLogic] Could not load country logic:', e.message);
+    console.warn('[CountryLogic] Load failed:', e.message);
+    return null;
+  }
+};
+
+// ─── Load the scenario assigned to this session (round-robin, excludes Country Logic) ──
+const loadSessionScenario = async (projectId, sessionId, scenarioIds = null) => {
+  try {
+    let scenarios = await getActiveScenarios(projectId);
+    if (!scenarios || scenarios.length === 0) return null;
+
+    // Filter to user-selected scenarios if provided
+    if (scenarioIds && scenarioIds.length > 0) {
+      scenarios = scenarios.filter(s => scenarioIds.includes(s.id));
+    }
+    // Country Logic is global — never assign it as a round-robin scenario
+    scenarios = scenarios.filter(s => s.name !== 'Country Logic');
+    if (scenarios.length === 0) return null;
+
+    // Round-robin by session position
+    const posResult = await pool.query(
+      `SELECT COUNT(*) AS pos FROM sessions
+       WHERE project_id = $1 AND created_at <= (SELECT created_at FROM sessions WHERE id = $2)`,
+      [projectId, sessionId]
+    );
+    const pos = Math.max(0, parseInt(posResult.rows[0]?.pos || 1) - 1);
+    const scenario = scenarios[pos % scenarios.length];
+
+    // Load steps if not included
+    let steps = scenario.steps;
+    if (!steps || !Array.isArray(steps) || steps.length === 0) {
+      const stepsResult = await pool.query(
+        `SELECT * FROM scenario_steps WHERE scenario_id = $1 ORDER BY step_order ASC`,
+        [scenario.id]
+      );
+      steps = stepsResult.rows.map(r => ({
+        ...r,
+        conditions:    typeof r.conditions    === 'string' ? JSON.parse(r.conditions)    : r.conditions    || [],
+        action_values: typeof r.action_values === 'string' ? JSON.parse(r.action_values) : r.action_values || [],
+      }));
+    }
+
+    console.log(`[Scenario] Assigned: "${scenario.name}" (${steps.length} steps) → session ${sessionId.slice(0,8)}`);
+    return { ...scenario, steps };
+  } catch (e) {
+    console.warn('[Scenario] Load failed:', e.message);
     return null;
   }
 };
 
 // ─── Apply country mapping ────────────────────────────────────────────────────
-const applyCountryMapping = async (page, scenario, proxyCountry, questionsOnPage) => {
-  if (!scenario?.country_mapping) return false;
-  const { questionContains, mappings } = scenario.country_mapping;
+const applyCountryMapping = async (page, countryLogic, proxyCountry, questionsOnPage) => {
+  if (!countryLogic?.country_mapping) return false;
+  const { questionContains, mappings } = countryLogic.country_mapping;
   if (!questionContains || !mappings?.length) return false;
 
   const hasCountryQ = questionsOnPage.some(q =>
@@ -172,315 +218,284 @@ const applyCountryMapping = async (page, scenario, proxyCountry, questionsOnPage
     m.country.toUpperCase() === (proxyCountry || '').toUpperCase()
   );
   if (!mapping) {
-    console.log(`[CountryLogic] No mapping for country "${proxyCountry}" — skipping`);
+    console.log(`[CountryLogic] No mapping for "${proxyCountry}" — skipping`);
     return false;
   }
 
   const answer = mapping.answer;
-  console.log(`[CountryLogic] Applying mapping: ${proxyCountry} → "${answer}"`);
+  console.log(`[CountryLogic] Mapping: ${proxyCountry} → "${answer}"`);
 
-  // Strategy 1: click the visible label (most reliable for Decipher styled radios)
-  try {
-    const allLabels = await page.locator('label').all();
-    for (const label of allLabels) {
-      const text = (await label.textContent().catch(() => '')) || '';
-      if (text.trim() === answer) {
-        await label.click().catch(() => {});
-        await page.waitForTimeout(500);
-        console.log(`[CountryLogic] Clicked label: "${answer}"`);
-        return true;
-      }
-    }
-  } catch {}
+  // Strategy 1: click visible label
+  if (await clickLabelByText(page, answer)) {
+    console.log(`[CountryLogic] ✓ Clicked label: "${answer}"`);
+    return true;
+  }
 
-  // Strategy 2: find radio by associated label text
+  // Strategy 2: radio by associated label
   const radios = await page.locator('input[type="radio"]').all();
   for (const radio of radios) {
     const id = await radio.getAttribute('id').catch(() => null);
     let labelText = '';
-    if (id) {
-      const lbl = page.locator(`label[for="${id}"]`);
-      labelText = (await lbl.textContent().catch(() => '')) || '';
-    }
-    if (!labelText) {
-      const parentLabel = await radio.locator('xpath=ancestor::label').textContent().catch(() => '');
-      labelText = parentLabel || '';
-    }
+    if (id) labelText = (await page.locator(`label[for="${id}"]`).textContent().catch(() => '')) || '';
+    if (!labelText) labelText = (await radio.locator('xpath=ancestor::label').textContent().catch(() => '')) || '';
     if (labelText.trim() === answer) {
-      await radio.check().catch(async () => {
-        await radio.click({ force: true }).catch(() => {});
-      });
-      await page.waitForTimeout(500);
-      console.log(`[CountryLogic] Clicked radio: "${answer}"`);
+      await clickRadioOption(page, radio);
+      console.log(`[CountryLogic] ✓ Clicked radio: "${answer}"`);
       return true;
     }
   }
 
-  // Strategy 3: select/dropdown
-  const selects = await page.locator('select').all();
-  for (const sel of selects) {
+  // Strategy 3: dropdown
+  for (const sel of await page.locator('select').all()) {
     try {
       await sel.selectOption({ label: answer });
-      console.log(`[CountryLogic] Selected dropdown: "${answer}"`);
+      console.log(`[CountryLogic] ✓ Selected dropdown: "${answer}"`);
       return true;
     } catch {}
   }
 
-  console.warn(`[CountryLogic] Could not find option "${answer}" on page`);
+  console.warn(`[CountryLogic] ✗ Could not find option "${answer}" on page`);
   return false;
 };
 
-// ─── Match a scenario step against the current page ───────────────────────────
+// ─── Match step against current page ─────────────────────────────────────────
 const matchStep = (step, questionsOnPage, pageNum) => {
   const { when_type, when_value } = step;
-  if (when_type === "always") return true;
-  if (when_type === "page_number") return parseInt(when_value) === pageNum;
-  if (when_type === "question_contains") {
-    const needle = (when_value || "").toLowerCase();
-    return questionsOnPage.some(q => q.toLowerCase().includes(needle));
+  if (when_type === 'always') return true;
+  if (when_type === 'page_number') return parseInt(when_value) === pageNum;
+  if (when_type === 'question_contains') {
+    const needle = (when_value || '').toLowerCase();
+    const match = questionsOnPage.some(q => q.toLowerCase().includes(needle));
+    if (match) console.log(`[Scenario] ✓ Step matched: question contains "${when_value}"`);
+    return match;
   }
-  if (when_type === "question_position") {
-    return questionsOnPage.length >= parseInt(when_value || 1);
-  }
+  if (when_type === 'question_position') return questionsOnPage.length >= parseInt(when_value || 1);
   return false;
 };
 
-// ─── Execute a scenario action ────────────────────────────────────────────────
+// ─── Execute scenario action ──────────────────────────────────────────────────
 const executeScenarioAction = async (page, step) => {
   const { action, action_values, action_mode, action_text, duration_s } = step;
   const vals = Array.isArray(action_values) ? action_values.map(v => parseInt(v)) : [];
 
+  console.log(`[Scenario] Executing action: "${action}" with values: [${vals.join(',')}]`);
+
   try {
-    if (action === "skip") {
-      console.log("[Scenario] Action: skip");
+    if (action === 'skip') {
+      console.log('[Scenario] Action: skip — clicking next without answering');
       return [];
     }
 
-    if (action === "wait") {
+    if (action === 'wait') {
       const secs = duration_s || 5;
       console.log(`[Scenario] Action: wait ${secs}s`);
       await page.waitForTimeout(secs * 1000);
       return [];
     }
 
-    if (action === "back") {
-      console.log("[Scenario] Action: back");
+    if (action === 'back') {
       const backBtn = page.locator('input[value="Back"], button:has-text("Back"), .back-button').first();
       await backBtn.click({ timeout: 5000 }).catch(() => {});
       return [];
     }
 
-    if (action === "open_end") {
-      if (action_mode === "specific" && action_text) {
-        console.log(`[Scenario] Action: open_end specific → "${action_text.slice(0,40)}"`);
+    if (action === 'open_end') {
+      if (action_mode === 'specific' && action_text) {
         const fields = await page.locator("textarea, input[type='text']").all();
         for (const field of fields) {
-          const visible = await field.isVisible().catch(() => false);
-          if (visible) await field.fill(action_text).catch(() => {});
+          if (await field.isVisible().catch(() => false)) {
+            await field.fill(action_text).catch(() => {});
+          }
         }
-        return [{ type: "open-end", text: action_text }];
+        console.log(`[Scenario] Action: open_end → "${action_text.slice(0,40)}"`);
+        return [{ type: 'open-end', text: action_text }];
       }
-      return null;
+      return null; // fall through to default
     }
 
+    // ── Get all radio groups with labels ────────────────────────────────────
     const getRadioGroups = async () => {
-      const radios = await page.locator("input[type='radio']").all();
+      const allRadios = await page.locator("input[type='radio']").all();
       const groupMap = {};
       const groupOrder = [];
-      for (const radio of radios) {
-        const name = await radio.getAttribute("name").catch(() => null);
+      for (const radio of allRadios) {
+        const name = await radio.getAttribute('name').catch(() => null);
         if (!name) continue;
         if (!groupMap[name]) { groupMap[name] = []; groupOrder.push(name); }
         groupMap[name].push(radio);
       }
+      console.log(`[Scenario] Found ${groupOrder.length} radio group(s) on page`);
       return { groupMap, groupOrder };
     };
 
-    if (action === "select_exact") {
+    if (action === 'select_exact') {
       const { groupMap, groupOrder } = await getRadioGroups();
-      if (groupOrder.length === 0) return null;
-      const options = groupMap[groupOrder[0]];
-      for (const colIdx of vals) {
-        const idx = colIdx - 1;
-        if (idx >= 0 && idx < options.length) {
-          await options[idx].click({ force: true }).catch(() => {});
-          console.log(`[Scenario] Action: select_exact → option ${colIdx}`);
-        }
+      if (groupOrder.length === 0) {
+        console.warn('[Scenario] select_exact: no radio groups found — falling through');
+        return null;
       }
-      return [{ type: "radio", scenarioControlled: true }];
+      const options = groupMap[groupOrder[0]];
+      // For radio groups, only select the FIRST value (radios are single-select)
+      const targetIdx = (vals[0] || 1) - 1;
+      if (targetIdx >= 0 && targetIdx < options.length) {
+        await clickRadioOption(page, options[targetIdx]);
+        console.log(`[Scenario] select_exact → clicked option ${targetIdx + 1} of ${options.length}`);
+      } else {
+        console.warn(`[Scenario] select_exact: option ${vals[0]} out of range (${options.length} options)`);
+        return null;
+      }
+      return [{ type: 'radio', scenarioControlled: true }];
     }
 
-    if (action === "select_one_of") {
+    if (action === 'select_one_of') {
       const { groupMap, groupOrder } = await getRadioGroups();
       if (groupOrder.length === 0) return null;
       const options = groupMap[groupOrder[0]];
       const valid = vals.filter(v => v >= 1 && v <= options.length);
-      if (valid.length > 0) {
-        const chosen = valid[Math.floor(Math.random() * valid.length)];
-        await options[chosen - 1].click({ force: true }).catch(() => {});
-        console.log(`[Scenario] Action: select_one_of → picked option ${chosen}`);
+      if (valid.length === 0) {
+        console.warn(`[Scenario] select_one_of: no valid options from [${vals}] for ${options.length} options`);
+        return null;
       }
-      return [{ type: "radio", scenarioControlled: true }];
+      const chosen = valid[Math.floor(Math.random() * valid.length)];
+      await clickRadioOption(page, options[chosen - 1]);
+      console.log(`[Scenario] select_one_of → picked option ${chosen}`);
+      return [{ type: 'radio', scenarioControlled: true }];
     }
 
-    if (action === "select_not_in") {
+    if (action === 'select_not_in') {
       const { groupMap, groupOrder } = await getRadioGroups();
       if (groupOrder.length === 0) return null;
       const options = groupMap[groupOrder[0]];
       const excludeIdxs = new Set(vals.map(v => v - 1));
       const available = options.filter((_, i) => !excludeIdxs.has(i));
-      if (available.length > 0) {
-        const chosen = available[Math.floor(Math.random() * available.length)];
-        await chosen.click({ force: true }).catch(() => {});
-        console.log(`[Scenario] Action: select_not_in → picked from ${available.length} available`);
-      }
-      return [{ type: "radio", scenarioControlled: true }];
+      if (available.length === 0) return null;
+      const chosen = available[Math.floor(Math.random() * available.length)];
+      await clickRadioOption(page, chosen);
+      console.log(`[Scenario] select_not_in → picked from ${available.length} available`);
+      return [{ type: 'radio', scenarioControlled: true }];
     }
 
-    if (action === "select_random") {
+    if (action === 'select_random') {
       const { groupMap, groupOrder } = await getRadioGroups();
       if (groupOrder.length === 0) return null;
       const options = groupMap[groupOrder[0]];
       const maxSel = vals[0] || 1;
-      const indices = [...Array(options.length).keys()].sort(() => Math.random() - 0.5).slice(0, maxSel);
-      for (const idx of indices) {
-        await options[idx].click({ force: true }).catch(() => {});
-      }
-      console.log(`[Scenario] Action: select_random → picked ${indices.length} option(s)`);
-      return [{ type: "radio", scenarioControlled: true }];
+      const idx = Math.floor(Math.random() * options.length);
+      await clickRadioOption(page, options[idx]);
+      console.log(`[Scenario] select_random → picked option ${idx + 1}`);
+      return [{ type: 'radio', scenarioControlled: true }];
     }
 
-    if (action === "select_grid") {
+    if (action === 'select_grid') {
       let rowSelections = [];
-      try { rowSelections = JSON.parse(action_text || "[]"); } catch {}
+      try { rowSelections = JSON.parse(action_text || '[]'); } catch {}
       const { groupMap, groupOrder } = await getRadioGroups();
       if (groupOrder.length === 0 || rowSelections.length === 0) return null;
       for (let ri = 0; ri < rowSelections.length && ri < groupOrder.length; ri++) {
-        const sel = rowSelections[ri];
+        const colIdx = (parseInt(rowSelections[ri].col) || 1) - 1;
         const options = groupMap[groupOrder[ri]];
-        const colIdx = (parseInt(sel.col) || 1) - 1;
         if (colIdx >= 0 && colIdx < options.length) {
-          await options[colIdx].click({ force: true }).catch(() => {});
+          await clickRadioOption(page, options[colIdx]);
         }
       }
-      console.log(`[Scenario] Action: select_grid → ${rowSelections.length} row(s) answered`);
-      return [{ type: "grid", scenarioControlled: true }];
+      console.log(`[Scenario] select_grid → ${rowSelections.length} row(s)`);
+      return [{ type: 'grid', scenarioControlled: true }];
     }
 
-    if (action === "numeric_fill") {
+    if (action === 'numeric_fill') {
       const min = parseFloat(vals[0] ?? 0);
       const max = parseFloat(vals[1] ?? 100);
       const roundTo = parseFloat(action_text) || 1;
       const inputs = await page.locator("input[type='number'], input[type='text'][class*='num'], input[class*='number']").all();
       const results = [];
       for (const input of inputs) {
-        const visible = await input.isVisible().catch(() => false);
-        if (!visible) continue;
+        if (!await input.isVisible().catch(() => false)) continue;
         const raw = min + Math.random() * (max - min);
         const rounded = Math.round(raw / roundTo) * roundTo;
         await input.fill(String(rounded)).catch(() => {});
         results.push(rounded);
       }
-      console.log(`[Scenario] Action: numeric_fill → values: ${results.join(", ")}`);
-      return [{ type: "numeric", values: results, scenarioControlled: true }];
+      console.log(`[Scenario] numeric_fill → ${results.join(', ')}`);
+      return [{ type: 'numeric', values: results, scenarioControlled: true }];
     }
 
   } catch (e) {
-    console.warn(`[Scenario] Action "${action}" failed: ${e.message}`);
+    console.warn(`[Scenario] Action "${action}" threw: ${e.message}`);
     return null;
   }
 
   return null;
 };
 
-// ── Find first matching step for this page ────────────────────────────────────
+// ─── Find first matching step ─────────────────────────────────────────────────
 const findMatchingStep = (scenario, questionsOnPage, pageNum) => {
   if (!scenario?.steps?.length) return null;
+  console.log(`[Scenario] Checking ${scenario.steps.length} step(s) against page ${pageNum}, questions: [${questionsOnPage.map(q => q.slice(0,40)).join(' | ')}]`);
   for (const step of scenario.steps) {
-    if (matchStep(step, questionsOnPage, pageNum)) {
-      console.log(`[Scenario] Step matched: WHEN "${step.when_type}" = "${step.when_value}" → THEN "${step.action}"`);
-      return step;
-    }
+    if (matchStep(step, questionsOnPage, pageNum)) return step;
   }
+  console.log(`[Scenario] No step matched for page ${pageNum}`);
   return null;
 };
 
 // ─── Main session processor ───────────────────────────────────────────────────
 const processSession = async (job) => {
   const {
-    sessionId,
-    projectId,
-    personaId,
-    surveyUrl,
-    responseId,
-    proxyProvider,
-    proxyCountry,
-    deviceType,
-    scenarioIds,
+    sessionId, projectId, personaId, surveyUrl,
+    responseId, proxyProvider, proxyCountry, deviceType, scenarioIds,
   } = job.data;
 
   console.log(`[Worker] Session ${sessionId} | Country: ${proxyCountry} | ResponseID: ${responseId}`);
 
-  await updateSessionStatus(sessionId, "initialising");
-  await logSessionEvent(sessionId, "worker_started", { jobId: job.id, responseId });
+  await updateSessionStatus(sessionId, 'initialising');
+  await logSessionEvent(sessionId, 'worker_started', { jobId: job.id, responseId });
 
   const persona = await getPersona(personaId);
-  const readingSpeed = persona?.behavioural_attrs?.readingSpeed || "normal";
-  const deviceOs = persona?.behavioural_attrs?.deviceOs || "windows";
+  const readingSpeed = persona?.behavioural_attrs?.readingSpeed || 'normal';
+  const deviceOs = persona?.behavioural_attrs?.deviceOs || 'windows';
 
-  // ── Load scenario for this session ─────────────────────────────────────────
-  const scenario = await loadSessionScenario(projectId, sessionId, scenarioIds);
+  // ── Load Country Logic (global) and scenario (round-robin) ─────────────────
   const countryLogic = await loadCountryLogic(projectId);
+  const scenario = await loadSessionScenario(projectId, sessionId, scenarioIds);
+
+  if (countryLogic) {
+    console.log(`[Worker] Country Logic active — will handle country question globally`);
+  }
   if (scenario) {
-    await logSessionEvent(sessionId, "scenario_assigned", {
-      scenarioId:   scenario.id,
+    await logSessionEvent(sessionId, 'scenario_assigned', {
+      scenarioId: scenario.id,
       scenarioName: scenario.name,
-      stepCount:    scenario.steps?.length || 0,
+      stepCount: scenario.steps?.length || 0,
     });
+  } else {
+    console.log(`[Worker] No scenario assigned — default random answering`);
   }
 
-  const viewports = {
-    desktop: { width: 1366, height: 768 },
-    mobile:  { width: 390,  height: 844  },
-    tablet:  { width: 820,  height: 1180 },
-  };
+  const viewports = { desktop: { width: 1366, height: 768 }, mobile: { width: 390, height: 844 }, tablet: { width: 820, height: 1180 } };
   const viewport = viewports[deviceType] || viewports.desktop;
 
   const userAgents = {
-    "desktop-windows": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "desktop-macos":   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "mobile-android":  "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-    "mobile-ios":      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+    'desktop-windows': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'desktop-macos':   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'mobile-android':  'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    'mobile-ios':      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
   };
-  const uaKey = `${deviceType || "desktop"}-${deviceOs.toLowerCase()}`;
-  const userAgent = userAgents[uaKey] || userAgents["desktop-windows"];
+  const uaKey = `${deviceType || 'desktop'}-${deviceOs.toLowerCase()}`;
+  const userAgent = userAgents[uaKey] || userAgents['desktop-windows'];
 
-  // ── Proxy ─────────────────────────────────────────────────────────────────
   const proxySessionId = sessionId.slice(0, 8);
-  const proxy = await getProxyForSession(proxyProvider || "decodo", {
-    country: proxyCountry || null,
-    sessionId: proxySessionId,
-  });
+  const proxy = await getProxyForSession(proxyProvider || 'decodo', { country: proxyCountry || null, sessionId: proxySessionId });
 
   if (proxy) {
-    console.log(`[Proxy] Server:   ${proxy.server}`);
-    console.log(`[Proxy] Username: ${proxy.username}`);
-    console.log(`[Proxy] Country:  ${proxyCountry || "none"}`);
+    console.log(`[Proxy] Server: ${proxy.server} | Country: ${proxyCountry || 'none'}`);
   } else {
-    console.log("[Proxy] DIRECT — no proxy configured");
+    console.log('[Proxy] DIRECT — no proxy');
   }
 
   const launchOptions = {
     headless: true,
-    ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH && {
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-    }),
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-blink-features=AutomationControlled",
-    ],
+    ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH && { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }),
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled'],
   };
   if (proxy) launchOptions.proxy = proxy;
 
@@ -498,12 +513,12 @@ const processSession = async (job) => {
 
   try {
     browser = await chromium.launch(launchOptions);
-    context = await browser.newContext({ viewport, userAgent, locale: "en-US", timezoneId: "Asia/Kolkata" });
+    context = await browser.newContext({ viewport, userAgent, locale: 'en-US', timezoneId: 'Asia/Kolkata' });
 
     await context.addInitScript(() => {
-      Object.defineProperty(navigator, "webdriver",  { get: () => undefined });
-      Object.defineProperty(navigator, "plugins",    { get: () => [1, 2, 3, 4, 5] });
-      Object.defineProperty(navigator, "languages",  { get: () => ["en-US", "en"] });
+      Object.defineProperty(navigator, 'webdriver',  { get: () => undefined });
+      Object.defineProperty(navigator, 'plugins',    { get: () => [1, 2, 3, 4, 5] });
+      Object.defineProperty(navigator, 'languages',  { get: () => ['en-US', 'en'] });
     });
 
     await context.tracing.start({ screenshots: true, snapshots: true, title: `Session ${sessionId}` });
@@ -511,28 +526,27 @@ const processSession = async (job) => {
 
     // ── IP check ─────────────────────────────────────────────────────────────
     try {
-      const ipRes = await page.goto("https://api.ipify.org?format=json", { timeout: 12000 });
+      const ipRes = await page.goto('https://api.ipify.org?format=json', { timeout: 12000 });
       const ipData = await ipRes.json();
       if (ipData?.ip) {
         await recordUsedIP(projectId, sessionId, ipData.ip);
-        await logSessionEvent(sessionId, "ip_assigned", { ip: ipData.ip, country: proxyCountry });
+        await logSessionEvent(sessionId, 'ip_assigned', { ip: ipData.ip, country: proxyCountry });
         console.log(`[Worker] IP: ${ipData.ip} (requested: ${proxyCountry})`);
       }
     } catch (e) {
-      await logSessionEvent(sessionId, "ip_check_failed", { error: e.message });
+      await logSessionEvent(sessionId, 'ip_check_failed', { error: e.message });
     }
 
-    await updateSessionStatus(sessionId, "in_progress");
-    await logSessionEvent(sessionId, "browser_launched", {
-      proxy: proxy ? `decodo-${proxyCountry}` : "direct",
-      responseId,
-      surveyUrl,
+    await updateSessionStatus(sessionId, 'in_progress');
+    await logSessionEvent(sessionId, 'browser_launched', {
+      proxy: proxy ? `decodo-${proxyCountry}` : 'direct',
+      responseId, surveyUrl,
       scenarioName: scenario?.name || null,
     });
 
     console.log(`[Worker] Navigating to: ${surveyUrl}`);
-    await page.goto(surveyUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await logSessionEvent(sessionId, "survey_loaded", { url: surveyUrl, responseId });
+    await page.goto(surveyUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await logSessionEvent(sessionId, 'survey_loaded', { url: surveyUrl, responseId });
 
     // ── Main survey loop ──────────────────────────────────────────────────────
     while (pageCount < MAX_PAGES) {
@@ -540,65 +554,54 @@ const processSession = async (job) => {
       const currentUrl = page.url();
       const pageStart = Date.now();
 
-      console.log(`[Worker] Page ${pageCount}: ${currentUrl}`);
+      console.log(`\n[Worker] ── Page ${pageCount} ──────────────────────────────`);
+      console.log(`[Worker] URL: ${currentUrl}`);
 
-      // ── Check if session was manually stopped ─────────────────────────────
+      // ── Stop check ───────────────────────────────────────────────────────
       try {
-        const statusCheck = await pool.query(
-          `SELECT status, error_log FROM sessions WHERE id = $1`,
-          [sessionId]
-        );
-        const currentStatus = statusCheck.rows[0]?.status;
-        if (currentStatus === 'error' && statusCheck.rows[0]?.error_log === 'Manually stopped by user') {
-          console.log(`[Worker] Session ${sessionId} was manually stopped — exiting`);
+        const statusCheck = await pool.query(`SELECT status, error_log FROM sessions WHERE id = $1`, [sessionId]);
+        if (statusCheck.rows[0]?.status === 'error' && statusCheck.rows[0]?.error_log === 'Manually stopped by user') {
+          console.log(`[Worker] Session manually stopped`);
           outcome = 'error';
           break;
         }
       } catch {}
 
-      // Check URL for outcome
+      // ── URL outcome check ────────────────────────────────────────────────
       outcome = detectOutcome(currentUrl);
       if (outcome) {
-        await logSessionEvent(sessionId, "redirect_detected", { url: currentUrl, outcome });
+        await logSessionEvent(sessionId, 'redirect_detected', { url: currentUrl, outcome });
         break;
       }
 
-      // Scan page content for Decipher exit pages
+      // ── Content exit page check ──────────────────────────────────────────
       const contentOutcome = await detectOutcomeFromPage(page);
       if (contentOutcome) {
         outcome = contentOutcome;
-        console.log(`[Worker] Exit page detected from content: ${outcome}`);
-
         const exitFilename = `page_${pageCount}.png`;
-        const exitPath = path.join(sessionScreenshotsDir, exitFilename);
-        await takeScreenshot(page, exitPath, currentUrl);
-
-        await logSessionEvent(sessionId, "page_answered", {
+        await takeScreenshot(page, path.join(sessionScreenshotsDir, exitFilename));
+        await logSessionEvent(sessionId, 'page_answered', {
           page: pageCount, url: currentUrl,
-          title: await page.title().catch(() => "Exit Page"),
+          title: await page.title().catch(() => 'Exit Page'),
           questions: [], options: [], answers: [], answerSummary: [],
-          timeTaken: 0,
-          screenshot: `${sessionId}/${exitFilename}`,
+          timeTaken: 0, screenshot: `${sessionId}/${exitFilename}`,
           isExitPage: true, exitOutcome: contentOutcome,
         });
-        await logSessionEvent(sessionId, "redirect_detected", {
-          url: currentUrl, outcome, detectedBy: "page_content",
-          screenshot: `${sessionId}/${exitFilename}`,
-        });
+        await logSessionEvent(sessionId, 'redirect_detected', { url: currentUrl, outcome, detectedBy: 'page_content', screenshot: `${sessionId}/${exitFilename}` });
         break;
       }
 
-      // ── Capture question text BEFORE answering ────────────────────────────
-      let pageTitle = "";
+      // ── Detect questions on page ─────────────────────────────────────────
+      let pageTitle = '';
       let questionsOnPage = [];
       try {
         pageTitle = await page.title();
         const rawTexts = await page.evaluate(() => {
-          const selectors = [".qtext", ".question-text", ".qtitle", '[class*="qtext"]', '[class*="question-title"]', "legend", "h2", "h3"];
+          const selectors = ['.qtext', '.question-text', '.qtitle', '[class*="qtext"]', '[class*="question-title"]', 'legend', 'h2', 'h3'];
           const found = new Set();
           for (const sel of selectors) {
             document.querySelectorAll(sel).forEach(el => {
-              const text = (el.innerText || el.textContent || "").trim();
+              const text = (el.innerText || el.textContent || '').trim();
               if (text) found.add(text);
             });
             if (found.size >= 8) break;
@@ -606,55 +609,60 @@ const processSession = async (job) => {
           return [...found];
         });
         questionsOnPage = rawTexts.filter(t => !isHintText(t)).slice(0, 5);
-      } catch {}
+        console.log(`[Worker] Questions detected: [${questionsOnPage.map(q => `"${q.slice(0,50)}"`).join(', ')}]`);
+      } catch (e) {
+        console.warn(`[Worker] Question detection failed: ${e.message}`);
+      }
 
-      // ── Screenshot BEFORE answering ───────────────────────────────────────
+      // ── Screenshot before answering ──────────────────────────────────────
       const screenshotFilename = `page_${pageCount}.png`;
       const screenshotPath = path.join(sessionScreenshotsDir, screenshotFilename);
-      await takeScreenshot(page, screenshotPath, currentUrl);
+      await takeScreenshot(page, screenshotPath);
 
-      // ── Capture options BEFORE answering ──────────────────────────────────
       const pageOptionsBefore = await capturePageOptions(page);
 
-      // ── Scenario step matching ────────────────────────────────────────────
+      // ── Answer logic ─────────────────────────────────────────────────────
       let answersGiven = null;
       let scenarioStepUsed = null;
 
-      // ── Country Logic always runs first (global, project-level) ──────────
-      if (countryLogic) {
+      // Step 1: Country Logic (global, always runs first)
+      if (countryLogic && questionsOnPage.length > 0) {
         const countryHandled = await applyCountryMapping(page, countryLogic, proxyCountry, questionsOnPage);
         if (countryHandled) {
           scenarioStepUsed = 'country_mapping';
           answersGiven = [{ type: 'country_mapping', country: proxyCountry }];
           questionCount++;
+          console.log(`[Worker] Page ${pageCount}: country mapping applied`);
         }
       }
 
-      // ── Scenario steps run after country logic ────────────────────────────
-      if (answersGiven === null && scenario) {
+      // Step 2: Scenario steps (only if country logic didn't handle this page)
+      if (answersGiven === null && scenario && questionsOnPage.length > 0) {
         const matchedStep = findMatchingStep(scenario, questionsOnPage, pageCount);
         if (matchedStep) {
           scenarioStepUsed = matchedStep.action;
           answersGiven = await executeScenarioAction(page, matchedStep);
-          if (answersGiven === null) {
-            console.log(`[Scenario] Action "${matchedStep.action}" returned null — falling through to default`);
+          if (answersGiven !== null) {
+            questionCount++;
+            console.log(`[Worker] Page ${pageCount}: scenario step "${matchedStep.action}" executed`);
+          } else {
+            console.log(`[Worker] Page ${pageCount}: scenario action returned null — falling through to default`);
           }
         }
       }
 
-      // ── Default random answering (fallback when no scenario match) ────────
+      // Step 3: Default random answering
       if (answersGiven === null) {
+        console.log(`[Worker] Page ${pageCount}: using default random answering`);
         answersGiven = await answerPage(page, persona, readingSpeed);
         questionCount++;
       }
 
       await page.waitForTimeout(800);
-
-      // ── Capture options AFTER answering ───────────────────────────────────
       const pageOptionsAfter = await capturePageOptions(page);
 
-      // ── Screenshot AFTER answering ────────────────────────────────────────
-      await takeScreenshot(page, screenshotPath, currentUrl);
+      // Screenshot after answering
+      await takeScreenshot(page, screenshotPath);
 
       const pageTime = Math.round((Date.now() - pageStart) / 1000);
       const answerSummary = buildAnswerSummary(pageOptionsAfter, answersGiven);
@@ -662,17 +670,15 @@ const processSession = async (job) => {
       pages.push({
         pageNum: pageCount, url: currentUrl, title: pageTitle,
         questions: questionsOnPage, options: pageOptionsAfter,
-        answers: answersGiven, answerSummary,
-        timeTaken: pageTime,
+        answers: answersGiven, answerSummary, timeTaken: pageTime,
         screenshot: `${sessionId}/${screenshotFilename}`,
         scenarioStep: scenarioStepUsed || null,
       });
 
-      await logSessionEvent(sessionId, "page_answered", {
+      await logSessionEvent(sessionId, 'page_answered', {
         page: pageCount, url: currentUrl, title: pageTitle,
         questions: questionsOnPage, options: pageOptionsAfter,
-        answers: answersGiven, answerSummary,
-        timeTaken: pageTime,
+        answers: answersGiven, answerSummary, timeTaken: pageTime,
         screenshot: `${sessionId}/${screenshotFilename}`,
         scenarioStep: scenarioStepUsed || null,
       });
@@ -680,15 +686,14 @@ const processSession = async (job) => {
       // ── Click next ────────────────────────────────────────────────────────
       const clicked = await clickNext(page);
       if (!clicked) {
-        console.log(`[Worker] No next button on page ${pageCount}`);
         const noNextOutcome = await detectOutcomeFromPage(page);
-        outcome = noNextOutcome || detectOutcome(page.url()) || "completed";
+        outcome = noNextOutcome || detectOutcome(page.url()) || 'completed';
         console.log(`[Worker] No next button — outcome: ${outcome}`);
         break;
       }
 
       try {
-        await page.waitForNavigation({ timeout: 15000, waitUntil: "domcontentloaded" });
+        await page.waitForNavigation({ timeout: 15000, waitUntil: 'domcontentloaded' });
       } catch {
         await page.waitForTimeout(3000);
       }
@@ -699,83 +704,58 @@ const processSession = async (job) => {
       if (!outcome) {
         await page.waitForTimeout(1500);
         outcome = await detectOutcomeFromPage(page);
-        if (outcome) console.log(`[Worker] Outcome from page content after nav: ${outcome}`);
       }
 
       if (outcome) {
         const finalNum = pageCount + 1;
         const finalFilename = `page_${finalNum}.png`;
         const finalPath = path.join(sessionScreenshotsDir, finalFilename);
-        await takeScreenshot(page, finalPath, newUrl);
-
-        await logSessionEvent(sessionId, "page_answered", {
+        await takeScreenshot(page, finalPath);
+        await logSessionEvent(sessionId, 'page_answered', {
           page: finalNum, url: newUrl,
-          title: await page.title().catch(() => "Exit Page"),
+          title: await page.title().catch(() => 'Exit Page'),
           questions: [], options: [], answers: [], answerSummary: [],
-          timeTaken: 0,
-          screenshot: `${sessionId}/${finalFilename}`,
+          timeTaken: 0, screenshot: `${sessionId}/${finalFilename}`,
           isExitPage: true, exitOutcome: outcome,
         });
-        await logSessionEvent(sessionId, "redirect_detected", {
-          url: newUrl, outcome,
-          screenshot: `${sessionId}/${finalFilename}`,
-        });
+        await logSessionEvent(sessionId, 'redirect_detected', { url: newUrl, outcome, screenshot: `${sessionId}/${finalFilename}` });
         break;
       }
     }
 
-    if (!outcome) outcome = pageCount >= MAX_PAGES ? "error" : "completed";
+    if (!outcome) outcome = pageCount >= MAX_PAGES ? 'error' : 'completed';
   } catch (err) {
-    outcome = "error";
+    outcome = 'error';
     errorMessage = err?.stack || err?.message || String(err);
-    await logSessionEvent(sessionId, "error", { message: err?.message, stack: err?.stack });
+    await logSessionEvent(sessionId, 'error', { message: err?.message, stack: err?.stack });
     console.error(`[Worker] Session ${sessionId} error:`, err.message);
   } finally {
-    try {
-      if (context) {
-        await context.tracing.stop({ path: tracePath });
-        await saveTracePath(sessionId, tracePath);
-      }
-    } catch {}
+    try { if (context) { await context.tracing.stop({ path: tracePath }); await saveTracePath(sessionId, tracePath); } } catch {}
     try { await browser?.close(); } catch {}
   }
 
   const durationS = Math.round((Date.now() - startTime) / 1000);
   await updateSessionStatus(sessionId, outcome, {
-    outcome,
-    totalDurationS: durationS,
-    questionCount,
-    redirectType: outcome,
+    outcome, totalDurationS: durationS, questionCount, redirectType: outcome,
     ...(errorMessage ? { errorLog: errorMessage.slice(0, 2000) } : {}),
   });
 
-  await logSessionEvent(sessionId, "session_complete", {
+  await logSessionEvent(sessionId, 'session_complete', {
     outcome, durationS, pageCount, questionCount, responseId,
-    screenshotsCount: pages.length,
-    scenarioName: scenario?.name || null,
+    screenshotsCount: pages.length, scenarioName: scenario?.name || null,
   });
 
-  console.log(`[Worker] Session ${sessionId} → ${outcome} | ${durationS}s | ${pageCount} pages | scenario: ${scenario?.name || "none"}`);
+  console.log(`[Worker] Session ${sessionId} → ${outcome} | ${durationS}s | ${pageCount} pages | scenario: ${scenario?.name || 'none'}`);
   return { sessionId, outcome, durationS, responseId };
 };
 
 // ─── Worker ───────────────────────────────────────────────────────────────────
-const worker = new Worker("survey-sessions", processSession, {
-  connection,
-  concurrency: CONCURRENCY,
-});
+const worker = new Worker('survey-sessions', processSession, { connection, concurrency: CONCURRENCY });
 
-worker.on("completed", (job, result) =>
-  console.log(`[Worker] Job ${job.id} done — ${result.outcome}`)
-);
-worker.on("failed", (job, err) =>
-  console.error(`[Worker] Job ${job.id} failed:`, err.message)
-);
-worker.on("error", (err) => console.error("[Worker] Error:", err));
+worker.on('completed', (job, result) => console.log(`[Worker] Job ${job.id} done — ${result.outcome}`));
+worker.on('failed', (job, err) => console.error(`[Worker] Job ${job.id} failed:`, err.message));
+worker.on('error', (err) => console.error('[Worker] Error:', err));
 
-process.on("SIGTERM", async () => {
-  await worker.close();
-  process.exit(0);
-});
+process.on('SIGTERM', async () => { await worker.close(); process.exit(0); });
 
-console.log("[Worker] Ready and listening for jobs...");
+console.log('[Worker] Ready and listening for jobs...');
