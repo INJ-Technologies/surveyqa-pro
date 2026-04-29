@@ -507,6 +507,7 @@ const processSession = async (job) => {
   const {
     sessionId, projectId, personaId, surveyUrl,
     responseId, proxyProvider, proxyCountry, deviceType, scenarioIds,
+    internalTesting,
   } = job.data;
 
   console.log(`[Worker] Session ${sessionId} | Country: ${proxyCountry} | ResponseID: ${responseId}`);
@@ -548,12 +549,16 @@ const processSession = async (job) => {
   const userAgent = userAgents[uaKey] || userAgents['desktop-windows'];
 
   const proxySessionId = sessionId.slice(0, 8);
-  const proxy = await getProxyForSession(proxyProvider || 'decodo', { country: proxyCountry || null, sessionId: proxySessionId });
+  const proxy = internalTesting
+    ? null
+    : await getProxyForSession(proxyProvider || 'decodo', { country: proxyCountry || null, sessionId: proxySessionId });
 
-  if (proxy) {
+  if (internalTesting) {
+    console.log('[Proxy] INTERNAL TESTING — no proxy, using local IP');
+  } else if (proxy) {
     console.log(`[Proxy] Server: ${proxy.server} | Country: ${proxyCountry || 'none'}`);
   } else {
-    console.log('[Proxy] DIRECT — no proxy');
+    console.log('[Proxy] DIRECT — no proxy configured');
   }
 
   const launchOptions = {
@@ -603,7 +608,7 @@ const processSession = async (job) => {
 
     await updateSessionStatus(sessionId, 'in_progress');
     await logSessionEvent(sessionId, 'browser_launched', {
-      proxy: proxy ? `decodo-${proxyCountry}` : 'direct',
+      proxy: internalTesting ? 'internal-testing' : proxy ? `decodo-${proxyCountry}` : 'direct',
       responseId, surveyUrl,
       scenarioName: scenario?.name || null,
     });
