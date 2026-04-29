@@ -328,6 +328,7 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
   const [allScenarios, setAllScenarios] = useState([]);
   const [selectedScenarios, setSelectedScenarios] = useState([]);
   const [scenariosLoading, setScenariosLoading] = useState(true);
+  const [testingMode, setTestingMode] = useState('live'); // 'internal' | 'live'
 
   useEffect(() => {
     api
@@ -467,7 +468,25 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
             <X size={20} />
           </button>
         </div>
-
+        {/* Testing Mode Toggle */}
+        <div style={{ marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between", background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: "12px 16px" }}>
+          <div>
+            <div style={{ fontSize: "0.85rem", fontWeight: 700, color: "#1e293b", fontFamily: FONT }}>
+              {testingMode === 'internal' ? '🧪 Internal Testing' : '🌐 Live Testing'}
+            </div>
+            <div style={{ fontSize: "0.72rem", color: "#94a3b8", fontFamily: FONT, marginTop: 2 }}>
+              {testingMode === 'internal'
+                ? 'Sessions run on your local IP — no proxy used'
+                : 'Sessions run via proxy with country-specific IPs'}
+            </div>
+          </div>
+          <div
+            onClick={() => setTestingMode(m => m === 'live' ? 'internal' : 'live')}
+            style={{ width: 52, height: 28, borderRadius: 14, cursor: 'pointer', position: 'relative', background: testingMode === 'live' ? '#2563eb' : '#e2e8f0', transition: 'background 0.2s', flexShrink: 0 }}
+          >
+            <div style={{ position: 'absolute', top: 3, left: testingMode === 'live' ? 27 : 3, width: 22, height: 22, borderRadius: '50%', background: 'white', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', transition: 'left 0.2s' }} />
+          </div>
+        </div>    
         <div style={{ marginBottom: 18 }}>
           <label
             style={{
@@ -509,253 +528,254 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
             Max 20 per trigger. Concurrent limit: {project.concurrent_sessions}
           </div>
         </div>
-
-        <div style={{ marginBottom: 18 }}>
-          <label
-            style={{
-              fontSize: "0.8rem",
-              fontWeight: 600,
-              color: "#374151",
-              fontFamily: FONT,
-              display: "block",
-              marginBottom: 6,
-            }}
-          >
-            Target Countries{" "}
-            <span style={{ color: "#94a3b8", fontWeight: 400 }}>
-              (optional — distributed round-robin)
-            </span>
-          </label>
-          {selected.length > 0 && (
-            <div
+        {testingMode === 'live' && (
+          <div style={{ marginBottom: 18 }}>
+            <label
               style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: 6,
-                marginBottom: 8,
+                fontSize: "0.8rem",
+                fontWeight: 600,
+                color: "#374151",
+                fontFamily: FONT,
+                display: "block",
+                marginBottom: 6,
               }}
             >
-              {selected.map((s) => (
-                <span
-                  key={s.code}
+              Target Countries{" "}
+              <span style={{ color: "#94a3b8", fontWeight: 400 }}>
+                (optional — distributed round-robin)
+              </span>
+            </label>
+            {selected.length > 0 && (
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 6,
+                  marginBottom: 8,
+                }}
+              >
+                {selected.map((s) => (
+                  <span
+                    key={s.code}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 4,
+                      background: "#dbeafe",
+                      color: "#1e3a5f",
+                      borderRadius: 20,
+                      padding: "3px 10px",
+                      fontSize: "0.78rem",
+                      fontWeight: 600,
+                      fontFamily: FONT,
+                    }}
+                  >
+                    {s.code} — {s.country}
+                    <button
+                      onClick={() => removeCountry(s.code)}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        color: "#2563eb",
+                        padding: 0,
+                        display: "flex",
+                        lineHeight: 1,
+                      }}
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+                <button
+                  onClick={() => setSelected([])}
                   style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 4,
-                    background: "#dbeafe",
-                    color: "#1e3a5f",
+                    background: "none",
+                    border: "1px solid #e2e8f0",
                     borderRadius: 20,
                     padding: "3px 10px",
-                    fontSize: "0.78rem",
-                    fontWeight: 600,
+                    fontSize: "0.75rem",
+                    cursor: "pointer",
+                    color: "#94a3b8",
                     fontFamily: FONT,
                   }}
                 >
-                  {s.code} — {s.country}
-                  <button
-                    onClick={() => removeCountry(s.code)}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      cursor: "pointer",
-                      color: "#2563eb",
-                      padding: 0,
-                      display: "flex",
-                      lineHeight: 1,
-                    }}
-                  >
-                    <X size={12} />
-                  </button>
-                </span>
-              ))}
-              <button
-                onClick={() => setSelected([])}
-                style={{
-                  background: "none",
-                  border: "1px solid #e2e8f0",
-                  borderRadius: 20,
-                  padding: "3px 10px",
-                  fontSize: "0.75rem",
-                  cursor: "pointer",
-                  color: "#94a3b8",
-                  fontFamily: FONT,
-                }}
-              >
-                Clear all
-              </button>
-            </div>
-          )}
-          <div ref={dropRef} style={{ position: "relative" }}>
-            <div
-              onClick={() => setDropOpen((o) => !o)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "9px 12px",
-                border: "1.5px solid #e2e8f0",
-                borderRadius: 8,
-                cursor: "pointer",
-                background: "white",
-                fontSize: "0.85rem",
-                fontFamily: FONT,
-                color: selected.length > 0 ? "#1e293b" : "#94a3b8",
-              }}
-            >
-              <Globe size={14} color="#94a3b8" />
-              <span style={{ flex: 1 }}>
-                {selected.length > 0
-                  ? `${selected.length} countr${selected.length === 1 ? "y" : "ies"} selected`
-                  : "Search and select countries..."}
-              </span>
-              <ChevronDown
-                size={14}
-                color="#94a3b8"
-                style={{
-                  transform: dropOpen ? "rotate(180deg)" : "none",
-                  transition: "transform 0.15s",
-                }}
-              />
-            </div>
-            {dropOpen && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: "100%",
-                  left: 0,
-                  right: 0,
-                  zIndex: 9999,
-                  background: "white",
-                  border: "1.5px solid #e2e8f0",
-                  borderRadius: 10,
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
-                  marginTop: 4,
-                  maxHeight: 240,
-                  display: "flex",
-                  flexDirection: "column",
-                }}
-              >
-                <div
-                  style={{
-                    padding: "8px 10px",
-                    borderBottom: "1px solid #f1f5f9",
-                  }}
-                >
-                  <input
-                    autoFocus
-                    placeholder="Search country or code..."
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    style={{
-                      width: "100%",
-                      padding: "6px 10px",
-                      border: "1.5px solid #e2e8f0",
-                      borderRadius: 6,
-                      fontSize: "0.82rem",
-                      fontFamily: FONT,
-                      outline: "none",
-                      boxSizing: "border-box",
-                    }}
-                  />
-                </div>
-                <div style={{ overflowY: "auto", flex: 1 }}>
-                  {filtered.length === 0 ? (
-                    <div
-                      style={{
-                        padding: "12px 14px",
-                        fontSize: "0.82rem",
-                        color: "#94a3b8",
-                        fontFamily: FONT,
-                      }}
-                    >
-                      No countries found
-                    </div>
-                  ) : (
-                    filtered.map((c) => {
-                      const isSelected = selected.some(
-                        (s) => s.code === c.code,
-                      );
-                      return (
-                        <div
-                          key={c.code}
-                          onClick={() => toggleCountry(c)}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 10,
-                            padding: "8px 12px",
-                            cursor: "pointer",
-                            background: isSelected ? "#f0f7ff" : "white",
-                            borderBottom: "1px solid #f8fafc",
-                          }}
-                          onMouseEnter={(e) => {
-                            if (!isSelected)
-                              e.currentTarget.style.background = "#f8fafc";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = isSelected
-                              ? "#f0f7ff"
-                              : "white";
-                          }}
-                        >
-                          <div
-                            style={{
-                              width: 16,
-                              height: 16,
-                              borderRadius: 4,
-                              border: `2px solid ${isSelected ? "#2563eb" : "#cbd5e1"}`,
-                              background: isSelected ? "#2563eb" : "white",
-                              flexShrink: 0,
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                            }}
-                          >
-                            {isSelected && (
-                              <CheckCircle size={10} color="white" />
-                            )}
-                          </div>
-                          <span
-                            style={{
-                              fontSize: "0.72rem",
-                              fontWeight: 700,
-                              color: "#64748b",
-                              fontFamily: "monospace",
-                              minWidth: 26,
-                            }}
-                          >
-                            {c.code}
-                          </span>
-                          <span
-                            style={{
-                              fontSize: "0.83rem",
-                              color: "#1e293b",
-                              fontFamily: FONT,
-                              flex: 1,
-                            }}
-                          >
-                            {c.country}
-                          </span>
-                          <span
-                            style={{
-                              fontSize: "0.7rem",
-                              color: "#94a3b8",
-                              fontFamily: "monospace",
-                            }}
-                          >
-                            {c.endpoint === "gate.decodo.com"
-                              ? `gate:${c.port}`
-                              : c.endpoint?.split(".")[0]}
-                          </span>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
+                  Clear all
+                </button>
               </div>
             )}
+            <div ref={dropRef} style={{ position: "relative" }}>
+              <div
+                onClick={() => setDropOpen((o) => !o)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "9px 12px",
+                  border: "1.5px solid #e2e8f0",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  background: "white",
+                  fontSize: "0.85rem",
+                  fontFamily: FONT,
+                  color: selected.length > 0 ? "#1e293b" : "#94a3b8",
+                }}
+              >
+                <Globe size={14} color="#94a3b8" />
+                <span style={{ flex: 1 }}>
+                  {selected.length > 0
+                    ? `${selected.length} countr${selected.length === 1 ? "y" : "ies"} selected`
+                    : "Search and select countries..."}
+                </span>
+                <ChevronDown
+                  size={14}
+                  color="#94a3b8"
+                  style={{
+                    transform: dropOpen ? "rotate(180deg)" : "none",
+                    transition: "transform 0.15s",
+                  }}
+                />
+              </div>
+              {dropOpen && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "100%",
+                    left: 0,
+                    right: 0,
+                    zIndex: 9999,
+                    background: "white",
+                    border: "1.5px solid #e2e8f0",
+                    borderRadius: 10,
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+                    marginTop: 4,
+                    maxHeight: 240,
+                    display: "flex",
+                    flexDirection: "column",
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: "8px 10px",
+                      borderBottom: "1px solid #f1f5f9",
+                    }}
+                  >
+                    <input
+                      autoFocus
+                      placeholder="Search country or code..."
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "6px 10px",
+                        border: "1.5px solid #e2e8f0",
+                        borderRadius: 6,
+                        fontSize: "0.82rem",
+                        fontFamily: FONT,
+                        outline: "none",
+                        boxSizing: "border-box",
+                      }}
+                    />
+                  </div>
+                  <div style={{ overflowY: "auto", flex: 1 }}>
+                    {filtered.length === 0 ? (
+                      <div
+                        style={{
+                          padding: "12px 14px",
+                          fontSize: "0.82rem",
+                          color: "#94a3b8",
+                          fontFamily: FONT,
+                        }}
+                      >
+                        No countries found
+                      </div>
+                    ) : (
+                      filtered.map((c) => {
+                        const isSelected = selected.some(
+                          (s) => s.code === c.code,
+                        );
+                        return (
+                          <div
+                            key={c.code}
+                            onClick={() => toggleCountry(c)}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 10,
+                              padding: "8px 12px",
+                              cursor: "pointer",
+                              background: isSelected ? "#f0f7ff" : "white",
+                              borderBottom: "1px solid #f8fafc",
+                            }}
+                            onMouseEnter={(e) => {
+                              if (!isSelected)
+                                e.currentTarget.style.background = "#f8fafc";
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.background = isSelected
+                                ? "#f0f7ff"
+                                : "white";
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: 16,
+                                height: 16,
+                                borderRadius: 4,
+                                border: `2px solid ${isSelected ? "#2563eb" : "#cbd5e1"}`,
+                                background: isSelected ? "#2563eb" : "white",
+                                flexShrink: 0,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                              }}
+                            >
+                              {isSelected && (
+                                <CheckCircle size={10} color="white" />
+                              )}
+                            </div>
+                            <span
+                              style={{
+                                fontSize: "0.72rem",
+                                fontWeight: 700,
+                                color: "#64748b",
+                                fontFamily: "monospace",
+                                minWidth: 26,
+                              }}
+                            >
+                              {c.code}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: "0.83rem",
+                                color: "#1e293b",
+                                fontFamily: FONT,
+                                flex: 1,
+                              }}
+                            >
+                              {c.country}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: "0.7rem",
+                                color: "#94a3b8",
+                                fontFamily: "monospace",
+                              }}
+                            >
+                              {c.endpoint === "gate.decodo.com"
+                                ? `gate:${c.port}`
+                                : c.endpoint?.split(".")[0]}
+                            </span>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
         {selected.length > 0 && n > 0 && (
           <div
