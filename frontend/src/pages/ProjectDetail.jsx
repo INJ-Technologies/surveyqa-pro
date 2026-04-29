@@ -3484,6 +3484,29 @@ function SessionReportModal({
                     ))}
                   </div>
                 )}
+                {activePage.payload?.gridAnswers?.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "#94a3b8", fontFamily: FONT, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+                      Grid Answers — Row → Selection
+                    </div>
+                    <div style={{ border: "1.5px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 180px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+                        <div style={{ padding: "7px 14px", fontSize: "0.72rem", fontWeight: 700, color: "#94a3b8", fontFamily: FONT, textTransform: "uppercase" }}>Statement</div>
+                        <div style={{ padding: "7px 14px", fontSize: "0.72rem", fontWeight: 700, color: "#94a3b8", fontFamily: FONT, textTransform: "uppercase" }}>Selection</div>
+                      </div>
+                      {activePage.payload.gridAnswers.map((ga, i) => (
+                        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 180px", borderBottom: i < activePage.payload.gridAnswers.length - 1 ? "1px solid #f1f5f9" : "none", alignItems: "center" }}>
+                          <div style={{ padding: "9px 14px", fontSize: "0.82rem", color: "#475569", fontFamily: FONT, lineHeight: 1.4 }}>{ga.row}</div>
+                          <div style={{ padding: "9px 14px" }}>
+                            <span style={{ fontSize: "0.78rem", fontWeight: 600, background: ga.answered ? "#dcfce7" : "#fef2f2", color: ga.answered ? "#166534" : "#dc2626", borderRadius: 6, padding: "3px 10px", fontFamily: FONT, display: "inline-block" }}>
+                              {ga.selected}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {activePage.payload?.answers?.some(
                   (a) => a?.type === "open-end",
                 ) && (

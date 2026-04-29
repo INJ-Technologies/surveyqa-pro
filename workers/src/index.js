@@ -85,6 +85,70 @@ const takeScreenshot = async (page, screenshotPath) => {
   return false;
 };
 
+// ─── Capture grid/matrix answers with row labels ───────────────────────────────
+const captureGridAnswers = async (page) => {
+  try {
+    return await page.evaluate(() => {
+      const groups = {};
+      const groupOrder = [];
+      document.querySelectorAll('input[type="radio"]').forEach(r => {
+        if (!r.name) return;
+        if (!groups[r.name]) { groups[r.name] = []; groupOrder.push(r.name); }
+        groups[r.name].push(r);
+      });
+      if (groupOrder.length <= 1) return []; // not a grid
+
+      return groupOrder.map(name => {
+        const radios = groups[name];
+        const first = radios[0];
+
+        // Row label — look for text in the same TR that isn't inside an input
+        let rowLabel = '';
+        const tr = first.closest('tr');
+        if (tr) {
+          const cells = Array.from(tr.querySelectorAll('td, th'));
+          for (const cell of cells) {
+            if (!cell.querySelector('input')) {
+              const t = (cell.innerText || cell.textContent || '').trim();
+              if (t) { rowLabel = t; break; }
+            }
+          }
+        }
+
+        // Selected column label
+        const checked = radios.find(r => r.checked);
+        let selectedLabel = '';
+        if (checked) {
+          // Try label[for]
+          if (checked.id) {
+            const lbl = document.querySelector(`label[for="${checked.id}"]`);
+            if (lbl) selectedLabel = (lbl.innerText || lbl.textContent || '').trim();
+          }
+          // Try column header from table
+          if (!selectedLabel) {
+            const table = checked.closest('table');
+            const td = checked.closest('td');
+            if (table && td) {
+              const allCells = Array.from(checked.closest('tr')?.querySelectorAll('td') || []);
+              const colIdx = allCells.indexOf(td);
+              const headers = Array.from(table.querySelectorAll('thead th, tr:first-child th'));
+              if (headers[colIdx]) selectedLabel = (headers[colIdx].innerText || headers[colIdx].textContent || '').trim();
+            }
+          }
+        }
+
+        return {
+          row: rowLabel || name,
+          selected: selectedLabel || (checked ? '✓ Selected' : '—'),
+          answered: !!checked,
+        };
+      });
+    });
+  } catch {
+    return [];
+  }
+};
+
 // ══════════════════════════════════════════════════════════════════════════════
 // CLICK HELPERS — label-first strategy so Decipher JS events fire correctly
 // ══════════════════════════════════════════════════════════════════════════════
@@ -660,6 +724,7 @@ const processSession = async (job) => {
 
       await page.waitForTimeout(800);
       const pageOptionsAfter = await capturePageOptions(page);
+      const gridAnswers = await captureGridAnswers(page);
 
       // Screenshot after answering
       await takeScreenshot(page, screenshotPath);
@@ -673,6 +738,7 @@ const processSession = async (job) => {
         answers: answersGiven, answerSummary, timeTaken: pageTime,
         screenshot: `${sessionId}/${screenshotFilename}`,
         scenarioStep: scenarioStepUsed || null,
+        gridAnswers: gridAnswers.length > 0 ? gridAnswers : undefined,
       });
 
       await logSessionEvent(sessionId, 'page_answered', {
@@ -681,6 +747,7 @@ const processSession = async (job) => {
         answers: answersGiven, answerSummary, timeTaken: pageTime,
         screenshot: `${sessionId}/${screenshotFilename}`,
         scenarioStep: scenarioStepUsed || null,
+        gridAnswers: gridAnswers.length > 0 ? gridAnswers : undefined,
       });
 
       // ── Click next ────────────────────────────────────────────────────────
