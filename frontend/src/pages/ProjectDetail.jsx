@@ -529,7 +529,7 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
             Max 20 per trigger. Concurrent limit: {project.concurrent_sessions}
           </div>
         </div>
-        {testingMode === 'live' && (
+
           <div style={{ marginBottom: 18 }}>
             <label
               style={{
@@ -776,7 +776,7 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
               )}
             </div>
           </div>
-        )}
+
 
         {selected.length > 0 && n > 0 && (
           <div
