@@ -389,8 +389,9 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
     api
       .get(`/scenarios/project/${project.id}`)
       .then((res) => {
+        // Exclude Country Logic — it runs globally on every session automatically
         const active = (res.data.scenarios || []).filter(
-          (s) => s.project_active,
+          (s) => s.project_active && s.name !== 'Country Logic',
         );
         setAllScenarios(active);
         setSelectedScenarios(active.map((s) => s.id)); // default: all active selected

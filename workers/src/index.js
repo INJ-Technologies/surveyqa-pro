@@ -101,6 +101,8 @@ const loadSessionScenario = async (projectId, sessionId, scenarioIds = null) => 
     if (scenarioIds && scenarioIds.length > 0) {
       scenarios = scenarios.filter(s => scenarioIds.includes(s.id));
     }
+    // Country Logic is applied globally — exclude from round-robin assignment
+    scenarios = scenarios.filter(s => s.name !== 'Country Logic');
     if (scenarios.length === 0) return null;
 
     const posResult = await pool.query(
