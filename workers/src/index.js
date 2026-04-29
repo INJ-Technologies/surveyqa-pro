@@ -225,6 +225,12 @@ const loadCountryLogic = async (projectId) => {
 // ─── Load the scenario assigned to this session (round-robin, excludes Country Logic) ──
 const loadSessionScenario = async (projectId, sessionId, scenarioIds = null) => {
   try {
+    // If user explicitly sent an empty array, they selected no scenarios
+    if (Array.isArray(scenarioIds) && scenarioIds.length === 0) {
+      console.log('[Scenario] No scenarios selected by user — skipping');
+      return null;
+    }
+
     let scenarios = await getActiveScenarios(projectId);
     if (!scenarios || scenarios.length === 0) return null;
 
@@ -232,9 +238,6 @@ const loadSessionScenario = async (projectId, sessionId, scenarioIds = null) => 
     if (scenarioIds && scenarioIds.length > 0) {
       scenarios = scenarios.filter(s => scenarioIds.includes(s.id));
     }
-    // Country Logic is global — never assign it as a round-robin scenario
-    scenarios = scenarios.filter(s => s.name !== 'Country Logic');
-    if (scenarios.length === 0) return null;
 
     // Round-robin by session position
     const posResult = await pool.query(

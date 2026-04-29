@@ -410,7 +410,7 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
         projectId: project.id,
         count: parseInt(count),
         proxyCountry: countryCodes.length > 0 ? countryCodes : null,
-        scenarioIds: selectedScenarios.length > 0 ? selectedScenarios : null,
+        scenarioIds: selectedScenarios,
         internalTesting: testingMode === 'internal',
       });
       onTriggered();
