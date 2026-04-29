@@ -3281,7 +3281,7 @@ function SessionReportModal({
                     ))}
                   </div>
                 )}
-                {activePage.payload?.options?.length > 0 && (
+                {activePage.payload?.options?.length > 0 && !activePage.payload?.gridAnswers?.length && (
                   <div style={{ marginBottom: 16 }}>
                     <div
                       style={{
