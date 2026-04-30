@@ -85,7 +85,7 @@ const takeScreenshot = async (page, screenshotPath) => {
   return false;
 };
 
-// ─── Capture grid/matrix answers with row labels ───────────────────────────────
+// ─── Capture grid/matrix answers with row labels ──────────────────────────────
 const captureGridAnswers = async (page) => {
   try {
     return await page.evaluate(() => {
@@ -101,7 +101,6 @@ const captureGridAnswers = async (page) => {
       return groupOrder.map(name => {
         const radios = groups[name];
         const first = radios[0];
-
         let rowLabel = '';
         const tr = first.closest('tr');
         if (tr) {
@@ -113,7 +112,6 @@ const captureGridAnswers = async (page) => {
             }
           }
         }
-
         const checked = radios.find(r => r.checked);
         let selectedLabel = '';
         if (checked) {
@@ -132,7 +130,6 @@ const captureGridAnswers = async (page) => {
             }
           }
         }
-
         return {
           row: rowLabel || name,
           selected: selectedLabel || (checked ? '✓ Selected' : '—'),
@@ -189,10 +186,103 @@ const clickLabelByText = async (page, text) => {
   return false;
 };
 
+// ══════════════════════════════════════════════════════════════════════════════
+// FOLLOW-UP INPUT DETECTION HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Parse a numeric string with optional magnitude suffix.
+ * ignoreSuffix=true  → "USD$500m" becomes 500   (used when input field already has "million" label)
+ * ignoreSuffix=false → "USD$500m" becomes 500000000
+ */
+const parseNum = (str, ignoreSuffix = false) => {
+  if (!str) return null;
+  // Strip currency symbols, commas, spaces, "USD" text
+  const clean = str.replace(/USD|[$£€,\s]/gi, '').trim();
+  const match = clean.match(/^([\d.]+)([kmbtKMBT]?)/);
+  if (!match) return null;
+  let num = parseFloat(match[1]);
+  if (isNaN(num)) return null;
+  if (!ignoreSuffix) {
+    const s = (match[2] || '').toLowerCase();
+    if (s === 'k') num *= 1_000;
+    else if (s === 'm') num *= 1_000_000;
+    else if (s === 'b') num *= 1_000_000_000;
+    else if (s === 't') num *= 1_000_000_000_000;
+  }
+  return num;
+};
+
+/**
+ * Extract {min, max} from any text string.
+ * Handles patterns like:
+ *   "Between USD$500m – USD$999m"
+ *   "75,000 - 99,999"
+ *   "enter a number between 100 and 500"
+ *   "Please specify the exact number of employees between 75000 and 99999"
+ */
+const extractRange = (text, ignoreSuffix = false) => {
+  if (!text) return null;
+
+  // Pattern 1: "between X and Y" or "between X – Y"
+  const p1 = text.match(
+    /between\s+([USD$£€]*[\d,.]+[kmbtKMBT]?)\s+(?:and|–|-)\s+([USD$£€]*[\d,.]+[kmbtKMBT]?)/i
+  );
+  if (p1) {
+    const a = parseNum(p1[1], ignoreSuffix);
+    const b = parseNum(p1[2], ignoreSuffix);
+    if (a !== null && b !== null) return { min: Math.min(a, b), max: Math.max(a, b) };
+  }
+
+  // Pattern 2: "X – Y" or "X - Y" with optional currency/suffix
+  const p2 = text.match(
+    /([USD$£€]*[\d,.]+[kmbtKMBT]?)\s*(?:–|-)\s*([USD$£€]*[\d,.]+[kmbtKMBT]?)/i
+  );
+  if (p2) {
+    const a = parseNum(p2[1], ignoreSuffix);
+    const b = parseNum(p2[2], ignoreSuffix);
+    if (a !== null && b !== null && a !== b && Math.min(a, b) >= 0) {
+      return { min: Math.min(a, b), max: Math.max(a, b) };
+    }
+  }
+
+  // Pattern 3: "enter/from X to Y" or "X to Y"
+  const p3 = text.match(/(?:enter|between|from).*?([\d,.]+)\s*(?:and|to)\s*([\d,.]+)/i);
+  if (p3) {
+    const a = parseFloat(p3[1].replace(/,/g, ''));
+    const b = parseFloat(p3[2].replace(/,/g, ''));
+    if (!isNaN(a) && !isNaN(b)) return { min: Math.min(a, b), max: Math.max(a, b) };
+  }
+
+  return null;
+};
+
+/**
+ * Round a value to 3 significant figures based on its magnitude.
+ * Examples:
+ *   87432  → 87400  (rounds to nearest 100)
+ *   12433  → 12400  (rounds to nearest 100)
+ *   750    → 750    (rounds to nearest 1)
+ *   60     → 60     (rounds to nearest 1)
+ *   2.5    → 2.5    (keeps decimal)
+ *   500000 → 500000 (rounds to nearest 1000)
+ * Then clamped within [rangeMin, rangeMax].
+ */
+const smartRound = (value, rangeMin, rangeMax) => {
+  if (!value || value <= 0) return Math.ceil(rangeMin || 1);
+  const mag = Math.floor(Math.log10(Math.abs(value)));
+  // Round to 3 significant figures: use 10^(mag-2) as rounding unit
+  const roundTo = Math.pow(10, Math.max(0, mag - 2));
+  const rounded = Math.round(value / roundTo) * roundTo;
+  // Clamp to valid range
+  const clamped = Math.min(Math.max(rounded, Math.ceil(rangeMin)), Math.floor(rangeMax));
+  return clamped;
+};
+
 // ─── Auto-detect and fill a revealed follow-up input after radio selection ────
 const fillFollowupInput = async (page) => {
   try {
-    await page.waitForTimeout(600); // wait for conditional field to appear
+    await page.waitForTimeout(600); // wait for conditional field to reveal
 
     const inputs = await page.locator("input[type='text'], input[type='number']").all();
     for (const input of inputs) {
@@ -201,14 +291,51 @@ const fillFollowupInput = async (page) => {
       let min = null;
       let max = null;
 
-      // Strategy 1: HTML min/max attributes on the input element itself
+      // ── Strategy 1: HTML min/max attributes on the input element ──────────
       const attrMin = await input.getAttribute('min').catch(() => null);
       const attrMax = await input.getAttribute('max').catch(() => null);
-      if (attrMin !== null && attrMin !== '') min = parseInt(attrMin);
-      if (attrMax !== null && attrMax !== '') max = parseInt(attrMax);
+      if (attrMin !== null && attrMin !== '') min = parseFloat(attrMin);
+      if (attrMax !== null && attrMax !== '') max = parseFloat(attrMax);
+      if (min !== null && max !== null) {
+        console.log(`[Scenario] Follow-up range from HTML attrs: ${min}–${max}`);
+      }
 
-      // Strategy 2: scan nearby parent text for "between X and Y" or "X - Y" patterns
-      if (!min || !max) {
+      // ── Detect if input field has a unit label (million, billion, etc.) ───
+      // If yes, suffix on numbers in the range label should be ignored
+      // e.g. "USD$500m – USD$999m" + input says "million" → range is 500–999
+      const adjacentText = await input.evaluate(el => {
+        const parent = el.parentElement;
+        return (parent?.innerText || parent?.textContent || '').toLowerCase();
+      }).catch(() => '');
+      const hasUnitLabel = /\b(million|billion|thousand|mn|bn)\b/i.test(adjacentText);
+
+      // ── Strategy 2: range from currently selected radio label ─────────────
+      if (min === null || max === null) {
+        const selectedLabel = await page.evaluate(() => {
+          const checked = document.querySelector('input[type="radio"]:checked');
+          if (!checked) return '';
+          if (checked.id) {
+            const lbl = document.querySelector(`label[for="${checked.id}"]`);
+            if (lbl) return lbl.innerText || lbl.textContent || '';
+          }
+          const parentLabel = checked.closest('label');
+          if (parentLabel) return parentLabel.innerText || parentLabel.textContent || '';
+          return '';
+        }).catch(() => '');
+
+        if (selectedLabel) {
+          // If input has "million" label, ignore the "m" suffix in the range text
+          const parsed = extractRange(selectedLabel, hasUnitLabel);
+          if (parsed) {
+            min = parsed.min;
+            max = parsed.max;
+            console.log(`[Scenario] Follow-up range from selected radio label "${selectedLabel.trim().slice(0, 60)}": ${min}–${max}`);
+          }
+        }
+      }
+
+      // ── Strategy 3: range from nearby text around the input ───────────────
+      if (min === null || max === null) {
         const nearbyText = await input.evaluate(el => {
           let node = el.parentElement;
           for (let i = 0; i < 5; i++) {
@@ -219,58 +346,71 @@ const fillFollowupInput = async (page) => {
           return '';
         }).catch(() => '');
 
-        const betweenMatch = nearbyText.match(/between\s+([\d,]+)\s+and\s+([\d,]+)/i);
-        const rangeMatch   = nearbyText.match(/([\d,]+)\s*[-–to]+\s*([\d,]+)/);
-        const minMatch     = nearbyText.match(/min(?:imum)?\s*[:\-]?\s*([\d,]+)/i);
-        const maxOnlyMatch = nearbyText.match(/max(?:imum)?\s*[:\-]?\s*([\d,]+)/i);
-
-        if (betweenMatch) {
-          min = parseInt(betweenMatch[1].replace(/,/g, ''));
-          max = parseInt(betweenMatch[2].replace(/,/g, ''));
-        } else if (rangeMatch) {
-          min = parseInt(rangeMatch[1].replace(/,/g, ''));
-          max = parseInt(rangeMatch[2].replace(/,/g, ''));
-        } else {
-          if (minMatch)     min = parseInt(minMatch[1].replace(/,/g, ''));
-          if (maxOnlyMatch) max = parseInt(maxOnlyMatch[1].replace(/,/g, ''));
+        const parsed = extractRange(nearbyText, hasUnitLabel);
+        if (parsed) {
+          min = parsed.min;
+          max = parsed.max;
+          console.log(`[Scenario] Follow-up range from nearby text: ${min}–${max}`);
         }
       }
 
-      // Strategy 3: scan visible validation error text on the page
-      if (!min || !max) {
-        const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
-        const errBetween = pageText.match(/between\s+([\d,]+)\s+and\s+([\d,]+)/i);
-        const errRange   = pageText.match(/enter.*?([\d,]+)\s*[-–]\s*([\d,]+)/i);
-        if (errBetween) {
-          min = parseInt(errBetween[1].replace(/,/g, ''));
-          max = parseInt(errBetween[2].replace(/,/g, ''));
-        } else if (errRange) {
-          min = parseInt(errRange[1].replace(/,/g, ''));
-          max = parseInt(errRange[2].replace(/,/g, ''));
+      // ── Strategy 4: validation error messages on the page ─────────────────
+      if (min === null || max === null) {
+        // Only look at error/hint text elements, not the full page body
+        // (avoids picking up unrelated numbers like "USD: 60.00 million" conversion hints)
+        const errorText = await page.evaluate(() => {
+          const selectors = [
+            '.error', '.validation-error', '.field-error',
+            '[class*="error"]', '[class*="invalid"]',
+            '.hint', '.help-text', '[class*="hint"]',
+          ];
+          const texts = [];
+          for (const sel of selectors) {
+            document.querySelectorAll(sel).forEach(el => {
+              const t = (el.innerText || el.textContent || '').trim();
+              if (t) texts.push(t);
+            });
+          }
+          return texts.join(' ');
+        }).catch(() => '');
+
+        if (errorText) {
+          const parsed = extractRange(errorText, hasUnitLabel);
+          if (parsed) {
+            min = parsed.min;
+            max = parsed.max;
+            console.log(`[Scenario] Follow-up range from error text: ${min}–${max}`);
+          }
         }
       }
 
-      // Strategy 4: placeholder text fallback
-      if (!min && !max) {
+      // ── Strategy 5: placeholder attribute fallback ─────────────────────────
+      if (min === null && max === null) {
         const placeholder = await input.getAttribute('placeholder').catch(() => '');
-        const numMatch = placeholder?.match(/([\d,]+)/);
-        if (numMatch) {
-          const base = parseInt(numMatch[1].replace(/,/g, ''));
-          min = base;
-          max = base * 2;
+        const parsed = extractRange(placeholder || '', false);
+        if (parsed) {
+          min = parsed.min;
+          max = parsed.max;
+        } else {
+          // Last resort: use a generic small range
+          min = 1;
+          max = 100;
+          console.log(`[Scenario] Follow-up range: no range detected, using fallback ${min}–${max}`);
         }
       }
 
-      // Derive missing bound from available one
-      if (min && !max) max = min * 2;
-      if (!min && max) min = Math.floor(max * 0.5);
+      // ── Ensure valid range ────────────────────────────────────────────────
+      if (min === null) min = 0;
+      if (max === null) max = min * 2 || 100;
+      if (min > max) [min, max] = [max, min];
+      if (min === max) max = min + Math.max(1, Math.floor(min * 0.1));
 
-      // Final fallback — no range detected at all
-      if (!min && !max) { min = 1; max = 100; }
+      // ── Pick a random value and smart-round it ────────────────────────────
+      const rawValue = min + Math.random() * (max - min);
+      const value = smartRound(rawValue, min, max);
 
-      const value = Math.floor(min + Math.random() * (max - min + 1));
       await input.fill(String(value)).catch(() => {});
-      console.log(`[Scenario] Auto-filled follow-up input: ${value} (detected range: ${min}–${max})`);
+      console.log(`[Scenario] ✓ Auto-filled follow-up input: ${value} (range: ${min}–${max}, unit label: ${hasUnitLabel})`);
       return true;
     }
   } catch (e) {
@@ -444,7 +584,7 @@ const executeScenarioAction = async (page, step) => {
             await field.fill(action_text).catch(() => {});
           }
         }
-        console.log(`[Scenario] Action: open_end → "${action_text.slice(0,40)}"`);
+        console.log(`[Scenario] Action: open_end → "${action_text.slice(0, 40)}"`);
         return [{ type: 'open-end', text: action_text }];
       }
       return null;
@@ -475,7 +615,7 @@ const executeScenarioAction = async (page, step) => {
       const targetIdx = (vals[0] || 1) - 1;
       if (targetIdx >= 0 && targetIdx < options.length) {
         await clickRadioOption(page, options[targetIdx]);
-        await fillFollowupInput(page); // ← auto-detect and fill revealed input
+        await fillFollowupInput(page); // auto-detect and fill any revealed input
         console.log(`[Scenario] select_exact → clicked option ${targetIdx + 1} of ${options.length}`);
       } else {
         console.warn(`[Scenario] select_exact: option ${vals[0]} out of range (${options.length} options)`);
@@ -495,7 +635,7 @@ const executeScenarioAction = async (page, step) => {
       }
       const chosen = valid[Math.floor(Math.random() * valid.length)];
       await clickRadioOption(page, options[chosen - 1]);
-      await fillFollowupInput(page); // ← auto-detect and fill revealed input
+      await fillFollowupInput(page); // auto-detect and fill any revealed input
       console.log(`[Scenario] select_one_of → picked option ${chosen}`);
       return [{ type: 'radio', scenarioControlled: true }];
     }
@@ -509,7 +649,7 @@ const executeScenarioAction = async (page, step) => {
       if (available.length === 0) return null;
       const chosen = available[Math.floor(Math.random() * available.length)];
       await clickRadioOption(page, chosen);
-      await fillFollowupInput(page); // ← auto-detect and fill revealed input
+      await fillFollowupInput(page); // auto-detect and fill any revealed input
       console.log(`[Scenario] select_not_in → picked from ${available.length} available`);
       return [{ type: 'radio', scenarioControlled: true }];
     }
@@ -520,7 +660,7 @@ const executeScenarioAction = async (page, step) => {
       const options = groupMap[groupOrder[0]];
       const idx = Math.floor(Math.random() * options.length);
       await clickRadioOption(page, options[idx]);
-      await fillFollowupInput(page); // ← auto-detect and fill revealed input
+      await fillFollowupInput(page); // auto-detect and fill any revealed input
       console.log(`[Scenario] select_random → picked option ${idx + 1}`);
       return [{ type: 'radio', scenarioControlled: true }];
     }
@@ -567,7 +707,7 @@ const executeScenarioAction = async (page, step) => {
 
 const findMatchingStep = (scenario, questionsOnPage, pageNum) => {
   if (!scenario?.steps?.length) return null;
-  console.log(`[Scenario] Checking ${scenario.steps.length} step(s) against page ${pageNum}, questions: [${questionsOnPage.map(q => q.slice(0,40)).join(' | ')}]`);
+  console.log(`[Scenario] Checking ${scenario.steps.length} step(s) against page ${pageNum}, questions: [${questionsOnPage.map(q => q.slice(0, 40)).join(' | ')}]`);
   for (const step of scenario.steps) {
     if (matchStep(step, questionsOnPage, pageNum)) return step;
   }
@@ -608,7 +748,11 @@ const processSession = async (job) => {
     console.log(`[Worker] No scenario assigned — default random answering`);
   }
 
-  const viewports = { desktop: { width: 1366, height: 768 }, mobile: { width: 390, height: 844 }, tablet: { width: 820, height: 1180 } };
+  const viewports = {
+    desktop: { width: 1366, height: 768 },
+    mobile:  { width: 390,  height: 844 },
+    tablet:  { width: 820,  height: 1180 },
+  };
   const viewport = viewports[deviceType] || viewports.desktop;
 
   const userAgents = {
@@ -635,7 +779,9 @@ const processSession = async (job) => {
 
   const launchOptions = {
     headless: true,
-    ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH && { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }),
+    ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH && {
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+    }),
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled'],
   };
   if (proxy) launchOptions.proxy = proxy;
@@ -728,7 +874,10 @@ const processSession = async (job) => {
           timeTaken: 0, screenshot: `${sessionId}/${exitFilename}`,
           isExitPage: true, exitOutcome: contentOutcome,
         });
-        await logSessionEvent(sessionId, 'redirect_detected', { url: currentUrl, outcome, detectedBy: 'page_content', screenshot: `${sessionId}/${exitFilename}` });
+        await logSessionEvent(sessionId, 'redirect_detected', {
+          url: currentUrl, outcome, detectedBy: 'page_content',
+          screenshot: `${sessionId}/${exitFilename}`,
+        });
         break;
       }
 
@@ -750,7 +899,7 @@ const processSession = async (job) => {
           return [...found];
         });
         questionsOnPage = rawTexts.filter(t => !isHintText(t)).slice(0, 5);
-        console.log(`[Worker] Questions detected: [${questionsOnPage.map(q => `"${q.slice(0,50)}"`).join(', ')}]`);
+        console.log(`[Worker] Questions detected: [${questionsOnPage.map(q => `"${q.slice(0, 50)}"`).join(', ')}]`);
       } catch (e) {
         console.warn(`[Worker] Question detection failed: ${e.message}`);
       }
@@ -790,7 +939,7 @@ const processSession = async (job) => {
             const waitMax = parseInt(matchedStep.wait_max_s) || waitMin;
             if (waitMin > 0 || waitMax > 0) {
               const waitMs = (waitMin + Math.random() * (waitMax - waitMin)) * 1000;
-              console.log(`[Scenario] Waiting ${Math.round(waitMs/1000)}s (range: ${waitMin}-${waitMax}s)`);
+              console.log(`[Scenario] Waiting ${Math.round(waitMs / 1000)}s (range: ${waitMin}-${waitMax}s)`);
               await page.waitForTimeout(waitMs);
             }
             console.log(`[Worker] Page ${pageCount}: scenario step "${matchedStep.action}" executed`);
@@ -811,6 +960,7 @@ const processSession = async (job) => {
       const pageOptionsAfter = await capturePageOptions(page);
       const gridAnswers = await captureGridAnswers(page);
 
+      // Screenshot after answering
       await takeScreenshot(page, screenshotPath);
 
       const pageTime = Math.round((Date.now() - pageStart) / 1000);
@@ -869,7 +1019,10 @@ const processSession = async (job) => {
           timeTaken: 0, screenshot: `${sessionId}/${finalFilename}`,
           isExitPage: true, exitOutcome: outcome,
         });
-        await logSessionEvent(sessionId, 'redirect_detected', { url: newUrl, outcome, screenshot: `${sessionId}/${finalFilename}` });
+        await logSessionEvent(sessionId, 'redirect_detected', {
+          url: newUrl, outcome,
+          screenshot: `${sessionId}/${finalFilename}`,
+        });
         break;
       }
     }
@@ -881,7 +1034,12 @@ const processSession = async (job) => {
     await logSessionEvent(sessionId, 'error', { message: err?.message, stack: err?.stack });
     console.error(`[Worker] Session ${sessionId} error:`, err.message);
   } finally {
-    try { if (context) { await context.tracing.stop({ path: tracePath }); await saveTracePath(sessionId, tracePath); } } catch {}
+    try {
+      if (context) {
+        await context.tracing.stop({ path: tracePath });
+        await saveTracePath(sessionId, tracePath);
+      }
+    } catch {}
     try { await browser?.close(); } catch {}
   }
 
@@ -904,8 +1062,8 @@ const processSession = async (job) => {
 const worker = new Worker('survey-sessions', processSession, { connection, concurrency: CONCURRENCY });
 
 worker.on('completed', (job, result) => console.log(`[Worker] Job ${job.id} done — ${result.outcome}`));
-worker.on('failed', (job, err) => console.error(`[Worker] Job ${job.id} failed:`, err.message));
-worker.on('error', (err) => console.error('[Worker] Error:', err));
+worker.on('failed',    (job, err)    => console.error(`[Worker] Job ${job.id} failed:`, err.message));
+worker.on('error',     (err)         => console.error('[Worker] Error:', err));
 
 process.on('SIGTERM', async () => { await worker.close(); process.exit(0); });
 
