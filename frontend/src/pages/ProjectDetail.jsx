@@ -4423,6 +4423,17 @@ function SessionsTab({
     return () => clearInterval(intervalRef.current);
   }, [stats, autoRefresh]);
 
+  // Returns live elapsed time for active sessions, stored duration for completed ones
+  const getLiveDuration = (session) => {
+    if (['queued', 'initialising', 'in_progress'].includes(session.status)) {
+      const start = session.started_at || session.created_at;
+      if (!start) return '—';
+      const elapsed = Math.round((Date.now() - new Date(start).getTime()) / 1000);
+      return fmtDuration(elapsed) + ' ⏳';
+    }
+    return fmtDuration(session.total_duration_s);
+  };
+
   const handleClearSessions = async () => {
     setClearing(true);
     try {
@@ -4453,6 +4464,27 @@ function SessionsTab({
       showToast(err.response?.data?.error || "Failed to stop sessions", "error");
     } finally {
       setStopping(false);
+    }
+  };
+
+  const handleStopOne = async (sessionId) => {
+    try {
+      await api.post(`/sessions/${sessionId}/stop`);
+      showToast('Session stopped ✓');
+      load(true);
+    } catch (err) {
+      showToast(err.response?.data?.error || 'Failed to stop session', 'error');
+    }
+  };
+
+  const handleDeleteOne = async (sessionId) => {
+    if (!window.confirm('Delete this session? This cannot be undone.')) return;
+    try {
+      await api.delete(`/sessions/${sessionId}`);
+      showToast('Session deleted ✓');
+      load(true);
+    } catch (err) {
+      showToast(err.response?.data?.error || 'Failed to delete session', 'error');
     }
   };
 
@@ -4703,17 +4735,19 @@ function SessionsTab({
                 <tr style={s.theadRow}>
                   {[
                     "Session ID",
+                    "Mode",
                     "Response ID",
                     "IP Address",
-                    "Status",
-                    "Persona",
+                    "State",
+                    "Scenario",
                     "Country",
                     "Device",
                     "Duration",
                     "Quality",
-                    "Outcome",
+                    "Status",
                     "Started",
-                    "Report",
+                    "Ended",
+                    "Actions",
                   ].map((h) => (
                     <th key={h} style={s.th}>
                       <div style={s.thInner}>{h}</div>
@@ -4742,6 +4776,18 @@ function SessionsTab({
                         }}
                       >
                         {session.id.slice(0, 8)}
+                      </span>
+                    </td>
+                    {/* Mode */}
+                    <td style={s.td}>
+                      <span style={{
+                        fontSize: "0.72rem", fontWeight: 700,
+                        background: session.internal_testing ? "#fef3c7" : "#dbeafe",
+                        color: session.internal_testing ? "#92400e" : "#1e40af",
+                        borderRadius: 20, padding: "2px 8px", fontFamily: FONT,
+                        whiteSpace: "nowrap",
+                      }}>
+                        {session.internal_testing ? "🧪 Test" : "🌐 Live"}
                       </span>
                     </td>
                     <td style={s.td}>
@@ -4792,6 +4838,16 @@ function SessionsTab({
                         {session.persona_name || "—"}
                       </span>
                     </td>
+                                        {/* Scenario */}
+                    <td style={s.td}>
+                      <span style={{ fontSize: "0.75rem", color: "#475569", fontFamily: FONT }}>
+                        {session.scenario_name
+                          ? <span style={{ background: "#f0f7ff", color: "#1e3a5f", borderRadius: 4, padding: "2px 7px", fontSize: "0.72rem", fontWeight: 600, fontFamily: FONT }}>
+                              {session.scenario_name.slice(0, 20)}{session.scenario_name.length > 20 ? "…" : ""}
+                            </span>
+                          : <span style={{ color: "#94a3b8" }}>Default</span>}
+                      </span>
+                    </td>
                     <td style={s.td}>
                       <span
                         style={{
@@ -4804,25 +4860,18 @@ function SessionsTab({
                       </span>
                     </td>
                     <td style={s.td}>
-                      <span
-                        style={{
-                          fontSize: "0.78rem",
-                          color: "#64748b",
-                          fontFamily: FONT,
-                        }}
-                      >
-                        {session.device_type || "—"}
+                      <span style={{ fontSize: "0.78rem", color: "#64748b", fontFamily: FONT }}>
+                        {session.device_type
+                          ? session.device_type.charAt(0).toUpperCase() + session.device_type.slice(1)
+                          : "—"}
                       </span>
                     </td>
                     <td style={s.td}>
-                      <span
-                        style={{
-                          fontSize: "0.82rem",
-                          color: "#475569",
-                          fontFamily: FONT,
-                        }}
-                      >
-                        {fmtDuration(session.total_duration_s)}
+                      <span style={{ fontSize: "0.82rem", color: "#475569", fontFamily: FONT,
+                        fontWeight: ['queued','initialising','in_progress'].includes(session.status) ? 600 : 400,
+                        color: ['queued','initialising','in_progress'].includes(session.status) ? "#2563eb" : "#475569",
+                      }}>
+                        {getLiveDuration(session)}
                       </span>
                     </td>
                     <td style={s.td}>
@@ -4897,25 +4946,37 @@ function SessionsTab({
                       </span>
                     </td>
                     <td style={s.td}>
-                      <button
-                        onClick={() => setViewSession(session.id)}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 4,
-                          background: "#f0f7ff",
-                          border: "1px solid #dbeafe",
-                          borderRadius: 6,
-                          padding: "5px 10px",
-                          cursor: "pointer",
-                          color: "#2563eb",
-                          fontSize: "0.75rem",
-                          fontFamily: FONT,
-                          fontWeight: 600,
-                        }}
-                      >
-                        <FileText size={12} /> View
-                      </button>
+                      <span style={{ fontSize: "0.75rem", color: "#94a3b8", fontFamily: FONT }}>
+                        {session.completed_at ? fmtTime(session.completed_at) : "—"}
+                      </span>
+                    </td>
+                    <td style={s.td}>
+                      <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                        <button
+                          onClick={() => setViewSession(session.id)}
+                          style={{ display: "flex", alignItems: "center", gap: 4, background: "#f0f7ff", border: "1px solid #dbeafe", borderRadius: 6, padding: "5px 8px", cursor: "pointer", color: "#2563eb", fontSize: "0.72rem", fontFamily: FONT, fontWeight: 600 }}
+                        >
+                          <FileText size={11} /> View
+                        </button>
+                        {['queued','initialising','in_progress'].includes(session.status) && (
+                          <button
+                            onClick={() => handleStopOne(session.id)}
+                            title="Stop this session"
+                            style={{ display: "flex", alignItems: "center", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 6, padding: "5px 7px", cursor: "pointer", color: "#c2410c" }}
+                          >
+                            <StopCircle size={11} />
+                          </button>
+                        )}
+                        {isAdmin && (
+                          <button
+                            onClick={() => handleDeleteOne(session.id)}
+                            title="Delete this session"
+                            style={{ display: "flex", alignItems: "center", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "5px 7px", cursor: "pointer", color: "#ef4444" }}
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

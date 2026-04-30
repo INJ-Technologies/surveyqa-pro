@@ -305,7 +305,7 @@ const getDashboardStats = async (workspaceId) => {
 const getProjectSessionStats = async (projectId) => {
   const result = await pool.query(
     `SELECT
-       COUNT(*)                                                      as total,
+       COUNT(*)                                                     as total,
        COUNT(*) FILTER (WHERE status = 'completed')                 as completed,
        COUNT(*) FILTER (WHERE status = 'terminated')                as terminated,
        COUNT(*) FILTER (WHERE status IN ('error','flagged'))        as errors,
@@ -341,23 +341,29 @@ const getProjectSessions = async (projectId, { status, outcome, country, limit =
  
   const result = await pool.query(
     `SELECT
-       s.id, s.status, s.outcome, s.proxy_country, s.proxy_provider,
-       s.device_type, s.browser_type, s.ai_strategy,
-       s.total_duration_s, s.quality_score, s.question_count,
-       s.redirect_type, s.error_log,
-       s.response_id,
-       s.started_at, s.completed_at, s.created_at,
-       p.name as persona_name,
-       (SELECT se.payload->>'ip'
+      s.id, s.status, s.outcome, s.proxy_country, s.proxy_provider,
+      s.device_type, s.browser_type, s.ai_strategy,
+      s.total_duration_s, s.quality_score, s.question_count,
+      s.redirect_type, s.error_log,
+      s.response_id,
+      s.internal_testing,
+      s.started_at, s.completed_at, s.created_at,
+      p.name as persona_name,
+      (SELECT se.payload->>'scenarioName'
+        FROM session_events se
+        WHERE se.session_id = s.id
+          AND se.event_type = 'scenario_assigned'
+        LIMIT 1) as scenario_name,
+      (SELECT se.payload->>'ip'
         FROM session_events se
         WHERE se.session_id = s.id
           AND se.event_type = 'ip_assigned'
         LIMIT 1) as ip_address
-     FROM sessions s
-     LEFT JOIN personas p ON p.id = s.persona_id
-     WHERE ${conditions.join(' AND ')}
-     ORDER BY s.created_at DESC
-     LIMIT $${idx++} OFFSET $${idx}`,
+    FROM sessions s
+    LEFT JOIN personas p ON p.id = s.persona_id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY s.created_at DESC
+    LIMIT $${idx++} OFFSET $${idx}`,
     values
   );
  

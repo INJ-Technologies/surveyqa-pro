@@ -9,6 +9,7 @@ const { sessionQueue }   = require("../queues/index");
 const { getProjectById, getProjectSurveys } = require("../db/projects");
 const { getScenariosByIds } = require('../db/scenarios');
 
+
 const router = express.Router();
 
 const SCREENSHOTS_DIR = process.env.SCREENSHOTS_DIR || "/app/screenshots";
@@ -261,6 +262,33 @@ router.post('/project/:projectId/stop', requireRole('admin', 'project_manager'),
   } catch (err) {
     console.error('Stop sessions error:', err);
     res.status(500).json({ error: 'Failed to stop sessions' });
+  }
+});
+
+// ─── POST /api/sessions/:id/stop — terminate single session ──────────────────
+router.post('/:id/stop', requireAuth, async (req, res) => {
+  try {
+    await pool.query(
+      `UPDATE sessions SET status = 'error', outcome = 'error',
+       error_log = 'Manually stopped by user', completed_at = NOW()
+       WHERE id = $1`,
+      [req.params.id]
+    );
+    res.json({ message: 'Session stopped' });
+  } catch (err) {
+    console.error('Stop session error:', err.message);
+    res.status(500).json({ error: 'Failed to stop session' });
+  }
+});
+
+// ─── DELETE /api/sessions/:id — delete single session ────────────────────────
+router.delete('/:id', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM sessions WHERE id = $1`, [req.params.id]);
+    res.json({ message: 'Session deleted' });
+  } catch (err) {
+    console.error('Delete session error:', err.message);
+    res.status(500).json({ error: 'Failed to delete session' });
   }
 });
 

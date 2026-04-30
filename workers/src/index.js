@@ -859,6 +859,14 @@ const processSession = async (job) => {
     }
 
     await updateSessionStatus(sessionId, 'in_progress');
+    // Store internal_testing flag and scenario name on session record
+    await pool.query(
+      `UPDATE sessions SET
+         internal_testing = $1,
+         scenario_name    = $2
+       WHERE id = $3`,
+      [!!internalTesting, scenario?.name || null, sessionId]
+    ).catch(() => {});
     await logSessionEvent(sessionId, 'browser_launched', {
       proxy: internalTesting ? 'internal-testing' : proxy ? `decodo-${proxyCountry}` : 'direct',
       responseId, surveyUrl, scenarioName: scenario?.name || null,
