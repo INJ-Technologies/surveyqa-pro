@@ -56,7 +56,7 @@ const PLATFORMS = [
 ];
 const AI_MODES = ["ai", "human", "predefined"];
 const STRATEGIES = ["persona_true", "quota_guided", "stress_test"];
-const PROVIDERS = ["brightdata", "oxylabs", "smartproxy", "iproyal", "custom"];
+const PROVIDERS = ["decodo", "brightdata", "oxylabs", "iproyal", "custom"];
 
 const toOptions = (arr) =>
   arr.map((v) => ({ value: v, label: formatLabel(v) }));

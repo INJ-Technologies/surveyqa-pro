@@ -109,7 +109,7 @@ const getDecodoProxy = async (options = {}) => {
 // ─── Sync wrapper for non-async callers — returns promise ────────────────────
 const getProxyForSession = (provider = 'decodo', options = {}) => {
   const p = (provider || 'decodo').toLowerCase();
-  if (p === 'decodo' || p === 'smartproxy') {
+  if (p === 'decodo') {
     return getDecodoProxy(options); // returns Promise
   }
   console.warn(`[Proxy] Unknown provider "${provider}" — defaulting to Decodo`);
