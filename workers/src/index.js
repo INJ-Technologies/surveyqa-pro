@@ -293,7 +293,7 @@ const detectUnit = (text) => {
 // ──────────────────────────────────────────────────────────────────────────────
 const fillFollowupInput = async (page) => {
   try {
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(900);
 
     // ── Check for revealed text/number inputs first ────────────────────────
     const inputs = await page.locator("input[type='text'], input[type='number']").all();
@@ -399,7 +399,12 @@ const fillFollowupInput = async (page) => {
     for (const sel of selects) {
       if (!await sel.isVisible().catch(() => false)) continue;
       const current = await sel.inputValue().catch(() => '');
-      if (current && current.trim() !== '') continue; // already answered
+      const selectedText = await sel.evaluate(el =>
+        el.options[el.selectedIndex]?.text || ''
+      ).catch(() => '');
+      const isPlaceholder = !current || current.trim() === '' ||
+        /^(select one|--|please select|choose|select\.\.\.)/i.test(selectedText.trim());
+      if (!isPlaceholder) continue; // already has a real answer
 
       const optEls = await sel.locator('option').all();
       const validOpts = [];
@@ -492,7 +497,12 @@ const fillRemainingInputs = async (page) => {
     for (const sel of selects) {
       if (!await sel.isVisible().catch(() => false)) continue;
       const current = await sel.inputValue().catch(() => '');
-      if (current && current.trim() !== '') continue;
+      const selectedText = await sel.evaluate(el =>
+        el.options[el.selectedIndex]?.text || ''
+      ).catch(() => '');
+      const isPlaceholder = !current || current.trim() === '' ||
+        /^(select one|--|please select|choose|select\.\.\.)/i.test(selectedText.trim());
+      if (!isPlaceholder) continue; // already has a real answer
 
       const optEls = await sel.locator('option').all();
       const validOpts = [];
