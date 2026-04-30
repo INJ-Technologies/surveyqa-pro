@@ -9,8 +9,31 @@ const getQuotaPlan = async (projectId) => {
   );
   if (!plan.rows[0]) return null;
 
+  // Compute live current_count from completed sessions per country
   const cells = await pool.query(
-    `SELECT * FROM quota_cells WHERE quota_plan_id = $1 ORDER BY created_at`,
+    `SELECT
+       qc.*,
+       COALESCE(
+         (SELECT COUNT(*)
+          FROM sessions s
+          WHERE s.project_id = qc.project_id
+            AND s.outcome = 'completed'
+            AND s.proxy_country = qc.dimensions->>'Country'
+         ), 0
+       )::int AS current_count,
+       CASE
+         WHEN COALESCE(
+           (SELECT COUNT(*) FROM sessions s
+            WHERE s.project_id = qc.project_id
+              AND s.outcome = 'completed'
+              AND s.proxy_country = qc.dimensions->>'Country'
+           ), 0) >= qc.target AND qc.target > 0
+         THEN 'filled'
+         ELSE 'open'
+       END AS status
+     FROM quota_cells qc
+     WHERE qc.quota_plan_id = $1
+     ORDER BY qc.created_at`,
     [plan.rows[0].id]
   );
 
