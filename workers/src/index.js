@@ -96,13 +96,12 @@ const captureGridAnswers = async (page) => {
         if (!groups[r.name]) { groups[r.name] = []; groupOrder.push(r.name); }
         groups[r.name].push(r);
       });
-      if (groupOrder.length <= 1) return []; // not a grid
+      if (groupOrder.length <= 1) return [];
 
       return groupOrder.map(name => {
         const radios = groups[name];
         const first = radios[0];
 
-        // Row label — look for text in the same TR that isn't inside an input
         let rowLabel = '';
         const tr = first.closest('tr');
         if (tr) {
@@ -115,16 +114,13 @@ const captureGridAnswers = async (page) => {
           }
         }
 
-        // Selected column label
         const checked = radios.find(r => r.checked);
         let selectedLabel = '';
         if (checked) {
-          // Try label[for]
           if (checked.id) {
             const lbl = document.querySelector(`label[for="${checked.id}"]`);
             if (lbl) selectedLabel = (lbl.innerText || lbl.textContent || '').trim();
           }
-          // Try column header from table
           if (!selectedLabel) {
             const table = checked.closest('table');
             const td = checked.closest('td');
@@ -150,10 +146,9 @@ const captureGridAnswers = async (page) => {
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
-// CLICK HELPERS — label-first strategy so Decipher JS events fire correctly
+// CLICK HELPERS
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Click a radio option by trying: associated label → check() → force click
 const clickRadioOption = async (page, radio) => {
   try {
     const id = await radio.getAttribute('id').catch(() => null);
@@ -166,7 +161,6 @@ const clickRadioOption = async (page, radio) => {
         return;
       }
     }
-    // Try parent label
     const parentLbl = radio.locator('xpath=ancestor::label').first();
     const parentVisible = await parentLbl.isVisible().catch(() => false);
     if (parentVisible) {
@@ -174,7 +168,6 @@ const clickRadioOption = async (page, radio) => {
       await page.waitForTimeout(200);
       return;
     }
-    // Fall back to check()
     await radio.check();
     await page.waitForTimeout(200);
   } catch {
@@ -183,7 +176,6 @@ const clickRadioOption = async (page, radio) => {
   }
 };
 
-// Click a visible text label on the page (for country mapping)
 const clickLabelByText = async (page, text) => {
   const allLabels = await page.locator('label').all();
   for (const label of allLabels) {
@@ -197,11 +189,100 @@ const clickLabelByText = async (page, text) => {
   return false;
 };
 
+// ─── Auto-detect and fill a revealed follow-up input after radio selection ────
+const fillFollowupInput = async (page) => {
+  try {
+    await page.waitForTimeout(600); // wait for conditional field to appear
+
+    const inputs = await page.locator("input[type='text'], input[type='number']").all();
+    for (const input of inputs) {
+      if (!await input.isVisible().catch(() => false)) continue;
+
+      let min = null;
+      let max = null;
+
+      // Strategy 1: HTML min/max attributes on the input element itself
+      const attrMin = await input.getAttribute('min').catch(() => null);
+      const attrMax = await input.getAttribute('max').catch(() => null);
+      if (attrMin !== null && attrMin !== '') min = parseInt(attrMin);
+      if (attrMax !== null && attrMax !== '') max = parseInt(attrMax);
+
+      // Strategy 2: scan nearby parent text for "between X and Y" or "X - Y" patterns
+      if (!min || !max) {
+        const nearbyText = await input.evaluate(el => {
+          let node = el.parentElement;
+          for (let i = 0; i < 5; i++) {
+            const t = (node?.innerText || '').trim();
+            if (t.length > 10) return t;
+            node = node?.parentElement;
+          }
+          return '';
+        }).catch(() => '');
+
+        const betweenMatch = nearbyText.match(/between\s+([\d,]+)\s+and\s+([\d,]+)/i);
+        const rangeMatch   = nearbyText.match(/([\d,]+)\s*[-–to]+\s*([\d,]+)/);
+        const minMatch     = nearbyText.match(/min(?:imum)?\s*[:\-]?\s*([\d,]+)/i);
+        const maxOnlyMatch = nearbyText.match(/max(?:imum)?\s*[:\-]?\s*([\d,]+)/i);
+
+        if (betweenMatch) {
+          min = parseInt(betweenMatch[1].replace(/,/g, ''));
+          max = parseInt(betweenMatch[2].replace(/,/g, ''));
+        } else if (rangeMatch) {
+          min = parseInt(rangeMatch[1].replace(/,/g, ''));
+          max = parseInt(rangeMatch[2].replace(/,/g, ''));
+        } else {
+          if (minMatch)     min = parseInt(minMatch[1].replace(/,/g, ''));
+          if (maxOnlyMatch) max = parseInt(maxOnlyMatch[1].replace(/,/g, ''));
+        }
+      }
+
+      // Strategy 3: scan visible validation error text on the page
+      if (!min || !max) {
+        const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
+        const errBetween = pageText.match(/between\s+([\d,]+)\s+and\s+([\d,]+)/i);
+        const errRange   = pageText.match(/enter.*?([\d,]+)\s*[-–]\s*([\d,]+)/i);
+        if (errBetween) {
+          min = parseInt(errBetween[1].replace(/,/g, ''));
+          max = parseInt(errBetween[2].replace(/,/g, ''));
+        } else if (errRange) {
+          min = parseInt(errRange[1].replace(/,/g, ''));
+          max = parseInt(errRange[2].replace(/,/g, ''));
+        }
+      }
+
+      // Strategy 4: placeholder text fallback
+      if (!min && !max) {
+        const placeholder = await input.getAttribute('placeholder').catch(() => '');
+        const numMatch = placeholder?.match(/([\d,]+)/);
+        if (numMatch) {
+          const base = parseInt(numMatch[1].replace(/,/g, ''));
+          min = base;
+          max = base * 2;
+        }
+      }
+
+      // Derive missing bound from available one
+      if (min && !max) max = min * 2;
+      if (!min && max) min = Math.floor(max * 0.5);
+
+      // Final fallback — no range detected at all
+      if (!min && !max) { min = 1; max = 100; }
+
+      const value = Math.floor(min + Math.random() * (max - min + 1));
+      await input.fill(String(value)).catch(() => {});
+      console.log(`[Scenario] Auto-filled follow-up input: ${value} (detected range: ${min}–${max})`);
+      return true;
+    }
+  } catch (e) {
+    console.warn(`[Scenario] Follow-up input detection failed: ${e.message}`);
+  }
+  return false;
+};
+
 // ══════════════════════════════════════════════════════════════════════════════
 // SCENARIO ENGINE
 // ══════════════════════════════════════════════════════════════════════════════
 
-// ─── Load Country Logic globally (always applied, not round-robin) ────────────
 const loadCountryLogic = async (projectId) => {
   try {
     const result = await pool.query(
@@ -222,10 +303,8 @@ const loadCountryLogic = async (projectId) => {
   }
 };
 
-// ─── Load the scenario assigned to this session (round-robin, excludes Country Logic) ──
 const loadSessionScenario = async (projectId, sessionId, scenarioIds = null) => {
   try {
-    // If user explicitly sent an empty array, they selected no scenarios
     if (Array.isArray(scenarioIds) && scenarioIds.length === 0) {
       console.log('[Scenario] No scenarios selected by user — skipping');
       return null;
@@ -234,12 +313,10 @@ const loadSessionScenario = async (projectId, sessionId, scenarioIds = null) => 
     let scenarios = await getActiveScenarios(projectId);
     if (!scenarios || scenarios.length === 0) return null;
 
-    // Filter to user-selected scenarios if provided
     if (scenarioIds && scenarioIds.length > 0) {
       scenarios = scenarios.filter(s => scenarioIds.includes(s.id));
     }
 
-    // Round-robin by session position
     const posResult = await pool.query(
       `SELECT COUNT(*) AS pos FROM sessions
        WHERE project_id = $1 AND created_at <= (SELECT created_at FROM sessions WHERE id = $2)`,
@@ -248,7 +325,6 @@ const loadSessionScenario = async (projectId, sessionId, scenarioIds = null) => 
     const pos = Math.max(0, parseInt(posResult.rows[0]?.pos || 1) - 1);
     const scenario = scenarios[pos % scenarios.length];
 
-    // Load steps if not included
     let steps = scenario.steps;
     if (!steps || !Array.isArray(steps) || steps.length === 0) {
       const stepsResult = await pool.query(
@@ -270,7 +346,6 @@ const loadSessionScenario = async (projectId, sessionId, scenarioIds = null) => 
   }
 };
 
-// ─── Apply country mapping ────────────────────────────────────────────────────
 const applyCountryMapping = async (page, countryLogic, proxyCountry, questionsOnPage) => {
   if (!countryLogic?.country_mapping) return false;
   const { questionContains, mappings } = countryLogic.country_mapping;
@@ -292,13 +367,11 @@ const applyCountryMapping = async (page, countryLogic, proxyCountry, questionsOn
   const answer = mapping.answer;
   console.log(`[CountryLogic] Mapping: ${proxyCountry} → "${answer}"`);
 
-  // Strategy 1: click visible label
   if (await clickLabelByText(page, answer)) {
     console.log(`[CountryLogic] ✓ Clicked label: "${answer}"`);
     return true;
   }
 
-  // Strategy 2: radio by associated label
   const radios = await page.locator('input[type="radio"]').all();
   for (const radio of radios) {
     const id = await radio.getAttribute('id').catch(() => null);
@@ -312,7 +385,6 @@ const applyCountryMapping = async (page, countryLogic, proxyCountry, questionsOn
     }
   }
 
-  // Strategy 3: dropdown
   for (const sel of await page.locator('select').all()) {
     try {
       await sel.selectOption({ label: answer });
@@ -325,7 +397,6 @@ const applyCountryMapping = async (page, countryLogic, proxyCountry, questionsOn
   return false;
 };
 
-// ─── Match step against current page ─────────────────────────────────────────
 const matchStep = (step, questionsOnPage, pageNum) => {
   const { when_type, when_value } = step;
   if (when_type === 'always') return true;
@@ -340,7 +411,6 @@ const matchStep = (step, questionsOnPage, pageNum) => {
   return false;
 };
 
-// ─── Execute scenario action ──────────────────────────────────────────────────
 const executeScenarioAction = async (page, step) => {
   const { action, action_values, action_mode, action_text, duration_s } = step;
   const vals = Array.isArray(action_values) ? action_values.map(v => parseInt(v)) : [];
@@ -377,10 +447,10 @@ const executeScenarioAction = async (page, step) => {
         console.log(`[Scenario] Action: open_end → "${action_text.slice(0,40)}"`);
         return [{ type: 'open-end', text: action_text }];
       }
-      return null; // fall through to default
+      return null;
     }
 
-    // ── Get all radio groups with labels ────────────────────────────────────
+    // ── Get all radio groups ────────────────────────────────────────────────
     const getRadioGroups = async () => {
       const allRadios = await page.locator("input[type='radio']").all();
       const groupMap = {};
@@ -402,10 +472,10 @@ const executeScenarioAction = async (page, step) => {
         return null;
       }
       const options = groupMap[groupOrder[0]];
-      // For radio groups, only select the FIRST value (radios are single-select)
       const targetIdx = (vals[0] || 1) - 1;
       if (targetIdx >= 0 && targetIdx < options.length) {
         await clickRadioOption(page, options[targetIdx]);
+        await fillFollowupInput(page); // ← auto-detect and fill revealed input
         console.log(`[Scenario] select_exact → clicked option ${targetIdx + 1} of ${options.length}`);
       } else {
         console.warn(`[Scenario] select_exact: option ${vals[0]} out of range (${options.length} options)`);
@@ -425,6 +495,7 @@ const executeScenarioAction = async (page, step) => {
       }
       const chosen = valid[Math.floor(Math.random() * valid.length)];
       await clickRadioOption(page, options[chosen - 1]);
+      await fillFollowupInput(page); // ← auto-detect and fill revealed input
       console.log(`[Scenario] select_one_of → picked option ${chosen}`);
       return [{ type: 'radio', scenarioControlled: true }];
     }
@@ -438,6 +509,7 @@ const executeScenarioAction = async (page, step) => {
       if (available.length === 0) return null;
       const chosen = available[Math.floor(Math.random() * available.length)];
       await clickRadioOption(page, chosen);
+      await fillFollowupInput(page); // ← auto-detect and fill revealed input
       console.log(`[Scenario] select_not_in → picked from ${available.length} available`);
       return [{ type: 'radio', scenarioControlled: true }];
     }
@@ -446,9 +518,9 @@ const executeScenarioAction = async (page, step) => {
       const { groupMap, groupOrder } = await getRadioGroups();
       if (groupOrder.length === 0) return null;
       const options = groupMap[groupOrder[0]];
-      const maxSel = vals[0] || 1;
       const idx = Math.floor(Math.random() * options.length);
       await clickRadioOption(page, options[idx]);
+      await fillFollowupInput(page); // ← auto-detect and fill revealed input
       console.log(`[Scenario] select_random → picked option ${idx + 1}`);
       return [{ type: 'radio', scenarioControlled: true }];
     }
@@ -493,7 +565,6 @@ const executeScenarioAction = async (page, step) => {
   return null;
 };
 
-// ─── Find first matching step ─────────────────────────────────────────────────
 const findMatchingStep = (scenario, questionsOnPage, pageNum) => {
   if (!scenario?.steps?.length) return null;
   console.log(`[Scenario] Checking ${scenario.steps.length} step(s) against page ${pageNum}, questions: [${questionsOnPage.map(q => q.slice(0,40)).join(' | ')}]`);
@@ -521,7 +592,6 @@ const processSession = async (job) => {
   const readingSpeed = persona?.behavioural_attrs?.readingSpeed || 'normal';
   const deviceOs = persona?.behavioural_attrs?.deviceOs || 'windows';
 
-  // ── Load Country Logic (global) and scenario (round-robin) ─────────────────
   const countryLogic = await loadCountryLogic(projectId);
   const scenario = await loadSessionScenario(projectId, sessionId, scenarioIds);
 
@@ -707,7 +777,7 @@ const processSession = async (job) => {
         }
       }
 
-      // Step 2: Scenario steps (only if country logic didn't handle this page)
+      // Step 2: Scenario steps
       if (answersGiven === null && scenario && questionsOnPage.length > 0) {
         const matchedStep = findMatchingStep(scenario, questionsOnPage, pageCount);
         if (matchedStep) {
@@ -715,7 +785,7 @@ const processSession = async (job) => {
           answersGiven = await executeScenarioAction(page, matchedStep);
           if (answersGiven !== null) {
             questionCount++;
-            // Apply random wait if configured on this step
+            // Apply per-step random wait if configured
             const waitMin = parseInt(matchedStep.wait_min_s) || 0;
             const waitMax = parseInt(matchedStep.wait_max_s) || waitMin;
             if (waitMin > 0 || waitMax > 0) {
@@ -741,7 +811,6 @@ const processSession = async (job) => {
       const pageOptionsAfter = await capturePageOptions(page);
       const gridAnswers = await captureGridAnswers(page);
 
-      // Screenshot after answering
       await takeScreenshot(page, screenshotPath);
 
       const pageTime = Math.round((Date.now() - pageStart) / 1000);
