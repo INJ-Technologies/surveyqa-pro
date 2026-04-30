@@ -485,7 +485,6 @@ const executeScenarioAction = async (page, step) => {
       console.log(`[Scenario] numeric_fill → ${results.join(', ')}`);
       return [{ type: 'numeric', values: results, scenarioControlled: true }];
     }
-
   } catch (e) {
     console.warn(`[Scenario] Action "${action}" threw: ${e.message}`);
     return null;
@@ -716,6 +715,14 @@ const processSession = async (job) => {
           answersGiven = await executeScenarioAction(page, matchedStep);
           if (answersGiven !== null) {
             questionCount++;
+            // Apply random wait if configured on this step
+            const waitMin = parseInt(matchedStep.wait_min_s) || 0;
+            const waitMax = parseInt(matchedStep.wait_max_s) || waitMin;
+            if (waitMin > 0 || waitMax > 0) {
+              const waitMs = (waitMin + Math.random() * (waitMax - waitMin)) * 1000;
+              console.log(`[Scenario] Waiting ${Math.round(waitMs/1000)}s (range: ${waitMin}-${waitMax}s)`);
+              await page.waitForTimeout(waitMs);
+            }
             console.log(`[Worker] Page ${pageCount}: scenario step "${matchedStep.action}" executed`);
           } else {
             console.log(`[Worker] Page ${pageCount}: scenario action returned null — falling through to default`);

@@ -1382,6 +1382,47 @@ function StepBuilder({
           </>
         )}
       </div>
+      {/* Optional page wait — applies after any action */}
+        <div style={{ gridColumn: "1 / -1", borderTop: "1px solid #f1f5f9", paddingTop: 12, marginTop: 4 }}>
+          <label style={{ ...scenLabel, color: "#64748b" }}>
+            Wait after answering{" "}
+            <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional — simulates reading time)</span>
+          </label>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: "0.78rem", color: "#94a3b8", fontFamily: FONT }}>Min</span>
+              <input
+                type="number"
+                min="0"
+                style={{ ...scenInput, width: 70, padding: "6px 8px" }}
+                value={step.wait_min_s ?? ""}
+                placeholder="e.g. 5"
+                onChange={(e) => setF("wait_min_s", e.target.value === "" ? null : parseInt(e.target.value))}
+              />
+            </div>
+            <span style={{ fontSize: "0.78rem", color: "#94a3b8", fontFamily: FONT }}>—</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: "0.78rem", color: "#94a3b8", fontFamily: FONT }}>Max</span>
+              <input
+                type="number"
+                min="0"
+                style={{ ...scenInput, width: 70, padding: "6px 8px" }}
+                value={step.wait_max_s ?? ""}
+                placeholder="e.g. 15"
+                onChange={(e) => setF("wait_max_s", e.target.value === "" ? null : parseInt(e.target.value))}
+              />
+            </div>
+            <span style={{ fontSize: "0.75rem", color: "#94a3b8", fontFamily: FONT }}>seconds</span>
+            {(step.wait_min_s || step.wait_max_s) && (
+              <span style={{ fontSize: "0.72rem", color: "#2563eb", fontFamily: FONT, background: "#f0f7ff", padding: "2px 8px", borderRadius: 6 }}>
+                Will wait {step.wait_min_s || 0}–{step.wait_max_s || step.wait_min_s || 0}s after answering
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: "0.7rem", color: "#94a3b8", fontFamily: FONT, marginTop: 4 }}>
+            Bot waits a random duration in this range after answering — useful for pages with timers.
+          </div>
+        </div>
     </div>
   );
 }
@@ -1437,6 +1478,8 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
     action_mode: "persona_ai",
     action_text: null,
     duration_s: null,
+    wait_min_s: null,
+    wait_max_s: null,
   });
   const addStep = () => setSteps((s) => [...s, blankStep()]);
   const removeStep = (i) => setSteps((s) => s.filter((_, idx) => idx !== i));

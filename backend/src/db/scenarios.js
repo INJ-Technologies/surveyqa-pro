@@ -75,8 +75,8 @@ const createScenario = async ({ projectId, workspaceId, name, description, expec
       const step = steps[i];
       await client.query(
         `INSERT INTO scenario_steps
-           (scenario_id, step_order, when_type, when_value, conditions, action, action_values, action_mode, action_text, duration_s)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            (scenario_id, step_order, when_type, when_value, conditions, action, action_values, action_mode, action_text, duration_s, wait_min_s, wait_max_s)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         [
           scenario.id, i + 1,
           step.when_type, step.when_value || null,
@@ -86,6 +86,8 @@ const createScenario = async ({ projectId, workspaceId, name, description, expec
           step.action_mode  || null,
           step.action_text  || null,
           step.duration_s   || null,
+          step.wait_min_s   || null,
+          step.wait_max_s   || null,
         ]
       );
     }
@@ -139,8 +141,8 @@ const updateScenario = async (scenarioId, { name, description, expectedOutcome, 
         const step = steps[i];
         await client.query(
           `INSERT INTO scenario_steps
-             (scenario_id, step_order, when_type, when_value, conditions, action, action_values, action_mode, action_text, duration_s)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+             (scenario_id, step_order, when_type, when_value, conditions, action, action_values, action_mode, action_text, duration_s, wait_min_s, wait_max_s)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
           [
             scenarioId, i + 1,
             step.when_type, step.when_value || null,
@@ -150,6 +152,8 @@ const updateScenario = async (scenarioId, { name, description, expectedOutcome, 
             step.action_mode  || null,
             step.action_text  || null,
             step.duration_s   || null,
+            step.wait_min_s   || null,
+            step.wait_max_s   || null,
           ]
         );
       }
