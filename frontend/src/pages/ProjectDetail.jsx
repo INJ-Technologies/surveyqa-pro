@@ -3791,7 +3791,7 @@ function SurveyCardReadOnly({ survey, index }) {
         <span
           style={{ fontSize: "0.75rem", color: "#94a3b8", fontFamily: FONT }}
         >
-          {survey.allocation}% allocation
+          Target: {survey.allocation}
         </span>
       </div>
       <div
@@ -3871,10 +3871,8 @@ function SurveyCardEdit({ survey, index, onChange, onRemove }) {
           onChange={setVal("label")}
         />
         <NumberInput
-          label="Allocation %"
+          label="Target (completes)"
           min="0"
-          max="100"
-          suffix="%"
           value={survey.allocation}
           onChange={setVal("allocation")}
         />
@@ -5262,7 +5260,7 @@ export default function ProjectDetail() {
                 url: "",
                 countries: [],
                 languages: [],
-                allocation: 100,
+                allocation: 1,
               },
             ],
     });

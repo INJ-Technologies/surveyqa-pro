@@ -54,6 +54,51 @@ const getProjectSurveys = async (projectId) => {
   return result.rows;
 };
 
+// ─── Sync quota cells from survey countries + allocations ─────────────────────
+const syncQuotaFromSurveys = async (client, projectId, surveys) => {
+  try {
+    // Get or create active quota plan
+    let planResult = await client.query(
+      `SELECT id FROM quota_plans WHERE project_id = $1 AND is_active = true LIMIT 1`,
+      [projectId]
+    );
+    let planId;
+    if (planResult.rows.length === 0) {
+      const np = await client.query(
+        `INSERT INTO quota_plans (project_id) VALUES ($1) RETURNING id`,
+        [projectId]
+      );
+      planId = np.rows[0].id;
+    } else {
+      planId = planResult.rows[0].id;
+    }
+
+    // Remove all existing Country-dimension cells for this project
+    await client.query(
+      `DELETE FROM quota_cells WHERE project_id = $1 AND dimensions ? 'Country'`,
+      [projectId]
+    );
+
+    // Insert one cell per country per survey
+    for (const survey of surveys) {
+      if (!survey.url) continue;
+      const countries = Array.isArray(survey.countries) ? survey.countries
+        : (survey.countries || '').split(',').map(c => c.trim()).filter(Boolean);
+      const target = parseInt(survey.allocation) || 0;
+      for (const country of countries) {
+        await client.query(
+          `INSERT INTO quota_cells (quota_plan_id, project_id, label, dimensions, target)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [planId, projectId, country, JSON.stringify({ Country: country }), target]
+        );
+      }
+    }
+    console.log(`[Quota] Synced ${surveys.length} survey(s) → quota cells for project ${projectId}`);
+  } catch (e) {
+    console.warn('[Quota] Sync from surveys failed:', e.message);
+  }
+};
+
 // ─── Create project ───────────────────────────────────────────────────────────
 const createProject = async ({
   workspaceId, ownerId, name, clientName, referenceId,
@@ -102,6 +147,9 @@ const createProject = async ({
         );
       }
     }
+
+    // Sync quota cells from survey countries
+    await syncQuotaFromSurveys(client, project.id, surveys);
 
     await client.query(
       `INSERT INTO audit_logs (workspace_id, user_id, action, entity_type, entity_id)
@@ -208,6 +256,11 @@ const updateProject = async (id, workspaceId, updates) => {
           ]
         );
       }
+    }
+
+    // Sync quota cells from survey countries (only when surveys were updated)
+    if (updates.surveys && Array.isArray(updates.surveys) && updates.surveys.length > 0) {
+      await syncQuotaFromSurveys(client, id, updates.surveys);
     }
 
     await client.query('COMMIT');
@@ -345,4 +398,5 @@ module.exports = {
   getProjectSessionStats,
   getProjectSessions,
   getProjectCostSummary,
+  syncQuotaFromSurveys,
 };

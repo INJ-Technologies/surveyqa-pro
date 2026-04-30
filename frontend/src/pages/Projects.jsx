@@ -130,10 +130,8 @@ function SurveyCard({ survey, index, onChange, onRemove }) {
           onChange={setVal("label")}
         />
         <NumberInput
-          label="Allocation %"
+          label="Target (completes)"
           min="0"
-          max="100"
-          suffix="%"
           value={survey.allocation}
           onChange={setVal("allocation")}
         />
