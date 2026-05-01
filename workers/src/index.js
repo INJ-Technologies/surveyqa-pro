@@ -621,9 +621,19 @@ const matchStep = (step, questionsOnPage, pageNum) => {
   if (when_type === 'always') return true;
   if (when_type === 'page_number') return parseInt(when_value) === pageNum;
   if (when_type === 'question_contains') {
-    const needle = (when_value || '').toLowerCase();
-    const match = questionsOnPage.some(q => q.toLowerCase().includes(needle));
+    const normalize = (str) => (str || '').toLowerCase()
+      .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'")
+      .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const needle = normalize(when_value);
+    if (!needle) {
+      console.warn(`[Scenario] ✗ Step skipped — when_value is empty/null`);
+      return false;
+    }
+    const match = questionsOnPage.some(q => normalize(q).includes(needle));
     if (match) console.log(`[Scenario] ✓ Step matched: question contains "${when_value}"`);
+    else console.log(`[Scenario] ✗ No match for "${when_value}" against: [${questionsOnPage.map(q => `"${q.slice(0,40)}"`).join(', ')}]`);
     return match;
   }
   if (when_type === 'question_position') return questionsOnPage.length >= parseInt(when_value || 1);
@@ -671,6 +681,7 @@ const executeScenarioAction = async (page, step) => {
       return { groupMap, groupOrder };
     };
     if (action === 'select_exact') {
+      if (vals.length === 0) { console.warn('[Scenario] select_exact: no action_values configured — skipping'); return null; }
       const { groupMap, groupOrder } = await getRadioGroups();
       if (groupOrder.length === 0) { console.warn('[Scenario] select_exact: no radio groups found'); return null; }
       const options = groupMap[groupOrder[0]];
@@ -929,7 +940,12 @@ const processSession = async (job) => {
           }
           return [...found];
         });
-        questionsOnPage = rawTexts.filter(t => !isHintText(t)).slice(0, 5);
+        questionsOnPage = rawTexts
+          .map(t => t.replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+                     .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+                     .replace(/\s+/g, ' ').trim())
+          .filter(t => !isHintText(t))
+          .slice(0, 5);
         console.log(`[Worker] Questions detected: [${questionsOnPage.map(q => `"${q.slice(0,50)}"`).join(', ')}]`);
       } catch (e) {
         console.warn(`[Worker] Question detection failed: ${e.message}`);
