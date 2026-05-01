@@ -328,7 +328,7 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
   const [allScenarios, setAllScenarios] = useState([]);
   const [selectedScenarios, setSelectedScenarios] = useState([]);
   const [scenariosLoading, setScenariosLoading] = useState(true);
-  const [testingMode, setTestingMode] = useState('live'); // 'internal' | 'live'
+  const [testingMode, setTestingMode] = useState("live"); // 'internal' | 'live'
 
   useEffect(() => {
     api
@@ -392,7 +392,7 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
       .then((res) => {
         // Exclude Country Logic — it runs globally on every session automatically
         const active = (res.data.scenarios || []).filter(
-          (s) => s.project_active && s.name !== 'Country Logic',
+          (s) => s.project_active && s.name !== "Country Logic",
         );
         setAllScenarios(active);
         setSelectedScenarios(active.map((s) => s.id)); // default: all active selected
@@ -411,7 +411,7 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
         count: parseInt(count),
         proxyCountry: countryCodes.length > 0 ? countryCodes : null,
         scenarioIds: selectedScenarios,
-        internalTesting: testingMode === 'internal',
+        internalTesting: testingMode === "internal",
       });
       onTriggered();
     } catch (err) {
@@ -470,24 +470,74 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
           </button>
         </div>
         {/* Testing Mode Toggle */}
-        <div style={{ marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between", background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: "12px 16px" }}>
+        <div
+          style={{
+            marginBottom: 20,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            background: "#f8fafc",
+            border: "1.5px solid #e2e8f0",
+            borderRadius: 10,
+            padding: "12px 16px",
+          }}
+        >
           <div>
-            <div style={{ fontSize: "0.85rem", fontWeight: 700, color: "#1e293b", fontFamily: FONT }}>
-              {testingMode === 'internal' ? '🧪 Internal Testing' : '🌐 Live Testing'}
+            <div
+              style={{
+                fontSize: "0.85rem",
+                fontWeight: 700,
+                color: "#1e293b",
+                fontFamily: FONT,
+              }}
+            >
+              {testingMode === "internal"
+                ? "🧪 Internal Testing"
+                : "🌐 Live Testing"}
             </div>
-            <div style={{ fontSize: "0.72rem", color: "#94a3b8", fontFamily: FONT, marginTop: 2 }}>
-              {testingMode === 'internal'
-                ? 'Sessions run on your local IP — no proxy used'
-                : 'Sessions run via proxy with country-specific IPs'}
+            <div
+              style={{
+                fontSize: "0.72rem",
+                color: "#94a3b8",
+                fontFamily: FONT,
+                marginTop: 2,
+              }}
+            >
+              {testingMode === "internal"
+                ? "Sessions run on your local IP — no proxy used"
+                : "Sessions run via proxy with country-specific IPs"}
             </div>
           </div>
           <div
-            onClick={() => setTestingMode(m => m === 'live' ? 'internal' : 'live')}
-            style={{ width: 52, height: 28, borderRadius: 14, cursor: 'pointer', position: 'relative', background: testingMode === 'live' ? '#2563eb' : '#e2e8f0', transition: 'background 0.2s', flexShrink: 0 }}
+            onClick={() =>
+              setTestingMode((m) => (m === "live" ? "internal" : "live"))
+            }
+            style={{
+              width: 52,
+              height: 28,
+              borderRadius: 14,
+              cursor: "pointer",
+              position: "relative",
+              background: testingMode === "live" ? "#2563eb" : "#e2e8f0",
+              transition: "background 0.2s",
+              flexShrink: 0,
+            }}
           >
-            <div style={{ position: 'absolute', top: 3, left: testingMode === 'live' ? 27 : 3, width: 22, height: 22, borderRadius: '50%', background: 'white', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', transition: 'left 0.2s' }} />
+            <div
+              style={{
+                position: "absolute",
+                top: 3,
+                left: testingMode === "live" ? 27 : 3,
+                width: 22,
+                height: 22,
+                borderRadius: "50%",
+                background: "white",
+                boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
+                transition: "left 0.2s",
+              }}
+            />
           </div>
-        </div>    
+        </div>
         <div style={{ marginBottom: 18 }}>
           <label
             style={{
@@ -530,253 +580,252 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
           </div>
         </div>
 
-          <div style={{ marginBottom: 18 }}>
-            <label
+        <div style={{ marginBottom: 18 }}>
+          <label
+            style={{
+              fontSize: "0.8rem",
+              fontWeight: 600,
+              color: "#374151",
+              fontFamily: FONT,
+              display: "block",
+              marginBottom: 6,
+            }}
+          >
+            Target Countries{" "}
+            <span style={{ color: "#94a3b8", fontWeight: 400 }}>
+              (optional — distributed round-robin)
+            </span>
+          </label>
+          {selected.length > 0 && (
+            <div
               style={{
-                fontSize: "0.8rem",
-                fontWeight: 600,
-                color: "#374151",
-                fontFamily: FONT,
-                display: "block",
-                marginBottom: 6,
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 6,
+                marginBottom: 8,
               }}
             >
-              Target Countries{" "}
-              <span style={{ color: "#94a3b8", fontWeight: 400 }}>
-                (optional — distributed round-robin)
-              </span>
-            </label>
-            {selected.length > 0 && (
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 6,
-                  marginBottom: 8,
-                }}
-              >
-                {selected.map((s) => (
-                  <span
-                    key={s.code}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 4,
-                      background: "#dbeafe",
-                      color: "#1e3a5f",
-                      borderRadius: 20,
-                      padding: "3px 10px",
-                      fontSize: "0.78rem",
-                      fontWeight: 600,
-                      fontFamily: FONT,
-                    }}
-                  >
-                    {s.code} — {s.country}
-                    <button
-                      onClick={() => removeCountry(s.code)}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        cursor: "pointer",
-                        color: "#2563eb",
-                        padding: 0,
-                        display: "flex",
-                        lineHeight: 1,
-                      }}
-                    >
-                      <X size={12} />
-                    </button>
-                  </span>
-                ))}
-                <button
-                  onClick={() => setSelected([])}
+              {selected.map((s) => (
+                <span
+                  key={s.code}
                   style={{
-                    background: "none",
-                    border: "1px solid #e2e8f0",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                    background: "#dbeafe",
+                    color: "#1e3a5f",
                     borderRadius: 20,
                     padding: "3px 10px",
-                    fontSize: "0.75rem",
-                    cursor: "pointer",
-                    color: "#94a3b8",
+                    fontSize: "0.78rem",
+                    fontWeight: 600,
                     fontFamily: FONT,
                   }}
                 >
-                  Clear all
-                </button>
-              </div>
-            )}
-            <div ref={dropRef} style={{ position: "relative" }}>
-              <div
-                onClick={() => setDropOpen((o) => !o)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "9px 12px",
-                  border: "1.5px solid #e2e8f0",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  background: "white",
-                  fontSize: "0.85rem",
-                  fontFamily: FONT,
-                  color: selected.length > 0 ? "#1e293b" : "#94a3b8",
-                }}
-              >
-                <Globe size={14} color="#94a3b8" />
-                <span style={{ flex: 1 }}>
-                  {selected.length > 0
-                    ? `${selected.length} countr${selected.length === 1 ? "y" : "ies"} selected`
-                    : "Search and select countries..."}
-                </span>
-                <ChevronDown
-                  size={14}
-                  color="#94a3b8"
-                  style={{
-                    transform: dropOpen ? "rotate(180deg)" : "none",
-                    transition: "transform 0.15s",
-                  }}
-                />
-              </div>
-              {dropOpen && (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: "100%",
-                    left: 0,
-                    right: 0,
-                    zIndex: 9999,
-                    background: "white",
-                    border: "1.5px solid #e2e8f0",
-                    borderRadius: 10,
-                    boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
-                    marginTop: 4,
-                    maxHeight: 240,
-                    display: "flex",
-                    flexDirection: "column",
-                  }}
-                >
-                  <div
+                  {s.code} — {s.country}
+                  <button
+                    onClick={() => removeCountry(s.code)}
                     style={{
-                      padding: "8px 10px",
-                      borderBottom: "1px solid #f1f5f9",
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      color: "#2563eb",
+                      padding: 0,
+                      display: "flex",
+                      lineHeight: 1,
                     }}
                   >
-                    <input
-                      autoFocus
-                      placeholder="Search country or code..."
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+              <button
+                onClick={() => setSelected([])}
+                style={{
+                  background: "none",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 20,
+                  padding: "3px 10px",
+                  fontSize: "0.75rem",
+                  cursor: "pointer",
+                  color: "#94a3b8",
+                  fontFamily: FONT,
+                }}
+              >
+                Clear all
+              </button>
+            </div>
+          )}
+          <div ref={dropRef} style={{ position: "relative" }}>
+            <div
+              onClick={() => setDropOpen((o) => !o)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "9px 12px",
+                border: "1.5px solid #e2e8f0",
+                borderRadius: 8,
+                cursor: "pointer",
+                background: "white",
+                fontSize: "0.85rem",
+                fontFamily: FONT,
+                color: selected.length > 0 ? "#1e293b" : "#94a3b8",
+              }}
+            >
+              <Globe size={14} color="#94a3b8" />
+              <span style={{ flex: 1 }}>
+                {selected.length > 0
+                  ? `${selected.length} countr${selected.length === 1 ? "y" : "ies"} selected`
+                  : "Search and select countries..."}
+              </span>
+              <ChevronDown
+                size={14}
+                color="#94a3b8"
+                style={{
+                  transform: dropOpen ? "rotate(180deg)" : "none",
+                  transition: "transform 0.15s",
+                }}
+              />
+            </div>
+            {dropOpen && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: 0,
+                  right: 0,
+                  zIndex: 9999,
+                  background: "white",
+                  border: "1.5px solid #e2e8f0",
+                  borderRadius: 10,
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+                  marginTop: 4,
+                  maxHeight: 240,
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                <div
+                  style={{
+                    padding: "8px 10px",
+                    borderBottom: "1px solid #f1f5f9",
+                  }}
+                >
+                  <input
+                    autoFocus
+                    placeholder="Search country or code..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "6px 10px",
+                      border: "1.5px solid #e2e8f0",
+                      borderRadius: 6,
+                      fontSize: "0.82rem",
+                      fontFamily: FONT,
+                      outline: "none",
+                      boxSizing: "border-box",
+                    }}
+                  />
+                </div>
+                <div style={{ overflowY: "auto", flex: 1 }}>
+                  {filtered.length === 0 ? (
+                    <div
                       style={{
-                        width: "100%",
-                        padding: "6px 10px",
-                        border: "1.5px solid #e2e8f0",
-                        borderRadius: 6,
+                        padding: "12px 14px",
                         fontSize: "0.82rem",
+                        color: "#94a3b8",
                         fontFamily: FONT,
-                        outline: "none",
-                        boxSizing: "border-box",
                       }}
-                    />
-                  </div>
-                  <div style={{ overflowY: "auto", flex: 1 }}>
-                    {filtered.length === 0 ? (
-                      <div
-                        style={{
-                          padding: "12px 14px",
-                          fontSize: "0.82rem",
-                          color: "#94a3b8",
-                          fontFamily: FONT,
-                        }}
-                      >
-                        No countries found
-                      </div>
-                    ) : (
-                      filtered.map((c) => {
-                        const isSelected = selected.some(
-                          (s) => s.code === c.code,
-                        );
-                        return (
+                    >
+                      No countries found
+                    </div>
+                  ) : (
+                    filtered.map((c) => {
+                      const isSelected = selected.some(
+                        (s) => s.code === c.code,
+                      );
+                      return (
+                        <div
+                          key={c.code}
+                          onClick={() => toggleCountry(c)}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 10,
+                            padding: "8px 12px",
+                            cursor: "pointer",
+                            background: isSelected ? "#f0f7ff" : "white",
+                            borderBottom: "1px solid #f8fafc",
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!isSelected)
+                              e.currentTarget.style.background = "#f8fafc";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = isSelected
+                              ? "#f0f7ff"
+                              : "white";
+                          }}
+                        >
                           <div
-                            key={c.code}
-                            onClick={() => toggleCountry(c)}
                             style={{
+                              width: 16,
+                              height: 16,
+                              borderRadius: 4,
+                              border: `2px solid ${isSelected ? "#2563eb" : "#cbd5e1"}`,
+                              background: isSelected ? "#2563eb" : "white",
+                              flexShrink: 0,
                               display: "flex",
                               alignItems: "center",
-                              gap: 10,
-                              padding: "8px 12px",
-                              cursor: "pointer",
-                              background: isSelected ? "#f0f7ff" : "white",
-                              borderBottom: "1px solid #f8fafc",
-                            }}
-                            onMouseEnter={(e) => {
-                              if (!isSelected)
-                                e.currentTarget.style.background = "#f8fafc";
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.background = isSelected
-                                ? "#f0f7ff"
-                                : "white";
+                              justifyContent: "center",
                             }}
                           >
-                            <div
-                              style={{
-                                width: 16,
-                                height: 16,
-                                borderRadius: 4,
-                                border: `2px solid ${isSelected ? "#2563eb" : "#cbd5e1"}`,
-                                background: isSelected ? "#2563eb" : "white",
-                                flexShrink: 0,
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                              }}
-                            >
-                              {isSelected && (
-                                <CheckCircle size={10} color="white" />
-                              )}
-                            </div>
-                            <span
-                              style={{
-                                fontSize: "0.72rem",
-                                fontWeight: 700,
-                                color: "#64748b",
-                                fontFamily: "monospace",
-                                minWidth: 26,
-                              }}
-                            >
-                              {c.code}
-                            </span>
-                            <span
-                              style={{
-                                fontSize: "0.83rem",
-                                color: "#1e293b",
-                                fontFamily: FONT,
-                                flex: 1,
-                              }}
-                            >
-                              {c.country}
-                            </span>
-                            <span
-                              style={{
-                                fontSize: "0.7rem",
-                                color: "#94a3b8",
-                                fontFamily: "monospace",
-                              }}
-                            >
-                              {c.endpoint === "gate.decodo.com"
-                                ? `gate:${c.port}`
-                                : c.endpoint?.split(".")[0]}
-                            </span>
+                            {isSelected && (
+                              <CheckCircle size={10} color="white" />
+                            )}
                           </div>
-                        );
-                      })
-                    )}
-                  </div>
+                          <span
+                            style={{
+                              fontSize: "0.72rem",
+                              fontWeight: 700,
+                              color: "#64748b",
+                              fontFamily: "monospace",
+                              minWidth: 26,
+                            }}
+                          >
+                            {c.code}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: "0.83rem",
+                              color: "#1e293b",
+                              fontFamily: FONT,
+                              flex: 1,
+                            }}
+                          >
+                            {c.country}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: "0.7rem",
+                              color: "#94a3b8",
+                              fontFamily: "monospace",
+                            }}
+                          >
+                            {c.endpoint === "gate.decodo.com"
+                              ? `gate:${c.port}`
+                              : c.endpoint?.split(".")[0]}
+                          </span>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
-
+        </div>
 
         {selected.length > 0 && n > 0 && (
           <div
@@ -822,62 +871,197 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
           </div>
         )}
 
-                {/* Scenario selector */}
+        {/* Scenario selector */}
         <div style={{ marginBottom: 18 }}>
-          <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#374151", fontFamily: FONT, display: "block", marginBottom: 6 }}>
+          <label
+            style={{
+              fontSize: "0.8rem",
+              fontWeight: 600,
+              color: "#374151",
+              fontFamily: FONT,
+              display: "block",
+              marginBottom: 6,
+            }}
+          >
             Scenarios{" "}
-            <span style={{ color: "#94a3b8", fontWeight: 400 }}>(select which to include — round-robin)</span>
+            <span style={{ color: "#94a3b8", fontWeight: 400 }}>
+              (select which to include — round-robin)
+            </span>
           </label>
           {scenariosLoading ? (
-            <div style={{ fontSize: "0.82rem", color: "#94a3b8", fontFamily: FONT, padding: "8px 0" }}>Loading scenarios...</div>
+            <div
+              style={{
+                fontSize: "0.82rem",
+                color: "#94a3b8",
+                fontFamily: FONT,
+                padding: "8px 0",
+              }}
+            >
+              Loading scenarios...
+            </div>
           ) : allScenarios.length === 0 ? (
-            <div style={{ fontSize: "0.82rem", color: "#94a3b8", fontFamily: FONT, background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 8, padding: "10px 14px" }}>
+            <div
+              style={{
+                fontSize: "0.82rem",
+                color: "#94a3b8",
+                fontFamily: FONT,
+                background: "#f8fafc",
+                border: "1.5px solid #e2e8f0",
+                borderRadius: 8,
+                padding: "10px 14px",
+              }}
+            >
               No active scenarios — sessions will use default random answering.
             </div>
           ) : (
-            <div style={{ background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+            <div
+              style={{
+                background: "#f8fafc",
+                border: "1.5px solid #e2e8f0",
+                borderRadius: 8,
+                overflow: "hidden",
+              }}
+            >
               {allScenarios.map((sc, i) => {
                 const isSel = selectedScenarios.includes(sc.id);
-                const oc = OUTCOME_COLORS[sc.expected_outcome] || OUTCOME_COLORS.any;
+                const oc =
+                  OUTCOME_COLORS[sc.expected_outcome] || OUTCOME_COLORS.any;
                 return (
                   <div
                     key={sc.id}
-                    onClick={() => setSelectedScenarios(prev =>
-                      isSel ? prev.filter(id => id !== sc.id) : [...prev, sc.id]
-                    )}
+                    onClick={() =>
+                      setSelectedScenarios((prev) =>
+                        isSel
+                          ? prev.filter((id) => id !== sc.id)
+                          : [...prev, sc.id],
+                      )
+                    }
                     style={{
-                      display: "flex", alignItems: "center", gap: 10,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
                       padding: "10px 14px",
-                      borderBottom: i < allScenarios.length - 1 ? "1px solid #f1f5f9" : "none",
+                      borderBottom:
+                        i < allScenarios.length - 1
+                          ? "1px solid #f1f5f9"
+                          : "none",
                       cursor: "pointer",
                       background: isSel ? "#f0f7ff" : "white",
                     }}
-                    onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = "#f8fafc"; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = isSel ? "#f0f7ff" : "white"; }}
+                    onMouseEnter={(e) => {
+                      if (!isSel) e.currentTarget.style.background = "#f8fafc";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = isSel
+                        ? "#f0f7ff"
+                        : "white";
+                    }}
                   >
-                    <div style={{
-                      width: 16, height: 16, borderRadius: 4, flexShrink: 0,
-                      border: `2px solid ${isSel ? "#2563eb" : "#cbd5e1"}`,
-                      background: isSel ? "#2563eb" : "white",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>
+                    <div
+                      style={{
+                        width: 16,
+                        height: 16,
+                        borderRadius: 4,
+                        flexShrink: 0,
+                        border: `2px solid ${isSel ? "#2563eb" : "#cbd5e1"}`,
+                        background: isSel ? "#2563eb" : "white",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
                       {isSel && <CheckCircle size={10} color="white" />}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "#1e293b", fontFamily: FONT }}>{sc.name}</div>
-                      {sc.description && <div style={{ fontSize: "0.72rem", color: "#94a3b8", fontFamily: FONT, marginTop: 1 }}>{sc.description.slice(0, 60)}{sc.description.length > 60 ? "…" : ""}</div>}
+                      <div
+                        style={{
+                          fontSize: "0.85rem",
+                          fontWeight: 600,
+                          color: "#1e293b",
+                          fontFamily: FONT,
+                        }}
+                      >
+                        {sc.name}
+                      </div>
+                      {sc.description && (
+                        <div
+                          style={{
+                            fontSize: "0.72rem",
+                            color: "#94a3b8",
+                            fontFamily: FONT,
+                            marginTop: 1,
+                          }}
+                        >
+                          {sc.description.slice(0, 60)}
+                          {sc.description.length > 60 ? "…" : ""}
+                        </div>
+                      )}
                     </div>
-                    <span style={{ fontSize: "0.68rem", fontWeight: 700, background: oc.bg, color: oc.text, borderRadius: 4, padding: "2px 7px", whiteSpace: "nowrap", fontFamily: FONT }}>{sc.step_count || 0} steps</span>
+                    <span
+                      style={{
+                        fontSize: "0.68rem",
+                        fontWeight: 700,
+                        background: oc.bg,
+                        color: oc.text,
+                        borderRadius: 4,
+                        padding: "2px 7px",
+                        whiteSpace: "nowrap",
+                        fontFamily: FONT,
+                      }}
+                    >
+                      {sc.step_count || 0} steps
+                    </span>
                   </div>
                 );
               })}
-              <div style={{ padding: "8px 14px", borderTop: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: "0.72rem", color: "#94a3b8", fontFamily: FONT }}>
+              <div
+                style={{
+                  padding: "8px 14px",
+                  borderTop: "1px solid #f1f5f9",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: "0.72rem",
+                    color: "#94a3b8",
+                    fontFamily: FONT,
+                  }}
+                >
                   {selectedScenarios.length} of {allScenarios.length} selected
                 </span>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={() => setSelectedScenarios(allScenarios.map(s => s.id))} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "0.72rem", color: "#2563eb", fontFamily: FONT, fontWeight: 600 }}>Select all</button>
-                  <button onClick={() => setSelectedScenarios([])} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "0.72rem", color: "#94a3b8", fontFamily: FONT }}>Clear</button>
+                  <button
+                    onClick={() =>
+                      setSelectedScenarios(allScenarios.map((s) => s.id))
+                    }
+                    style={{
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: "0.72rem",
+                      color: "#2563eb",
+                      fontFamily: FONT,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Select all
+                  </button>
+                  <button
+                    onClick={() => setSelectedScenarios([])}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: "0.72rem",
+                      color: "#94a3b8",
+                      fontFamily: FONT,
+                    }}
+                  >
+                    Clear
+                  </button>
                 </div>
               </div>
             </div>
@@ -1383,46 +1567,107 @@ function StepBuilder({
         )}
       </div>
       {/* Optional page wait — applies after any action */}
-        <div style={{ gridColumn: "1 / -1", borderTop: "1px solid #f1f5f9", paddingTop: 12, marginTop: 4 }}>
-          <label style={{ ...scenLabel, color: "#64748b" }}>
-            Wait after answering{" "}
-            <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional — simulates reading time)</span>
-          </label>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: "0.78rem", color: "#94a3b8", fontFamily: FONT }}>Min</span>
-              <input
-                type="number"
-                min="0"
-                style={{ ...scenInput, width: 70, padding: "6px 8px" }}
-                value={step.wait_min_s ?? ""}
-                placeholder="e.g. 5"
-                onChange={(e) => setF("wait_min_s", e.target.value === "" ? null : parseInt(e.target.value))}
-              />
-            </div>
-            <span style={{ fontSize: "0.78rem", color: "#94a3b8", fontFamily: FONT }}>—</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: "0.78rem", color: "#94a3b8", fontFamily: FONT }}>Max</span>
-              <input
-                type="number"
-                min="0"
-                style={{ ...scenInput, width: 70, padding: "6px 8px" }}
-                value={step.wait_max_s ?? ""}
-                placeholder="e.g. 15"
-                onChange={(e) => setF("wait_max_s", e.target.value === "" ? null : parseInt(e.target.value))}
-              />
-            </div>
-            <span style={{ fontSize: "0.75rem", color: "#94a3b8", fontFamily: FONT }}>seconds</span>
-            {(step.wait_min_s || step.wait_max_s) && (
-              <span style={{ fontSize: "0.72rem", color: "#2563eb", fontFamily: FONT, background: "#f0f7ff", padding: "2px 8px", borderRadius: 6 }}>
-                Will wait {step.wait_min_s || 0}–{step.wait_max_s || step.wait_min_s || 0}s after answering
-              </span>
-            )}
+      <div
+        style={{
+          gridColumn: "1 / -1",
+          borderTop: "1px solid #f1f5f9",
+          paddingTop: 12,
+          marginTop: 4,
+        }}
+      >
+        <label style={{ ...scenLabel, color: "#64748b" }}>
+          Wait after answering{" "}
+          <span style={{ fontWeight: 400, color: "#94a3b8" }}>
+            (optional — simulates reading time)
+          </span>
+        </label>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span
+              style={{
+                fontSize: "0.78rem",
+                color: "#94a3b8",
+                fontFamily: FONT,
+              }}
+            >
+              Min
+            </span>
+            <input
+              type="number"
+              min="0"
+              style={{ ...scenInput, width: 70, padding: "6px 8px" }}
+              value={step.wait_min_s ?? ""}
+              placeholder="e.g. 5"
+              onChange={(e) =>
+                setF(
+                  "wait_min_s",
+                  e.target.value === "" ? null : parseInt(e.target.value),
+                )
+              }
+            />
           </div>
-          <div style={{ fontSize: "0.7rem", color: "#94a3b8", fontFamily: FONT, marginTop: 4 }}>
-            Bot waits a random duration in this range after answering — useful for pages with timers.
+          <span
+            style={{ fontSize: "0.78rem", color: "#94a3b8", fontFamily: FONT }}
+          >
+            —
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span
+              style={{
+                fontSize: "0.78rem",
+                color: "#94a3b8",
+                fontFamily: FONT,
+              }}
+            >
+              Max
+            </span>
+            <input
+              type="number"
+              min="0"
+              style={{ ...scenInput, width: 70, padding: "6px 8px" }}
+              value={step.wait_max_s ?? ""}
+              placeholder="e.g. 15"
+              onChange={(e) =>
+                setF(
+                  "wait_max_s",
+                  e.target.value === "" ? null : parseInt(e.target.value),
+                )
+              }
+            />
           </div>
+          <span
+            style={{ fontSize: "0.75rem", color: "#94a3b8", fontFamily: FONT }}
+          >
+            seconds
+          </span>
+          {(step.wait_min_s || step.wait_max_s) && (
+            <span
+              style={{
+                fontSize: "0.72rem",
+                color: "#2563eb",
+                fontFamily: FONT,
+                background: "#f0f7ff",
+                padding: "2px 8px",
+                borderRadius: 6,
+              }}
+            >
+              Will wait {step.wait_min_s || 0}–
+              {step.wait_max_s || step.wait_min_s || 0}s after answering
+            </span>
+          )}
         </div>
+        <div
+          style={{
+            fontSize: "0.7rem",
+            color: "#94a3b8",
+            fontFamily: FONT,
+            marginTop: 4,
+          }}
+        >
+          Bot waits a random duration in this range after answering — useful for
+          pages with timers.
+        </div>
+      </div>
     </div>
   );
 }
@@ -1439,20 +1684,27 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
   const [saving, setSaving] = useState(false);
   const [loadingSteps, setLoadingSteps] = useState(isEdit);
 
-  const isCountryLogic = scenario?.name === 'Country Logic';
-  const [countryMapping, setCountryMapping] = useState(scenario?.country_mapping || null);
-  const [cmQuestionContains, setCmQuestionContains] = useState(scenario?.country_mapping?.questionContains || '');
-  const [cmMappings, setCmMappings] = useState(scenario?.country_mapping?.mappings || []);
+  const isCountryLogic = scenario?.name === "Country Logic";
+  const [countryMapping, setCountryMapping] = useState(
+    scenario?.country_mapping || null,
+  );
+  const [cmQuestionContains, setCmQuestionContains] = useState(
+    scenario?.country_mapping?.questionContains || "",
+  );
+  const [cmMappings, setCmMappings] = useState(
+    scenario?.country_mapping?.mappings || [],
+  );
   const [cmOptions, setCmOptions] = useState([]);
 
   // Load full country_mapping when editing Country Logic
   useEffect(() => {
     if (!isEdit || !scenario?.id || !isCountryLogic) return;
-    api.get(`/scenarios/${scenario.id}`)
-      .then(res => {
+    api
+      .get(`/scenarios/${scenario.id}`)
+      .then((res) => {
         const cm = res.data.scenario?.country_mapping;
         if (cm) {
-          setCmQuestionContains(cm.questionContains || '');
+          setCmQuestionContains(cm.questionContains || "");
           setCmMappings(cm.mappings || []);
         }
       })
@@ -1511,7 +1763,14 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
           description,
           expectedOutcome,
           steps,
-          ...(isCountryLogic ? { countryMapping: { questionContains: cmQuestionContains, mappings: cmMappings } } : {}),
+          ...(isCountryLogic
+            ? {
+                countryMapping: {
+                  questionContains: cmQuestionContains,
+                  mappings: cmMappings,
+                },
+              }
+            : {}),
         });
       } else {
         await api.post("/scenarios", {
@@ -1681,34 +1940,133 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
           </div>
           {/* Country Logic mapping section */}
           {isCountryLogic && (
-            <div style={{ marginBottom: 24, background: "#f0f7ff", border: "1.5px solid #dbeafe", borderRadius: 12, padding: 20 }}>
-              <div style={{ fontFamily: FONT, fontSize: "0.9rem", fontWeight: 700, color: "#1e3a5f", marginBottom: 4 }}>Country Answer Mapping</div>
-              <div style={{ fontFamily: FONT, fontSize: "0.75rem", color: "#64748b", marginBottom: 14 }}>Maps each project country to the correct answer on the country question.</div>
+            <div
+              style={{
+                marginBottom: 24,
+                background: "#f0f7ff",
+                border: "1.5px solid #dbeafe",
+                borderRadius: 12,
+                padding: 20,
+              }}
+            >
+              <div
+                style={{
+                  fontFamily: FONT,
+                  fontSize: "0.9rem",
+                  fontWeight: 700,
+                  color: "#1e3a5f",
+                  marginBottom: 4,
+                }}
+              >
+                Country Answer Mapping
+              </div>
+              <div
+                style={{
+                  fontFamily: FONT,
+                  fontSize: "0.75rem",
+                  color: "#64748b",
+                  marginBottom: 14,
+                }}
+              >
+                Maps each project country to the correct answer on the country
+                question.
+              </div>
               <div style={{ marginBottom: 14 }}>
                 <label style={scenLabel}>Question contains text</label>
-                <input style={scenInput} value={cmQuestionContains} onChange={e => setCmQuestionContains(e.target.value)} placeholder="e.g. country of residence" />
+                <input
+                  style={scenInput}
+                  value={cmQuestionContains}
+                  onChange={(e) => setCmQuestionContains(e.target.value)}
+                  placeholder="e.g. country of residence"
+                />
               </div>
               <label style={scenLabel}>Country → Answer</label>
-              <div style={{ border: "1.5px solid #dbeafe", borderRadius: 8, overflow: "hidden" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", background: "#dbeafe" }}>
-                  <div style={{ padding: "7px 12px", fontSize: "0.72rem", fontWeight: 700, color: "#1e3a5f", fontFamily: FONT }}>COUNTRY</div>
-                  <div style={{ padding: "7px 12px", fontSize: "0.72rem", fontWeight: 700, color: "#1e3a5f", fontFamily: FONT }}>ANSWER TEXT</div>
+              <div
+                style={{
+                  border: "1.5px solid #dbeafe",
+                  borderRadius: 8,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "120px 1fr",
+                    background: "#dbeafe",
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: "7px 12px",
+                      fontSize: "0.72rem",
+                      fontWeight: 700,
+                      color: "#1e3a5f",
+                      fontFamily: FONT,
+                    }}
+                  >
+                    COUNTRY
+                  </div>
+                  <div
+                    style={{
+                      padding: "7px 12px",
+                      fontSize: "0.72rem",
+                      fontWeight: 700,
+                      color: "#1e3a5f",
+                      fontFamily: FONT,
+                    }}
+                  >
+                    ANSWER TEXT
+                  </div>
                 </div>
                 {cmMappings.map((m, i) => (
-                  <div key={i} style={{ display: "grid", gridTemplateColumns: "120px 1fr", borderTop: "1px solid #dbeafe", alignItems: "center" }}>
-                    <div style={{ padding: "8px 12px", fontFamily: "monospace", fontSize: "0.82rem", fontWeight: 700, color: "#1e3a5f", background: "#eff6ff" }}>{m.country}</div>
+                  <div
+                    key={i}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "120px 1fr",
+                      borderTop: "1px solid #dbeafe",
+                      alignItems: "center",
+                    }}
+                  >
+                    <div
+                      style={{
+                        padding: "8px 12px",
+                        fontFamily: "monospace",
+                        fontSize: "0.82rem",
+                        fontWeight: 700,
+                        color: "#1e3a5f",
+                        background: "#eff6ff",
+                      }}
+                    >
+                      {m.country}
+                    </div>
                     <div style={{ padding: "6px 10px" }}>
                       <input
                         style={{ ...scenInput, margin: 0 }}
                         value={m.answer}
-                        onChange={e => setCmMappings(prev => prev.map((r, ri) => ri === i ? { ...r, answer: e.target.value } : r))}
+                        onChange={(e) =>
+                          setCmMappings((prev) =>
+                            prev.map((r, ri) =>
+                              ri === i ? { ...r, answer: e.target.value } : r,
+                            ),
+                          )
+                        }
                         placeholder="Exact option text from survey"
                       />
                     </div>
                   </div>
                 ))}
                 {cmMappings.length === 0 && (
-                  <div style={{ padding: "12px 14px", fontFamily: FONT, fontSize: "0.82rem", color: "#94a3b8" }}>No country mappings found.</div>
+                  <div
+                    style={{
+                      padding: "12px 14px",
+                      fontFamily: FONT,
+                      fontSize: "0.82rem",
+                      color: "#94a3b8",
+                    }}
+                  >
+                    No country mappings found.
+                  </div>
                 )}
               </div>
             </div>
@@ -2139,87 +2497,278 @@ function SaveAsScenarioModal({
 }
 
 // ─── Save as Country Scenario Modal ──────────────────────────────────────────
-function SaveAsCountryScenarioModal({ sessionId, pagePayload, projectId, onClose, onSaved, showToast }) {
-  const questionText  = pagePayload?.questions?.[0] || "";
-  const pageOptions   = pagePayload?.options || [];
-  const allOptionTexts = [...new Set(pageOptions.flatMap(og => og.options || []).filter(Boolean))];
+function SaveAsCountryScenarioModal({
+  sessionId,
+  pagePayload,
+  projectId,
+  onClose,
+  onSaved,
+  showToast,
+}) {
+  const questionText = pagePayload?.questions?.[0] || "";
+  const pageOptions = pagePayload?.options || [];
+  const allOptionTexts = [
+    ...new Set(pageOptions.flatMap((og) => og.options || []).filter(Boolean)),
+  ];
 
   const [questionContains, setQuestionContains] = useState(questionText);
-  const [mappings,  setMappings]  = useState([]);
-  const [saving,    setSaving]    = useState(false);
+  const [mappings, setMappings] = useState([]);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    api.get(`/projects/${projectId}`)
-      .then(res => {
+    api
+      .get(`/projects/${projectId}`)
+      .then((res) => {
         const svs = res.data.surveys || [];
-        const codes = [...new Set(svs.flatMap(sv =>
-          Array.isArray(sv.countries)
-            ? sv.countries
-            : (sv.countries || '').split(',').map(c => c.trim()).filter(Boolean)
-        ))];
-        setMappings(codes.map(c => ({ country: c, answer: '' })));
+        const codes = [
+          ...new Set(
+            svs.flatMap((sv) =>
+              Array.isArray(sv.countries)
+                ? sv.countries
+                : (sv.countries || "")
+                    .split(",")
+                    .map((c) => c.trim())
+                    .filter(Boolean),
+            ),
+          ),
+        ];
+        setMappings(codes.map((c) => ({ country: c, answer: "" })));
       })
       .catch(() => {});
   }, [projectId]);
 
   const setAnswer = (idx, val) =>
-    setMappings(prev => prev.map((m, i) => i === idx ? { ...m, answer: val } : m));
+    setMappings((prev) =>
+      prev.map((m, i) => (i === idx ? { ...m, answer: val } : m)),
+    );
 
   const handleSave = async () => {
-    if (!questionContains.trim()) { showToast("Question text is required", "error"); return; }
-    const incomplete = mappings.filter(m => !m.answer);
-    if (incomplete.length > 0) { showToast("All countries must have an answer selected", "error"); return; }
+    if (!questionContains.trim()) {
+      showToast("Question text is required", "error");
+      return;
+    }
+    const incomplete = mappings.filter((m) => !m.answer);
+    if (incomplete.length > 0) {
+      showToast("All countries must have an answer selected", "error");
+      return;
+    }
     setSaving(true);
     try {
-      await api.post('/scenarios/country-logic', { projectId, questionContains, mappings });
+      await api.post("/scenarios/country-logic", {
+        projectId,
+        questionContains,
+        mappings,
+      });
       showToast("Country Logic scenario created ✓");
       onSaved();
       onClose();
     } catch (err) {
-      showToast(err.response?.data?.error || "Failed to create Country Logic", "error");
-    } finally { setSaving(false); }
+      showToast(
+        err.response?.data?.error || "Failed to create Country Logic",
+        "error",
+      );
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <div style={s.overlay}>
-      <div style={{ background: "white", borderRadius: 16, width: "100%", maxWidth: 560, maxHeight: "88vh", display: "flex", flexDirection: "column", boxShadow: "0 25px 50px rgba(0,0,0,0.3)" }}>
-        <div style={{ padding: "22px 26px 0", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+      <div
+        style={{
+          background: "white",
+          borderRadius: 16,
+          width: "100%",
+          maxWidth: 560,
+          maxHeight: "88vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 25px 50px rgba(0,0,0,0.3)",
+        }}
+      >
+        <div
+          style={{
+            padding: "22px 26px 0",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+          }}
+        >
           <div>
-            <h2 style={{ fontFamily: FONT, fontSize: "1.1rem", fontWeight: 700, color: "#1e293b", margin: "0 0 4px" }}>Save as Country Logic</h2>
-            <p style={{ fontFamily: FONT, fontSize: "0.8rem", color: "#64748b", margin: 0 }}>Maps each project country to the correct survey answer for this question.</p>
+            <h2
+              style={{
+                fontFamily: FONT,
+                fontSize: "1.1rem",
+                fontWeight: 700,
+                color: "#1e293b",
+                margin: "0 0 4px",
+              }}
+            >
+              Save as Country Logic
+            </h2>
+            <p
+              style={{
+                fontFamily: FONT,
+                fontSize: "0.8rem",
+                color: "#64748b",
+                margin: 0,
+              }}
+            >
+              Maps each project country to the correct survey answer for this
+              question.
+            </p>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#64748b" }}><X size={20} /></button>
+          <button
+            onClick={onClose}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "#64748b",
+            }}
+          >
+            <X size={20} />
+          </button>
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "18px 26px" }}>
           <div style={{ marginBottom: 14 }}>
             <label style={scenLabel}>Scenario Name</label>
-            <div style={{ ...scenInput, background: "#f8fafc", color: "#94a3b8", cursor: "not-allowed", display: "flex", alignItems: "center" }}>Country Logic</div>
+            <div
+              style={{
+                ...scenInput,
+                background: "#f8fafc",
+                color: "#94a3b8",
+                cursor: "not-allowed",
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              Country Logic
+            </div>
           </div>
           <div style={{ marginBottom: 18 }}>
             <label style={scenLabel}>Question contains text *</label>
-            <input style={scenInput} value={questionContains} onChange={e => setQuestionContains(e.target.value)} placeholder="e.g. country of residence" />
-            <div style={{ fontSize: "0.7rem", color: "#94a3b8", fontFamily: FONT, marginTop: 4 }}>Bot uses this to identify the country question on any page.</div>
+            <input
+              style={scenInput}
+              value={questionContains}
+              onChange={(e) => setQuestionContains(e.target.value)}
+              placeholder="e.g. country of residence"
+            />
+            <div
+              style={{
+                fontSize: "0.7rem",
+                color: "#94a3b8",
+                fontFamily: FONT,
+                marginTop: 4,
+              }}
+            >
+              Bot uses this to identify the country question on any page.
+            </div>
           </div>
           <div>
             <label style={scenLabel}>Country Answer Mapping</label>
-            <div style={{ fontSize: "0.72rem", color: "#94a3b8", fontFamily: FONT, marginBottom: 10 }}>
-              Select the exact option the bot should choose for each country. Sessions from unmapped countries will naturally terminate via survey logic.
+            <div
+              style={{
+                fontSize: "0.72rem",
+                color: "#94a3b8",
+                fontFamily: FONT,
+                marginBottom: 10,
+              }}
+            >
+              Select the exact option the bot should choose for each country.
+              Sessions from unmapped countries will naturally terminate via
+              survey logic.
             </div>
             {mappings.length === 0 ? (
-              <div style={{ padding: 16, background: "#f8fafc", borderRadius: 8, textAlign: "center", fontSize: "0.82rem", color: "#94a3b8", fontFamily: FONT }}>Loading project countries...</div>
+              <div
+                style={{
+                  padding: 16,
+                  background: "#f8fafc",
+                  borderRadius: 8,
+                  textAlign: "center",
+                  fontSize: "0.82rem",
+                  color: "#94a3b8",
+                  fontFamily: FONT,
+                }}
+              >
+                Loading project countries...
+              </div>
             ) : (
-              <div style={{ border: "1.5px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "100px 1fr", background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
-                  <div style={{ padding: "8px 14px", fontSize: "0.72rem", fontWeight: 700, color: "#94a3b8", fontFamily: FONT, textTransform: "uppercase" }}>Country</div>
-                  <div style={{ padding: "8px 14px", fontSize: "0.72rem", fontWeight: 700, color: "#94a3b8", fontFamily: FONT, textTransform: "uppercase" }}>Select option containing</div>
+              <div
+                style={{
+                  border: "1.5px solid #e2e8f0",
+                  borderRadius: 10,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "100px 1fr",
+                    background: "#f8fafc",
+                    borderBottom: "1px solid #e2e8f0",
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: "8px 14px",
+                      fontSize: "0.72rem",
+                      fontWeight: 700,
+                      color: "#94a3b8",
+                      fontFamily: FONT,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Country
+                  </div>
+                  <div
+                    style={{
+                      padding: "8px 14px",
+                      fontSize: "0.72rem",
+                      fontWeight: 700,
+                      color: "#94a3b8",
+                      fontFamily: FONT,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Select option containing
+                  </div>
                 </div>
                 {mappings.map((m, i) => (
-                  <div key={m.country} style={{ display: "grid", gridTemplateColumns: "100px 1fr", borderBottom: i < mappings.length - 1 ? "1px solid #f1f5f9" : "none", alignItems: "center" }}>
-                    <div style={{ padding: "10px 14px", fontFamily: "monospace", fontSize: "0.82rem", fontWeight: 700, color: "#1e3a5f", background: "#f0f7ff" }}>{m.country}</div>
+                  <div
+                    key={m.country}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "100px 1fr",
+                      borderBottom:
+                        i < mappings.length - 1 ? "1px solid #f1f5f9" : "none",
+                      alignItems: "center",
+                    }}
+                  >
+                    <div
+                      style={{
+                        padding: "10px 14px",
+                        fontFamily: "monospace",
+                        fontSize: "0.82rem",
+                        fontWeight: 700,
+                        color: "#1e3a5f",
+                        background: "#f0f7ff",
+                      }}
+                    >
+                      {m.country}
+                    </div>
                     <div style={{ padding: "8px 12px" }}>
-                      <select style={{ ...scenInput, margin: 0 }} value={m.answer} onChange={e => setAnswer(i, e.target.value)}>
+                      <select
+                        style={{ ...scenInput, margin: 0 }}
+                        value={m.answer}
+                        onChange={(e) => setAnswer(i, e.target.value)}
+                      >
                         <option value="">— select option —</option>
-                        {allOptionTexts.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                        {allOptionTexts.map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
                       </select>
                     </div>
                   </div>
@@ -2228,9 +2777,26 @@ function SaveAsCountryScenarioModal({ sessionId, pagePayload, projectId, onClose
             )}
           </div>
         </div>
-        <div style={{ padding: "14px 26px", borderTop: "1px solid #f1f5f9", display: "flex", justifyContent: "flex-end", gap: 12 }}>
-          <button style={s.cancelBtnFull} onClick={onClose}>Cancel</button>
-          <button onClick={handleSave} disabled={saving || mappings.length === 0} style={{ ...s.saveBtn, opacity: (saving || mappings.length === 0) ? 0.7 : 1 }}>
+        <div
+          style={{
+            padding: "14px 26px",
+            borderTop: "1px solid #f1f5f9",
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 12,
+          }}
+        >
+          <button style={s.cancelBtnFull} onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving || mappings.length === 0}
+            style={{
+              ...s.saveBtn,
+              opacity: saving || mappings.length === 0 ? 0.7 : 1,
+            }}
+          >
             <Save size={16} /> {saving ? "Creating..." : "Create Country Logic"}
           </button>
         </div>
@@ -2262,7 +2828,7 @@ function ScenariosTab({ projectId, showToast }) {
   }, [projectId]);
 
   useEffect(() => {
-    const cl = scenarios.find(s => s.name === 'Country Logic');
+    const cl = scenarios.find((s) => s.name === "Country Logic");
     setCountryLogicScenario(cl || null);
   }, [scenarios]);
 
@@ -2328,7 +2894,20 @@ function ScenariosTab({ projectId, showToast }) {
           {countryLogicScenario && (
             <button
               onClick={() => setEditScenario(countryLogicScenario)}
-              style={{ display: "flex", alignItems: "center", gap: 6, background: "#f0f7ff", border: "1.5px solid #dbeafe", borderRadius: 8, padding: "9px 16px", fontSize: "0.88rem", fontWeight: 600, cursor: "pointer", color: "#1e3a5f", fontFamily: FONT }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                background: "#f0f7ff",
+                border: "1.5px solid #dbeafe",
+                borderRadius: 8,
+                padding: "9px 16px",
+                fontSize: "0.88rem",
+                fontWeight: 600,
+                cursor: "pointer",
+                color: "#1e3a5f",
+                fontFamily: FONT,
+              }}
             >
               <Globe size={15} /> Edit Country Logic
             </button>
@@ -2608,10 +3187,10 @@ function SessionReportModal({
   onClose,
   showToast = () => {},
 }) {
-  const [showSaveScenario,    setShowSaveScenario]    = useState(false);
+  const [showSaveScenario, setShowSaveScenario] = useState(false);
   const [showCountryScenario, setShowCountryScenario] = useState(false);
   const [countryScenarioPage, setCountryScenarioPage] = useState(null);
-  const [countryLogicExists,  setCountryLogicExists]  = useState(false);
+  const [countryLogicExists, setCountryLogicExists] = useState(false);
   const [countryLogicChecked, setCountryLogicChecked] = useState(false);
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -2627,10 +3206,11 @@ function SessionReportModal({
       .finally(() => setLoading(false));
   }, [sessionId]);
 
-    useEffect(() => {
+  useEffect(() => {
     if (!projectId) return;
-    api.get(`/scenarios/country-logic/${projectId}`)
-      .then(res => setCountryLogicExists(res.data.exists))
+    api
+      .get(`/scenarios/country-logic/${projectId}`)
+      .then((res) => setCountryLogicExists(res.data.exists))
       .catch(() => {})
       .finally(() => setCountryLogicChecked(true));
   }, [projectId]);
@@ -3049,22 +3629,65 @@ function SessionReportModal({
                           : "✅ Complete"}
                     </span>
                   )}
-                  <div style={{ fontSize: "0.72rem", color: "#94a3b8", fontFamily: FONT }}>
+                  <div
+                    style={{
+                      fontSize: "0.72rem",
+                      color: "#94a3b8",
+                      fontFamily: FONT,
+                    }}
+                  >
                     {fmtDuration(ev.payload?.timeTaken)}
                   </div>
-                  {!ev.payload?.isExitPage && (ev.payload?.questions?.length > 0) && !countryLogicExists && countryLogicChecked && (
-                    <button
-                      onClick={e => { e.stopPropagation(); setCountryScenarioPage({ index: i, payload: ev.payload }); setShowCountryScenario(true); }}
-                      style={{ display: "flex", alignItems: "center", gap: 3, background: "#f0f7ff", border: "1px solid #dbeafe", borderRadius: 5, padding: "3px 8px", cursor: "pointer", color: "#2563eb", fontSize: "0.68rem", fontFamily: FONT, fontWeight: 600, marginTop: 2, width: "100%" }}
-                    >
-                      <Globe size={10} /> Country Logic
-                    </button>
-                  )}
-                  {countryLogicExists && !ev.payload?.isExitPage && (ev.payload?.questions?.length > 0) && (
-                    <div style={{ fontSize: "0.65rem", color: "#059669", fontFamily: FONT, marginTop: 2, display: "flex", alignItems: "center", gap: 3 }}>
-                      <CheckCircle size={9} /> Country Logic set
-                    </div>
-                  )}
+                  {!ev.payload?.isExitPage &&
+                    ev.payload?.questions?.length > 0 &&
+                    !countryLogicExists &&
+                    countryLogicChecked && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCountryScenarioPage({
+                            index: i,
+                            payload: ev.payload,
+                          });
+                          setShowCountryScenario(true);
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 3,
+                          background: "#f0f7ff",
+                          border: "1px solid #dbeafe",
+                          borderRadius: 5,
+                          padding: "3px 8px",
+                          cursor: "pointer",
+                          color: "#2563eb",
+                          fontSize: "0.68rem",
+                          fontFamily: FONT,
+                          fontWeight: 600,
+                          marginTop: 2,
+                          width: "100%",
+                        }}
+                      >
+                        <Globe size={10} /> Country Logic
+                      </button>
+                    )}
+                  {countryLogicExists &&
+                    !ev.payload?.isExitPage &&
+                    ev.payload?.questions?.length > 0 && (
+                      <div
+                        style={{
+                          fontSize: "0.65rem",
+                          color: "#059669",
+                          fontFamily: FONT,
+                          marginTop: 2,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 3,
+                        }}
+                      >
+                        <CheckCircle size={9} /> Country Logic set
+                      </div>
+                    )}
                   {ev.payload?.screenshot && (
                     <div
                       style={{
@@ -3345,7 +3968,215 @@ function SessionReportModal({
                     ))}
                   </div>
                 )}
-                {activePage.payload?.options?.length > 0 && !activePage.payload?.gridAnswers?.length && (
+                {activePage.payload?.options?.length > 0 &&
+                  !activePage.payload?.gridAnswers?.length && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div
+                        style={{
+                          fontSize: "0.75rem",
+                          fontWeight: 700,
+                          color: "#94a3b8",
+                          fontFamily: FONT,
+                          textTransform: "uppercase",
+                          letterSpacing: 0.5,
+                          marginBottom: 8,
+                        }}
+                      >
+                        All Options & Selection
+                      </div>
+                      {activePage.payload.options.map((optGroup, gi) => (
+                        <div
+                          key={gi}
+                          style={{
+                            background: "white",
+                            border: "1.5px solid #e2e8f0",
+                            borderRadius: 10,
+                            padding: 14,
+                            marginBottom: 12,
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              marginBottom: 10,
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: "0.7rem",
+                                fontWeight: 700,
+                                background: "#f0f7ff",
+                                color: "#2563eb",
+                                borderRadius: 6,
+                                padding: "2px 8px",
+                                fontFamily: FONT,
+                                textTransform: "uppercase",
+                                letterSpacing: 0.4,
+                              }}
+                            >
+                              {optGroup.type}
+                            </span>
+                            {optGroup.type === "radio" && optGroup.selected && (
+                              <span
+                                style={{
+                                  fontSize: "0.75rem",
+                                  color: "#166534",
+                                  fontFamily: FONT,
+                                }}
+                              >
+                                ✓ Selected: <strong>{optGroup.selected}</strong>
+                              </span>
+                            )}
+                            {optGroup.type === "checkbox" &&
+                              optGroup.selected?.length > 0 && (
+                                <span
+                                  style={{
+                                    fontSize: "0.75rem",
+                                    color: "#166534",
+                                    fontFamily: FONT,
+                                  }}
+                                >
+                                  ✓ {optGroup.selected.length} of{" "}
+                                  {optGroup.options?.length} selected
+                                </span>
+                              )}
+                            {optGroup.type === "select" &&
+                              optGroup.selected && (
+                                <span
+                                  style={{
+                                    fontSize: "0.75rem",
+                                    color: "#166534",
+                                    fontFamily: FONT,
+                                  }}
+                                >
+                                  ✓ Selected:{" "}
+                                  <strong>{optGroup.selected}</strong>
+                                </span>
+                              )}
+                          </div>
+                          {optGroup.options?.length > 0 && (
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: 4,
+                              }}
+                            >
+                              {optGroup.options.map((opt, oi) => {
+                                const isSelected =
+                                  optGroup.type === "checkbox"
+                                    ? optGroup.selected?.includes(opt)
+                                    : optGroup.selected === opt;
+                                return (
+                                  <div
+                                    key={oi}
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: 10,
+                                      padding: "7px 10px",
+                                      borderRadius: 6,
+                                      background: isSelected
+                                        ? "#f0fdf4"
+                                        : "#f8fafc",
+                                      border: `1px solid ${isSelected ? "#86efac" : "#e2e8f0"}`,
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        width: 16,
+                                        height: 16,
+                                        borderRadius:
+                                          optGroup.type === "checkbox"
+                                            ? 4
+                                            : "50%",
+                                        border: `2px solid ${isSelected ? "#059669" : "#cbd5e1"}`,
+                                        background: isSelected
+                                          ? "#059669"
+                                          : "white",
+                                        flexShrink: 0,
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                      }}
+                                    >
+                                      {isSelected && (
+                                        <div
+                                          style={{
+                                            width: 6,
+                                            height: 6,
+                                            borderRadius: "50%",
+                                            background: "white",
+                                          }}
+                                        />
+                                      )}
+                                    </div>
+                                    <span
+                                      style={{
+                                        fontSize: "0.83rem",
+                                        color: isSelected
+                                          ? "#166534"
+                                          : "#475569",
+                                        fontFamily: FONT,
+                                        fontWeight: isSelected ? 600 : 400,
+                                        flex: 1,
+                                      }}
+                                    >
+                                      {opt}
+                                    </span>
+                                    {isSelected && (
+                                      <span
+                                        style={{
+                                          fontSize: "0.7rem",
+                                          background: "#059669",
+                                          color: "white",
+                                          borderRadius: 4,
+                                          padding: "1px 6px",
+                                          fontFamily: FONT,
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        SELECTED
+                                      </span>
+                                    )}
+                                    <span
+                                      style={{
+                                        fontSize: "0.7rem",
+                                        color: "#94a3b8",
+                                        fontFamily: FONT,
+                                      }}
+                                    >
+                                      {oi + 1}/{optGroup.options.length}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {(optGroup.type === "open-end" ||
+                            optGroup.type === "numeric") &&
+                            optGroup.selected && (
+                              <div
+                                style={{
+                                  background: "#f0fdf4",
+                                  border: "1px solid #86efac",
+                                  borderRadius: 6,
+                                  padding: "8px 12px",
+                                  fontSize: "0.85rem",
+                                  color: "#166534",
+                                  fontFamily: FONT,
+                                }}
+                              >
+                                {optGroup.selected}
+                              </div>
+                            )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                {activePage.payload?.gridAnswers?.length > 0 && (
                   <div style={{ marginBottom: 16 }}>
                     <div
                       style={{
@@ -3358,211 +4189,85 @@ function SessionReportModal({
                         marginBottom: 8,
                       }}
                     >
-                      All Options & Selection
+                      Grid Answers — Row → Selection
                     </div>
-                    {activePage.payload.options.map((optGroup, gi) => (
+                    <div
+                      style={{
+                        border: "1.5px solid #e2e8f0",
+                        borderRadius: 10,
+                        overflow: "hidden",
+                      }}
+                    >
                       <div
-                        key={gi}
                         style={{
-                          background: "white",
-                          border: "1.5px solid #e2e8f0",
-                          borderRadius: 10,
-                          padding: 14,
-                          marginBottom: 12,
+                          display: "grid",
+                          gridTemplateColumns: "1fr 180px",
+                          background: "#f8fafc",
+                          borderBottom: "1px solid #e2e8f0",
                         }}
                       >
                         <div
                           style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            marginBottom: 10,
+                            padding: "7px 14px",
+                            fontSize: "0.72rem",
+                            fontWeight: 700,
+                            color: "#94a3b8",
+                            fontFamily: FONT,
+                            textTransform: "uppercase",
                           }}
                         >
-                          <span
-                            style={{
-                              fontSize: "0.7rem",
-                              fontWeight: 700,
-                              background: "#f0f7ff",
-                              color: "#2563eb",
-                              borderRadius: 6,
-                              padding: "2px 8px",
-                              fontFamily: FONT,
-                              textTransform: "uppercase",
-                              letterSpacing: 0.4,
-                            }}
-                          >
-                            {optGroup.type}
-                          </span>
-                          {optGroup.type === "radio" && optGroup.selected && (
-                            <span
-                              style={{
-                                fontSize: "0.75rem",
-                                color: "#166534",
-                                fontFamily: FONT,
-                              }}
-                            >
-                              ✓ Selected: <strong>{optGroup.selected}</strong>
-                            </span>
-                          )}
-                          {optGroup.type === "checkbox" &&
-                            optGroup.selected?.length > 0 && (
-                              <span
-                                style={{
-                                  fontSize: "0.75rem",
-                                  color: "#166534",
-                                  fontFamily: FONT,
-                                }}
-                              >
-                                ✓ {optGroup.selected.length} of{" "}
-                                {optGroup.options?.length} selected
-                              </span>
-                            )}
-                          {optGroup.type === "select" && optGroup.selected && (
-                            <span
-                              style={{
-                                fontSize: "0.75rem",
-                                color: "#166534",
-                                fontFamily: FONT,
-                              }}
-                            >
-                              ✓ Selected: <strong>{optGroup.selected}</strong>
-                            </span>
-                          )}
+                          Statement
                         </div>
-                        {optGroup.options?.length > 0 && (
-                          <div
-                            style={{
-                              display: "flex",
-                              flexDirection: "column",
-                              gap: 4,
-                            }}
-                          >
-                            {optGroup.options.map((opt, oi) => {
-                              const isSelected =
-                                optGroup.type === "checkbox"
-                                  ? optGroup.selected?.includes(opt)
-                                  : optGroup.selected === opt;
-                              return (
-                                <div
-                                  key={oi}
-                                  style={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    gap: 10,
-                                    padding: "7px 10px",
-                                    borderRadius: 6,
-                                    background: isSelected
-                                      ? "#f0fdf4"
-                                      : "#f8fafc",
-                                    border: `1px solid ${isSelected ? "#86efac" : "#e2e8f0"}`,
-                                  }}
-                                >
-                                  <div
-                                    style={{
-                                      width: 16,
-                                      height: 16,
-                                      borderRadius:
-                                        optGroup.type === "checkbox"
-                                          ? 4
-                                          : "50%",
-                                      border: `2px solid ${isSelected ? "#059669" : "#cbd5e1"}`,
-                                      background: isSelected
-                                        ? "#059669"
-                                        : "white",
-                                      flexShrink: 0,
-                                      display: "flex",
-                                      alignItems: "center",
-                                      justifyContent: "center",
-                                    }}
-                                  >
-                                    {isSelected && (
-                                      <div
-                                        style={{
-                                          width: 6,
-                                          height: 6,
-                                          borderRadius: "50%",
-                                          background: "white",
-                                        }}
-                                      />
-                                    )}
-                                  </div>
-                                  <span
-                                    style={{
-                                      fontSize: "0.83rem",
-                                      color: isSelected ? "#166534" : "#475569",
-                                      fontFamily: FONT,
-                                      fontWeight: isSelected ? 600 : 400,
-                                      flex: 1,
-                                    }}
-                                  >
-                                    {opt}
-                                  </span>
-                                  {isSelected && (
-                                    <span
-                                      style={{
-                                        fontSize: "0.7rem",
-                                        background: "#059669",
-                                        color: "white",
-                                        borderRadius: 4,
-                                        padding: "1px 6px",
-                                        fontFamily: FONT,
-                                        fontWeight: 700,
-                                      }}
-                                    >
-                                      SELECTED
-                                    </span>
-                                  )}
-                                  <span
-                                    style={{
-                                      fontSize: "0.7rem",
-                                      color: "#94a3b8",
-                                      fontFamily: FONT,
-                                    }}
-                                  >
-                                    {oi + 1}/{optGroup.options.length}
-                                  </span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                        {(optGroup.type === "open-end" ||
-                          optGroup.type === "numeric") &&
-                          optGroup.selected && (
-                            <div
-                              style={{
-                                background: "#f0fdf4",
-                                border: "1px solid #86efac",
-                                borderRadius: 6,
-                                padding: "8px 12px",
-                                fontSize: "0.85rem",
-                                color: "#166534",
-                                fontFamily: FONT,
-                              }}
-                            >
-                              {optGroup.selected}
-                            </div>
-                          )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {activePage.payload?.gridAnswers?.length > 0 && (
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "#94a3b8", fontFamily: FONT, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
-                      Grid Answers — Row → Selection
-                    </div>
-                    <div style={{ border: "1.5px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 180px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
-                        <div style={{ padding: "7px 14px", fontSize: "0.72rem", fontWeight: 700, color: "#94a3b8", fontFamily: FONT, textTransform: "uppercase" }}>Statement</div>
-                        <div style={{ padding: "7px 14px", fontSize: "0.72rem", fontWeight: 700, color: "#94a3b8", fontFamily: FONT, textTransform: "uppercase" }}>Selection</div>
+                        <div
+                          style={{
+                            padding: "7px 14px",
+                            fontSize: "0.72rem",
+                            fontWeight: 700,
+                            color: "#94a3b8",
+                            fontFamily: FONT,
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          Selection
+                        </div>
                       </div>
                       {activePage.payload.gridAnswers.map((ga, i) => (
-                        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 180px", borderBottom: i < activePage.payload.gridAnswers.length - 1 ? "1px solid #f1f5f9" : "none", alignItems: "center" }}>
-                          <div style={{ padding: "9px 14px", fontSize: "0.82rem", color: "#475569", fontFamily: FONT, lineHeight: 1.4 }}>{ga.row}</div>
+                        <div
+                          key={i}
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "1fr 180px",
+                            borderBottom:
+                              i < activePage.payload.gridAnswers.length - 1
+                                ? "1px solid #f1f5f9"
+                                : "none",
+                            alignItems: "center",
+                          }}
+                        >
+                          <div
+                            style={{
+                              padding: "9px 14px",
+                              fontSize: "0.82rem",
+                              color: "#475569",
+                              fontFamily: FONT,
+                              lineHeight: 1.4,
+                            }}
+                          >
+                            {ga.row}
+                          </div>
                           <div style={{ padding: "9px 14px" }}>
-                            <span style={{ fontSize: "0.78rem", fontWeight: 600, background: ga.answered ? "#dcfce7" : "#fef2f2", color: ga.answered ? "#166534" : "#dc2626", borderRadius: 6, padding: "3px 10px", fontFamily: FONT, display: "inline-block" }}>
+                            <span
+                              style={{
+                                fontSize: "0.78rem",
+                                fontWeight: 600,
+                                background: ga.answered ? "#dcfce7" : "#fef2f2",
+                                color: ga.answered ? "#166534" : "#dc2626",
+                                borderRadius: 6,
+                                padding: "3px 10px",
+                                fontFamily: FONT,
+                                display: "inline-block",
+                              }}
+                            >
                               {ga.selected}
                             </span>
                           </div>
@@ -3741,8 +4446,13 @@ function SessionReportModal({
           sessionId={session.id}
           pagePayload={countryScenarioPage.payload}
           projectId={projectId || session.project_id}
-          onClose={() => { setShowCountryScenario(false); setCountryScenarioPage(null); }}
-          onSaved={() => { setCountryLogicExists(true); }}
+          onClose={() => {
+            setShowCountryScenario(false);
+            setCountryScenarioPage(null);
+          }}
+          onSaved={() => {
+            setCountryLogicExists(true);
+          }}
           showToast={showToast}
         />
       )}
@@ -4369,8 +5079,8 @@ function SessionsTab({
   const [viewSession, setViewSession] = useState(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [clearing, setClearing] = useState(false);
-  const [showStopConfirm,  setShowStopConfirm]  = useState(false);
-  const [stopping,         setStopping]         = useState(false);
+  const [showStopConfirm, setShowStopConfirm] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const PAGE_SIZE = 20;
@@ -4425,11 +5135,13 @@ function SessionsTab({
 
   // Returns live elapsed time for active sessions, stored duration for completed ones
   const getLiveDuration = (session) => {
-    if (['queued', 'initialising', 'in_progress'].includes(session.status)) {
+    if (["queued", "initialising", "in_progress"].includes(session.status)) {
       const start = session.started_at || session.created_at;
-      if (!start) return '—';
-      const elapsed = Math.round((Date.now() - new Date(start).getTime()) / 1000);
-      return fmtDuration(elapsed) + ' ⏳';
+      if (!start) return "—";
+      const elapsed = Math.round(
+        (Date.now() - new Date(start).getTime()) / 1000,
+      );
+      return fmtDuration(elapsed) + " ⏳";
     }
     return fmtDuration(session.total_duration_s);
   };
@@ -4461,7 +5173,10 @@ function SessionsTab({
       setShowStopConfirm(false);
       load(true);
     } catch (err) {
-      showToast(err.response?.data?.error || "Failed to stop sessions", "error");
+      showToast(
+        err.response?.data?.error || "Failed to stop sessions",
+        "error",
+      );
     } finally {
       setStopping(false);
     }
@@ -4470,21 +5185,24 @@ function SessionsTab({
   const handleStopOne = async (sessionId) => {
     try {
       await api.post(`/sessions/${sessionId}/stop`);
-      showToast('Session stopped ✓');
+      showToast("Session stopped ✓");
       load(true);
     } catch (err) {
-      showToast(err.response?.data?.error || 'Failed to stop session', 'error');
+      showToast(err.response?.data?.error || "Failed to stop session", "error");
     }
   };
 
   const handleDeleteOne = async (sessionId) => {
-    if (!window.confirm('Delete this session? This cannot be undone.')) return;
+    if (!window.confirm("Delete this session? This cannot be undone.")) return;
     try {
       await api.delete(`/sessions/${sessionId}`);
-      showToast('Session deleted ✓');
+      showToast("Session deleted ✓");
       load(true);
     } catch (err) {
-      showToast(err.response?.data?.error || 'Failed to delete session', 'error');
+      showToast(
+        err.response?.data?.error || "Failed to delete session",
+        "error",
+      );
     }
   };
 
@@ -4665,17 +5383,41 @@ function SessionsTab({
             <button
               onClick={() => setShowStopConfirm(true)}
               style={{
-                display: "flex", alignItems: "center", gap: 5,
-                background: "#fff7ed", border: "1.5px solid #fed7aa",
-                borderRadius: 8, padding: "8px 14px",
-                fontSize: "0.82rem", fontWeight: 600,
-                cursor: "pointer", color: "#c2410c", fontFamily: FONT,
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+                background: "#fff7ed",
+                border: "1.5px solid #fed7aa",
+                borderRadius: 8,
+                padding: "8px 14px",
+                fontSize: "0.82rem",
+                fontWeight: 600,
+                cursor: "pointer",
+                color: "#c2410c",
+                fontFamily: FONT,
               }}
             >
               <StopCircle size={13} /> Stop All Running
             </button>
-            <span style={{ fontSize: "0.75rem", color: "#2563eb", fontFamily: FONT, display: "flex", alignItems: "center", gap: 4 }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#2563eb", display: "inline-block" }} />
+            <span
+              style={{
+                fontSize: "0.75rem",
+                color: "#2563eb",
+                fontFamily: FONT,
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: "#2563eb",
+                  display: "inline-block",
+                }}
+              />
               Auto-refreshing
             </span>
           </>
@@ -4735,18 +5477,19 @@ function SessionsTab({
                 <tr style={s.theadRow}>
                   {[
                     "Session ID",
-                    "Mode",
                     "Response ID",
-                    "IP Address",
-                    "State",
-                    "Scenario",
                     "Country",
+                    "IP Address",
+                    "Persona",
+                    "Scenario",
                     "Device",
-                    "Duration",
-                    "Quality",
-                    "Status",
                     "Started",
                     "Ended",
+                    "Duration",
+                    "Mode",
+                    "State",
+                    "Status",
+                    "Quality",
                     "Actions",
                   ].map((h) => (
                     <th key={h} style={s.th}>
@@ -4764,6 +5507,7 @@ function SessionsTab({
                       background: idx % 2 === 0 ? "white" : "#f8fafc",
                     }}
                   >
+                    {/* 1. Session ID */}
                     <td style={s.td}>
                       <span
                         style={{
@@ -4778,18 +5522,7 @@ function SessionsTab({
                         {session.id.slice(0, 8)}
                       </span>
                     </td>
-                    {/* Mode */}
-                    <td style={s.td}>
-                      <span style={{
-                        fontSize: "0.72rem", fontWeight: 700,
-                        background: session.internal_testing ? "#fef3c7" : "#dbeafe",
-                        color: session.internal_testing ? "#92400e" : "#1e40af",
-                        borderRadius: 20, padding: "2px 8px", fontFamily: FONT,
-                        whiteSpace: "nowrap",
-                      }}>
-                        {session.internal_testing ? "🧪 Test" : "🌐 Live"}
-                      </span>
-                    </td>
+                    {/* 2. Response ID */}
                     <td style={s.td}>
                       {session.response_id ? (
                         <span
@@ -4810,44 +5543,7 @@ function SessionsTab({
                         </span>
                       )}
                     </td>
-                    <td style={s.td}>
-                      <span
-                        style={{
-                          fontFamily: "monospace",
-                          fontSize: "0.75rem",
-                          color: "#475569",
-                        }}
-                      >
-                        {session.ip_address || "—"}
-                      </span>
-                    </td>
-                    <td style={s.td}>
-                      <StatusBadge
-                        status={session.status}
-                        colors={SESSION_STATUS_COLORS}
-                      />
-                    </td>
-                    <td style={s.td}>
-                      <span
-                        style={{
-                          fontSize: "0.82rem",
-                          color: "#1e293b",
-                          fontFamily: FONT,
-                        }}
-                      >
-                        {session.persona_name || "—"}
-                      </span>
-                    </td>
-                                        {/* Scenario */}
-                    <td style={s.td}>
-                      <span style={{ fontSize: "0.75rem", color: "#475569", fontFamily: FONT }}>
-                        {session.scenario_name
-                          ? <span style={{ background: "#f0f7ff", color: "#1e3a5f", borderRadius: 4, padding: "2px 7px", fontSize: "0.72rem", fontWeight: 600, fontFamily: FONT }}>
-                              {session.scenario_name.slice(0, 20)}{session.scenario_name.length > 20 ? "…" : ""}
-                            </span>
-                          : <span style={{ color: "#94a3b8" }}>Default</span>}
-                      </span>
-                    </td>
+                    {/* 3. Country */}
                     <td style={s.td}>
                       <span
                         style={{
@@ -4859,23 +5555,161 @@ function SessionsTab({
                         {session.proxy_country || "—"}
                       </span>
                     </td>
+                    {/* 4. IP Address */}
                     <td style={s.td}>
-                      <span style={{ fontSize: "0.78rem", color: "#64748b", fontFamily: FONT }}>
+                      <span
+                        style={{
+                          fontFamily: "monospace",
+                          fontSize: "0.75rem",
+                          color: "#475569",
+                        }}
+                      >
+                        {session.ip_address || "—"}
+                      </span>
+                    </td>
+                    {/* 5. Persona */}
+                    <td style={s.td}>
+                      <span
+                        style={{
+                          fontSize: "0.82rem",
+                          color: "#1e293b",
+                          fontFamily: FONT,
+                        }}
+                      >
+                        {session.persona_name || "—"}
+                      </span>
+                    </td>
+                    {/* 6. Scenario */}
+                    <td style={s.td}>
+                      {session.scenario_name ? (
+                        <span
+                          style={{
+                            background: "#f0f7ff",
+                            color: "#1e3a5f",
+                            borderRadius: 4,
+                            padding: "2px 7px",
+                            fontSize: "0.72rem",
+                            fontWeight: 600,
+                            fontFamily: FONT,
+                          }}
+                        >
+                          {session.scenario_name.slice(0, 20)}
+                          {session.scenario_name.length > 20 ? "…" : ""}
+                        </span>
+                      ) : (
+                        <span style={{ color: "#94a3b8", fontSize: "0.75rem" }}>
+                          Default
+                        </span>
+                      )}
+                    </td>
+                    {/* 7. Device */}
+                    <td style={s.td}>
+                      <span
+                        style={{
+                          fontSize: "0.78rem",
+                          color: "#64748b",
+                          fontFamily: FONT,
+                        }}
+                      >
                         {session.device_type
-                          ? session.device_type.charAt(0).toUpperCase() + session.device_type.slice(1)
+                          ? session.device_type.charAt(0).toUpperCase() +
+                            session.device_type.slice(1)
                           : "—"}
                       </span>
                     </td>
+                    {/* 8. Started */}
                     <td style={s.td}>
-                      <span style={{
-                        fontSize: "0.82rem",
-                        fontFamily: FONT,
-                        fontWeight: ['queued','initialising','in_progress'].includes(session.status) ? 600 : 400,
-                        color: ['queued','initialising','in_progress'].includes(session.status) ? "#2563eb" : "#475569",
-                      }}>
+                      <span
+                        style={{
+                          fontSize: "0.75rem",
+                          color: "#94a3b8",
+                          fontFamily: FONT,
+                        }}
+                      >
+                        {fmtTime(session.started_at || session.created_at)}
+                      </span>
+                    </td>
+                    {/* 9. Ended */}
+                    <td style={s.td}>
+                      <span
+                        style={{
+                          fontSize: "0.75rem",
+                          color: "#94a3b8",
+                          fontFamily: FONT,
+                        }}
+                      >
+                        {session.completed_at
+                          ? fmtTime(session.completed_at)
+                          : "—"}
+                      </span>
+                    </td>
+                    {/* 10. Duration */}
+                    <td style={s.td}>
+                      <span
+                        style={{
+                          fontSize: "0.82rem",
+                          fontFamily: FONT,
+                          fontWeight: [
+                            "queued",
+                            "initialising",
+                            "in_progress",
+                          ].includes(session.status)
+                            ? 600
+                            : 400,
+                          color: [
+                            "queued",
+                            "initialising",
+                            "in_progress",
+                          ].includes(session.status)
+                            ? "#2563eb"
+                            : "#475569",
+                        }}
+                      >
                         {getLiveDuration(session)}
                       </span>
                     </td>
+                    {/* 11. Mode */}
+                    <td style={s.td}>
+                      <span
+                        style={{
+                          fontSize: "0.72rem",
+                          fontWeight: 700,
+                          background: session.internal_testing
+                            ? "#fef3c7"
+                            : "#dbeafe",
+                          color: session.internal_testing
+                            ? "#92400e"
+                            : "#1e40af",
+                          borderRadius: 20,
+                          padding: "2px 8px",
+                          fontFamily: FONT,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {session.internal_testing ? "🧪 Test" : "🌐 Live"}
+                      </span>
+                    </td>
+                    {/* 12. State */}
+                    <td style={s.td}>
+                      <StatusBadge
+                        status={session.status}
+                        colors={SESSION_STATUS_COLORS}
+                      />
+                    </td>
+                    {/* 13. Status / Outcome */}
+                    <td style={s.td}>
+                      {session.outcome ? (
+                        <StatusBadge
+                          status={session.outcome}
+                          colors={SESSION_STATUS_COLORS}
+                        />
+                      ) : (
+                        <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
+                          —
+                        </span>
+                      )}
+                    </td>
+                    {/* 14. Quality */}
                     <td style={s.td}>
                       {session.quality_score != null ? (
                         <div
@@ -4924,47 +5758,50 @@ function SessionsTab({
                         </span>
                       )}
                     </td>
+                    {/* 15. Actions */}
                     <td style={s.td}>
-                      {session.outcome ? (
-                        <StatusBadge
-                          status={session.outcome}
-                          colors={SESSION_STATUS_COLORS}
-                        />
-                      ) : (
-                        <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
-                          —
-                        </span>
-                      )}
-                    </td>
-                    <td style={s.td}>
-                      <span
+                      <div
                         style={{
-                          fontSize: "0.75rem",
-                          color: "#94a3b8",
-                          fontFamily: FONT,
+                          display: "flex",
+                          gap: 5,
+                          alignItems: "center",
                         }}
                       >
-                        {fmtTime(session.started_at || session.created_at)}
-                      </span>
-                    </td>
-                    <td style={s.td}>
-                      <span style={{ fontSize: "0.75rem", color: "#94a3b8", fontFamily: FONT }}>
-                        {session.completed_at ? fmtTime(session.completed_at) : "—"}
-                      </span>
-                    </td>
-                    <td style={s.td}>
-                      <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
                         <button
                           onClick={() => setViewSession(session.id)}
-                          style={{ display: "flex", alignItems: "center", gap: 4, background: "#f0f7ff", border: "1px solid #dbeafe", borderRadius: 6, padding: "5px 8px", cursor: "pointer", color: "#2563eb", fontSize: "0.72rem", fontFamily: FONT, fontWeight: 600 }}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 4,
+                            background: "#f0f7ff",
+                            border: "1px solid #dbeafe",
+                            borderRadius: 6,
+                            padding: "5px 8px",
+                            cursor: "pointer",
+                            color: "#2563eb",
+                            fontSize: "0.72rem",
+                            fontFamily: FONT,
+                            fontWeight: 600,
+                          }}
                         >
                           <FileText size={11} /> View
                         </button>
-                        {['queued','initialising','in_progress'].includes(session.status) && (
+                        {["queued", "initialising", "in_progress"].includes(
+                          session.status,
+                        ) && (
                           <button
                             onClick={() => handleStopOne(session.id)}
                             title="Stop this session"
-                            style={{ display: "flex", alignItems: "center", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 6, padding: "5px 7px", cursor: "pointer", color: "#c2410c" }}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              background: "#fff7ed",
+                              border: "1px solid #fed7aa",
+                              borderRadius: 6,
+                              padding: "5px 7px",
+                              cursor: "pointer",
+                              color: "#c2410c",
+                            }}
                           >
                             <StopCircle size={11} />
                           </button>
@@ -4973,7 +5810,16 @@ function SessionsTab({
                           <button
                             onClick={() => handleDeleteOne(session.id)}
                             title="Delete this session"
-                            style={{ display: "flex", alignItems: "center", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "5px 7px", cursor: "pointer", color: "#ef4444" }}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              background: "#fef2f2",
+                              border: "1px solid #fecaca",
+                              borderRadius: 6,
+                              padding: "5px 7px",
+                              cursor: "pointer",
+                              color: "#ef4444",
+                            }}
                           >
                             <Trash2 size={11} />
                           </button>
