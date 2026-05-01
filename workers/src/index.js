@@ -1267,7 +1267,15 @@ const processSession = async (job) => {
 
   // ── AI session history — full Q&A log for contradiction checking ──────────
   const sessionAnswerHistory = [];
-  const useAI = !!process.env.ANTHROPIC_API_KEY;
+  const ANTHROPIC_API_KEY =
+    readSecret('anthropic_api_key_v1') ||
+    process.env.ANTHROPIC_API_KEY || null;
+
+  if (!ANTHROPIC_API_KEY) {
+    console.warn('⚠️ Anthropic API key not found. AI features disabled.');
+  }
+
+  const useAI = !!ANTHROPIC_API_KEY;
 
   try {
     browser = await chromium.launch(launchOptions);
