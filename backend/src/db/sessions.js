@@ -6,7 +6,7 @@ const createSession = async ({
   projectId, workspaceId, personaId,
   surveyUrl, surveyLabel, responseId,
   proxyCountry, proxyProvider,
-  deviceType, browserType, aiStrategy,
+  deviceType, browserType, aiStrategy, internalTesting = false,
 }) => {
   try {
     // In the INSERT query, add internal_testing to columns and values:
