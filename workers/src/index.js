@@ -777,6 +777,426 @@ const findMatchingStep = (scenario, questionsOnPage, pageNum) => {
   return null;
 };
 
+// ══════════════════════════════════════════════════════════════════════════════
+// AI ANSWER ENGINE
+// ══════════════════════════════════════════════════════════════════════════════
+
+const buildPersonaContext = (persona) => {
+  if (!persona) return 'You are a typical senior professional respondent. Be realistic and consistent.';
+  const attrs = persona.behavioural_attrs || {};
+  const lines = ['YOU ARE THIS PERSON — answer every question as them:'];
+  if (persona.name)           lines.push(`Name: ${persona.name}`);
+  if (persona.description)    lines.push(`Bio: ${persona.description}`);
+  if (persona.country)        lines.push(`Country: ${persona.country}`);
+  if (persona.language)       lines.push(`Language: ${persona.language}`);
+  if (persona.gender)         lines.push(`Gender: ${persona.gender}`);
+  if (persona.age_min && persona.age_max)
+                              lines.push(`Age: ${persona.age_min}–${persona.age_max}`);
+  else if (persona.age_min)   lines.push(`Age: ${persona.age_min}+`);
+  if (persona.device_type)    lines.push(`Device: ${persona.device_type}`);
+  if (attrs.designation)      lines.push(`Job Title / Designation: ${attrs.designation}`);
+  if (attrs.department)       lines.push(`Department: ${attrs.department}`);
+  if (attrs.industry)         lines.push(`Industry: ${attrs.industry}`);
+  if (attrs.companyRevenue)   lines.push(`Company Revenue: ${attrs.companyRevenue}`);
+  if (attrs.employeeSize)     lines.push(`Company Size (employees): ${attrs.employeeSize}`);
+  if (attrs.readingSpeed)     lines.push(`Reading Speed: ${attrs.readingSpeed}`);
+  if (attrs.responseStyle)    lines.push(`Response Style: ${attrs.responseStyle}`);
+  if (attrs.deviceOs)         lines.push(`Device OS: ${attrs.deviceOs}`);
+  if (attrs.browser)          lines.push(`Browser: ${attrs.browser}`);
+  if (attrs.behaviouralTags?.length > 0)
+                              lines.push(`Behavioural Profile: ${attrs.behaviouralTags.join(', ')}`);
+  if (attrs.secondaryDescription) {
+    lines.push('');
+    lines.push('FULL PERSONA DESCRIPTION (treat this as your character brief):');
+    lines.push(attrs.secondaryDescription);
+  }
+  return lines.join('\n');
+};
+
+const buildScenarioContext = (scenario) => {
+  if (!scenario || scenario.name === 'Country Logic') return '';
+  const lines = ['SCENARIO DIRECTIVE (steer your answers toward this goal):'];
+  if (scenario.name)             lines.push(`Scenario: ${scenario.name}`);
+  if (scenario.description)      lines.push(`Goal: ${scenario.description}`);
+  if (scenario.expected_outcome) lines.push(`Expected outcome: ${scenario.expected_outcome}`);
+  return lines.length > 1 ? lines.join('\n') : '';
+};
+
+const captureAllPageFields = async (page) => {
+  try {
+    return await page.evaluate(() => {
+      const fields = [];
+
+      // ── Radio groups ─────────────────────────────────────────────────────
+      const radioGroups = {}; const radioOrder = [];
+      document.querySelectorAll('input[type="radio"]').forEach(r => {
+        if (!r.offsetParent || !r.name) return;
+        if (!radioGroups[r.name]) { radioGroups[r.name] = []; radioOrder.push(r.name); }
+        let label = '';
+        if (r.id) { const lbl = document.querySelector(`label[for="${r.id}"]`); if (lbl) label = (lbl.innerText || '').trim(); }
+        if (!label) { const pl = r.closest('label'); if (pl) label = (pl.innerText || '').trim(); }
+        radioGroups[r.name].push({ label, checked: r.checked });
+      });
+      radioOrder.forEach((name, gi) => {
+        const firstRadio = document.querySelectorAll(`input[type="radio"][name="${name}"]`)[0];
+        let questionLabel = '';
+        const qblock = firstRadio?.closest('.qblock, .question, [class*="qblock"]');
+        if (qblock) { const qt = qblock.querySelector('.qtext, .question-text, legend, h2, h3'); if (qt) questionLabel = (qt.innerText || '').trim().slice(0, 150); }
+        fields.push({ fieldType: 'radio', groupIndex: gi, groupName: name, questionLabel, options: radioGroups[name].map(r => r.label) });
+      });
+
+      // ── Checkbox groups ───────────────────────────────────────────────────
+      const cbGroups = {}; const cbOrder = [];
+      document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        if (!cb.offsetParent) return;
+        const name = cb.name || cb.closest('fieldset')?.id || 'cb_group';
+        if (!cbGroups[name]) { cbGroups[name] = []; cbOrder.push(name); }
+        let label = '';
+        if (cb.id) { const lbl = document.querySelector(`label[for="${cb.id}"]`); if (lbl) label = (lbl.innerText || '').trim(); }
+        if (!label) { const pl = cb.closest('label'); if (pl) label = (pl.innerText || '').trim(); }
+        cbGroups[name].push({ label, checked: cb.checked });
+      });
+      cbOrder.forEach((name, gi) => {
+        let questionLabel = '';
+        const firstCb = document.querySelector(`input[type="checkbox"][name="${name}"]`);
+        const qblock = firstCb?.closest('.qblock, .question, [class*="qblock"]');
+        if (qblock) { const qt = qblock.querySelector('.qtext, .question-text, legend, h2, h3'); if (qt) questionLabel = (qt.innerText || '').trim().slice(0, 150); }
+        fields.push({ fieldType: 'checkbox', groupIndex: gi, groupName: name, questionLabel, options: cbGroups[name].map(c => c.label) });
+      });
+
+      // ── Select dropdowns ──────────────────────────────────────────────────
+      let selIdx = 0;
+      document.querySelectorAll('select').forEach(sel => {
+        if (!sel.offsetParent) return;
+        const currentText = sel.options[sel.selectedIndex]?.text || '';
+        const isPlaceholder = !sel.value || sel.value === '' || /^(select one|--|please select|choose)/i.test(currentText);
+        if (!isPlaceholder) { selIdx++; return; }
+        let questionLabel = '';
+        const qblock = sel.closest('.qblock, .question, [class*="qblock"]');
+        if (qblock) { const qt = qblock.querySelector('.qtext, .question-text, legend, h2, h3'); if (qt) questionLabel = (qt.innerText || '').trim().slice(0, 150); }
+        const opts = Array.from(sel.options).filter(o => o.value && o.value !== '' && !/^(select one|--|please select)/i.test(o.text)).map(o => ({ value: o.value, label: o.text.trim() }));
+        fields.push({ fieldType: 'select', selectIndex: selIdx, questionLabel, options: opts });
+        selIdx++;
+      });
+
+      // ── Textarea open-ends ────────────────────────────────────────────────
+      let taIdx = 0;
+      document.querySelectorAll('textarea').forEach(ta => {
+        if (!ta.offsetParent) return;
+        if (ta.value && ta.value.trim() !== '') { taIdx++; return; }
+        let questionLabel = '';
+        const qblock = ta.closest('.qblock, .question, [class*="qblock"]');
+        if (qblock) { const qt = qblock.querySelector('.qtext, .question-text, legend, h2, h3'); if (qt) questionLabel = (qt.innerText || '').trim().slice(0, 200); }
+        if (!questionLabel) { let node = ta.parentElement; for (let i = 0; i < 6; i++) { const t = (node?.innerText || '').trim(); if (t.length > 8 && t.length < 300) { questionLabel = t.slice(0, 200); break; } node = node?.parentElement; } }
+        fields.push({ fieldType: 'textarea', textareaIndex: taIdx, questionLabel, placeholder: ta.placeholder || '' });
+        taIdx++;
+      });
+
+      // ── Numeric / text inputs ─────────────────────────────────────────────
+      let inpIdx = 0;
+      document.querySelectorAll("input[type='text'], input[type='number']").forEach(inp => {
+        if (!inp.offsetParent) return;
+        if (inp.value && inp.value.trim() !== '') { inpIdx++; return; }
+        let unitLabel = '';
+        const parent = inp.parentElement;
+        if (parent) { Array.from(parent.childNodes).forEach(sib => { if (sib === inp) return; const t = (sib.textContent || '').trim(); if (t && t.length < 20) unitLabel = t; }); }
+        let rowLabel = '', columnHeader = '';
+        const td = inp.closest('td');
+        if (td) {
+          const tr = td.closest('tr'); const table = td.closest('table');
+          if (tr && table) {
+            const allCells = Array.from(tr.querySelectorAll('td, th')); const colIdx = allCells.indexOf(td);
+            const headerRow = table.querySelector('thead tr, tr:first-child');
+            if (headerRow) { const headers = Array.from(headerRow.querySelectorAll('th, td')); if (headers[colIdx]) columnHeader = (headers[colIdx].innerText || '').trim().slice(0, 60); }
+            for (const cell of allCells) { if (!cell.querySelector('input')) { const t = (cell.innerText || '').trim(); if (t) { rowLabel = t.slice(0, 80); break; } } }
+          }
+        }
+        let contextText = '';
+        let node = inp.parentElement;
+        for (let i = 0; i < 8; i++) { const t = (node?.innerText || '').trim(); if (t.length > 8 && t.length < 400) { contextText = t.slice(0, 200); break; } node = node?.parentElement; }
+        fields.push({ fieldType: 'input', inputIndex: inpIdx, rowLabel, columnHeader, unitLabel, contextText, placeholder: inp.placeholder || '', min: inp.min || null, max: inp.max || null });
+        inpIdx++;
+      });
+
+      return fields;
+    });
+  } catch (e) { console.warn('[AI] captureAllPageFields error:', e.message); return []; }
+};
+
+const formatFieldsForPrompt = (fields) => {
+  if (!fields || fields.length === 0) return 'None — this may be an intro or transition page.';
+  return fields.map((f, i) => {
+    switch (f.fieldType) {
+      case 'radio': {
+        const opts = f.options.map((o, idx) => `  [${idx}] ${o || '(unlabelled)'}`).join('\n');
+        return `[${i}] RADIO — "${f.questionLabel || 'question'}"\n${opts}`;
+      }
+      case 'checkbox': {
+        const opts = f.options.map((o, idx) => `  [${idx}] ${o || '(unlabelled)'}`).join('\n');
+        return `[${i}] CHECKBOX (select 1–4 that make sense together) — "${f.questionLabel || 'question'}"\n${opts}`;
+      }
+      case 'select': {
+        const opts = f.options.map((o, idx) => `  [${idx}] ${o.label}`).join('\n');
+        return `[${i}] DROPDOWN — "${f.questionLabel || 'question'}"\n${opts}`;
+      }
+      case 'textarea':
+        return `[${i}] OPEN-END TEXT — "${f.questionLabel || f.placeholder || 'open response'}"`;
+      case 'input': {
+        const parts = [];
+        if (f.rowLabel)     parts.push(`row: "${f.rowLabel}"`);
+        if (f.columnHeader) parts.push(`column: "${f.columnHeader}"`);
+        if (f.unitLabel)    parts.push(`unit: "${f.unitLabel}"`);
+        if (f.min || f.max) parts.push(`range: ${f.min ?? '?'}–${f.max ?? '?'}`);
+        const meta = parts.length > 0 ? ` [${parts.join(', ')}]` : '';
+        return `[${i}] NUMERIC INPUT${meta} — context: "${f.contextText?.slice(0, 100) || f.placeholder || 'numeric field'}"`;
+      }
+      default: return `[${i}] UNKNOWN FIELD`;
+    }
+  }).join('\n\n');
+};
+
+const answerPageWithAI = async (page, persona, scenario, sessionHistory, questionsOnPage, pageOptions) => {
+  try {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      console.warn('[AI] ANTHROPIC_API_KEY not set — falling back to random');
+      return null;
+    }
+
+    const allFields = await captureAllPageFields(page);
+    const actionableFields = allFields.filter(f =>
+      ['radio','checkbox','select','textarea','input'].includes(f.fieldType)
+    );
+    if (actionableFields.length === 0) {
+      console.log('[AI] No actionable fields on this page');
+      return null;
+    }
+
+    const personaContext  = buildPersonaContext(persona);
+    const scenarioContext = buildScenarioContext(scenario);
+
+    const historyBlock = sessionHistory.length > 0
+      ? sessionHistory.slice(-12).map((h, i) =>
+          `${i + 1}. Q: "${h.question?.slice(0, 100)}" → A: "${h.answer?.slice(0, 120)}"`
+        ).join('\n')
+      : 'This is the first answerable page — no prior answers yet.';
+
+    const systemPrompt =
+      `You are simulating a real human survey respondent. ` +
+      `You think, reason, and answer as a specific person with a consistent life story. ` +
+      `Your answers must be realistic, logically coherent, and free of contradictions. ` +
+      `You respond ONLY with valid JSON — no markdown fences, no explanation outside the JSON.`;
+
+    const userPrompt =
+`═══════════════════════════════════════════════
+PERSONA
+═══════════════════════════════════════════════
+${personaContext}
+
+${scenarioContext ? `═══════════════════════════════════════════════\n${scenarioContext}\n═══════════════════════════════════════════════\n` : ''}
+═══════════════════════════════════════════════
+ANSWERS ALREADY GIVEN IN THIS SURVEY (STAY CONSISTENT — CHECK FOR CONTRADICTIONS)
+═══════════════════════════════════════════════
+${historyBlock}
+
+═══════════════════════════════════════════════
+QUESTIONS ON THIS PAGE (answer ALL of them)
+═══════════════════════════════════════════════
+${questionsOnPage.length > 0 ? questionsOnPage.map((q, i) => `${i + 1}. ${q}`).join('\n') : '(No question text detected)'}
+
+═══════════════════════════════════════════════
+ALL FIELDS TO FILL (indexed, with options)
+═══════════════════════════════════════════════
+${formatFieldsForPrompt(actionableFields)}
+
+═══════════════════════════════════════════════
+RULES — READ CAREFULLY
+═══════════════════════════════════════════════
+1. CONTRADICTION CHECK: Before answering, scan your past answers. If this question relates to something already answered, your answer MUST be logically consistent.
+   Example: If you said "5,000–9,999 employees" earlier, your budget figures must reflect that company scale.
+   Example: If you selected "No robotics deployment" earlier, don't claim a large robotics spend now.
+
+2. REAL-WORLD REALISM: All numeric values must reflect real-world plausibility for this persona.
+   - Employee counts: match the company size range you selected
+   - Budget/spend figures: scale appropriately to company size and industry
+   - Percentage fields: must be between 0–100
+   - "million" unit label = enter the number IN millions (e.g. 750 = $750 million)
+   - Multiple percentage fields on the same page should not sum to an impossible total
+
+3. OPEN-ENDS: Write 1–3 sentences. Sound like a real professional, not a chatbot.
+   Be specific to the persona's industry, role, and the survey topic.
+   Reference prior answers where relevant to maintain a coherent narrative.
+
+4. CHECKBOX: Select 1–4 options. Chosen options must be compatible — don't select contradicting options.
+
+5. AVOID "Don't know" / "Prefer not to say" unless the persona genuinely would not know this.
+
+6. SCENARIO: If a scenario directive is provided, steer your choices to naturally achieve it.
+
+═══════════════════════════════════════════════
+RESPONSE FORMAT — return ONLY this JSON
+═══════════════════════════════════════════════
+{
+  "contradictionCheck": "brief note on consistency concerns found and how you resolved them",
+  "reasoning": "one sentence explaining your overall answering approach for this page",
+  "answers": [
+    { "fieldIndex": 0, "fieldType": "radio",    "selectedIndex": 2 },
+    { "fieldIndex": 1, "fieldType": "checkbox",  "selectedIndices": [0, 2] },
+    { "fieldIndex": 2, "fieldType": "select",    "selectedIndex": 1 },
+    { "fieldIndex": 3, "fieldType": "textarea",  "text": "Natural professional response here..." },
+    { "fieldIndex": 4, "fieldType": "input",     "value": "15000" }
+  ]
+}
+
+IMPORTANT: Every field listed above MUST appear in the "answers" array. Missing a field index means that question goes unanswered.`;
+
+    const apiResponse = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model:      'claude-sonnet-4-20250514',
+        max_tokens: 1200,
+        system:     systemPrompt,
+        messages:   [{ role: 'user', content: userPrompt }],
+      }),
+    });
+
+    if (!apiResponse.ok) {
+      const errText = await apiResponse.text().catch(() => '');
+      console.warn(`[AI] Claude API error ${apiResponse.status}: ${errText.slice(0, 200)}`);
+      return null;
+    }
+
+    const apiData = await apiResponse.json();
+    const rawText = apiData.content?.[0]?.text || '';
+
+    let decisions;
+    try {
+      const clean = rawText.replace(/```json|```/g, '').trim();
+      decisions = JSON.parse(clean);
+    } catch {
+      console.warn(`[AI] JSON parse failed — raw: ${rawText.slice(0, 400)}`);
+      return null;
+    }
+
+    if (decisions.contradictionCheck) console.log(`[AI] Contradiction check: ${decisions.contradictionCheck}`);
+    if (decisions.reasoning)          console.log(`[AI] Reasoning: ${decisions.reasoning}`);
+
+    const answersGiven = [];
+
+    for (const ans of decisions.answers || []) {
+      const field = actionableFields[ans.fieldIndex];
+      if (!field) { console.warn(`[AI] fieldIndex ${ans.fieldIndex} not found`); continue; }
+
+      try {
+        switch (ans.fieldType) {
+
+          case 'radio': {
+            const allRadios = await page.locator('input[type="radio"]').all();
+            const groupMap = {}; const groupOrder = [];
+            for (const r of allRadios) {
+              const name = await r.getAttribute('name').catch(() => null);
+              if (!name) continue;
+              if (!groupMap[name]) { groupMap[name] = []; groupOrder.push(name); }
+              groupMap[name].push(r);
+            }
+            const groupName = groupOrder[field.groupIndex];
+            const radios    = groupMap[groupName] || [];
+            const idx       = ans.selectedIndex ?? 0;
+            if (idx < radios.length) {
+              await clickRadioOption(page, radios[idx]);
+              await fillFollowupInput(page);
+              const label = field.options?.[idx] || `option ${idx}`;
+              answersGiven.push({ type: 'radio', selected: label, aiControlled: true });
+              console.log(`[AI] ✓ Radio [${field.groupIndex}] → "${label}"`);
+            }
+            break;
+          }
+
+          case 'checkbox': {
+            const allCbs = await page.locator('input[type="checkbox"]').all();
+            const visible = [];
+            for (const cb of allCbs) { if (await cb.isVisible().catch(() => false)) visible.push(cb); }
+            let groupStart = 0;
+            for (let gi = 0; gi < field.groupIndex; gi++) {
+              const prevField = actionableFields.find(f => f.fieldType === 'checkbox' && f.groupIndex === gi);
+              if (prevField) groupStart += (prevField.options?.length || 0);
+            }
+            const selected = [];
+            for (const idx of ans.selectedIndices || []) {
+              const cbEl = visible[groupStart + idx];
+              if (cbEl) { await cbEl.check().catch(() => {}); selected.push(field.options?.[idx] || `option ${idx}`); }
+            }
+            answersGiven.push({ type: 'checkbox', selected, aiControlled: true });
+            console.log(`[AI] ✓ Checkbox [${field.groupIndex}] → [${selected.join(', ')}]`);
+            break;
+          }
+
+          case 'select': {
+            const allSels = await page.locator('select').all();
+            const visible = [];
+            for (const s of allSels) { if (await s.isVisible().catch(() => false)) visible.push(s); }
+            const sel = visible[field.selectIndex];
+            if (sel) {
+              const targetOpt = field.options?.[ans.selectedIndex];
+              if (targetOpt?.value) {
+                await sel.selectOption(targetOpt.value).catch(() => {});
+                answersGiven.push({ type: 'select', selected: targetOpt.label, aiControlled: true });
+                console.log(`[AI] ✓ Select [${field.selectIndex}] → "${targetOpt.label}"`);
+              }
+            }
+            break;
+          }
+
+          case 'textarea': {
+            const allTas = await page.locator('textarea').all();
+            const visible = [];
+            for (const ta of allTas) { if (await ta.isVisible().catch(() => false)) visible.push(ta); }
+            const ta = visible[field.textareaIndex];
+            if (ta && ans.text) {
+              await ta.fill(ans.text).catch(() => {});
+              answersGiven.push({ type: 'open-end', text: ans.text, aiControlled: true });
+              console.log(`[AI] ✓ Open-end [${field.textareaIndex}] → "${ans.text.slice(0, 80)}"`);
+            }
+            break;
+          }
+
+          case 'input': {
+            const allInputs = await page.locator("input[type='text'], input[type='number']").all();
+            const visible = [];
+            for (const inp of allInputs) {
+              if (!await inp.isVisible().catch(() => false)) continue;
+              const existing = await inp.inputValue().catch(() => '');
+              if (existing && existing.trim() !== '') continue;
+              visible.push(inp);
+            }
+            const inp = visible[field.inputIndex];
+            if (inp && ans.value !== undefined && ans.value !== null && String(ans.value) !== '') {
+              await inp.fill(String(ans.value)).catch(() => {});
+              const label = field.rowLabel || field.columnHeader || field.contextText?.slice(0, 40) || `input ${field.inputIndex}`;
+              answersGiven.push({ type: 'numeric', value: ans.value, label, aiControlled: true });
+              console.log(`[AI] ✓ Input [${field.inputIndex}] "${label}" → ${ans.value}`);
+            }
+            break;
+          }
+        }
+      } catch (e) {
+        console.warn(`[AI] Error executing fieldIndex ${ans.fieldIndex}: ${e.message}`);
+      }
+    }
+
+    if (answersGiven.length === 0) { console.log('[AI] No answers executed — returning null'); return null; }
+    return answersGiven;
+
+  } catch (e) {
+    console.warn(`[AI] answerPageWithAI crashed: ${e.message}`);
+    return null;
+  }
+};
+
 // ─── Main session processor ───────────────────────────────────────────────────
 const processSession = async (job) => {
   const {
@@ -844,6 +1264,10 @@ const processSession = async (job) => {
   const startTime = Date.now();
   const tracePath = path.join(TRACES_DIR, `${sessionId}.zip`);
   const pages = [];
+
+  // ── AI session history — full Q&A log for contradiction checking ──────────
+  const sessionAnswerHistory = [];
+  const useAI = !!process.env.ANTHROPIC_API_KEY;
 
   try {
     browser = await chromium.launch(launchOptions);
@@ -1003,11 +1427,46 @@ const processSession = async (job) => {
         }
       }
 
-      // Step 3: Default random answering
+      // Step 3: AI answering (falls back to random if AI unavailable or fails)
       if (answersGiven === null) {
-        console.log(`[Worker] Page ${pageCount}: using default random answering`);
-        answersGiven = await answerPage(page, persona, readingSpeed);
-        questionCount++;
+        if (useAI && questionsOnPage.length > 0) {
+          console.log(`[Worker] Page ${pageCount}: using AI answering`);
+          answersGiven = await answerPageWithAI(
+            page, persona, scenario,
+            sessionAnswerHistory, questionsOnPage, pageOptionsBefore
+          );
+          if (answersGiven) {
+            questionCount++;
+            console.log(`[Worker] Page ${pageCount}: AI answered ${answersGiven.length} field(s)`);
+          } else {
+            console.log(`[Worker] Page ${pageCount}: AI returned null — falling back to random`);
+          }
+        }
+        if (answersGiven === null) {
+          console.log(`[Worker] Page ${pageCount}: using default random answering`);
+          answersGiven = await answerPage(page, persona, readingSpeed);
+          questionCount++;
+        }
+      }
+
+      // Accumulate ALL answers into history for AI contradiction checking
+      if (answersGiven?.length > 0) {
+        for (const ans of answersGiven) {
+          if (!ans || ans.type === 'country_mapping') continue;
+          const answerText =
+            ans.type === 'open-end'     ? ans.text :
+            ans.type === 'numeric'      ? `${ans.value} (${ans.label || 'numeric'})` :
+            Array.isArray(ans.selected) ? ans.selected.join(', ') :
+            (ans.selected || String(ans.value || ''));
+          if (answerText) {
+            sessionAnswerHistory.push({
+              page:      pageCount,
+              question:  questionsOnPage[0] || `Page ${pageCount}`,
+              answer:    answerText.slice(0, 200),
+              fieldType: ans.type,
+            });
+          }
+        }
       }
 
       // Step 4: Fill any remaining unfilled inputs/selects on the page
