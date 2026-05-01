@@ -26,7 +26,7 @@ const { pool } = require("../../backend/src/db/index");
 const { getActiveScenarios } = require("../../backend/src/db/scenarios");
 
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY) || 5;
-const MAX_PAGES = 50;
+const MAX_PAGES = 200;
 const TRACES_DIR = process.env.TRACES_DIR || "/app/traces";
 const SCREENSHOTS_DIR = process.env.SCREENSHOTS_DIR || "/app/screenshots";
 
