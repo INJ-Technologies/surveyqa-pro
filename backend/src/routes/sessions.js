@@ -156,6 +156,7 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
         deviceType:    project.device_type    || 'desktop',
         browserType:   'chrome',
         aiStrategy:    project.ai_strategy    || 'persona_true',
+        internalTesting: internalTesting || false,   // ← ADD THIS
       });
 
       await sessionQueue.add('run-session', {

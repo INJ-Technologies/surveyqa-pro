@@ -9,21 +9,18 @@ const createSession = async ({
   deviceType, browserType, aiStrategy,
 }) => {
   try {
+    // In the INSERT query, add internal_testing to columns and values:
     const result = await pool.query(
       `INSERT INTO sessions (
-         project_id, workspace_id, persona_id,
-         survey_url, survey_label, response_id,
-         proxy_country, proxy_provider,
-         device_type, browser_type,
-         ai_strategy, status
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'queued')
-       RETURNING *`,
+        project_id, workspace_id, persona_id, survey_url, survey_label,
+        response_id, proxy_country, proxy_provider, device_type,
+        browser_type, ai_strategy, internal_testing, status
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'queued')
+      RETURNING *`,
       [
-        projectId, workspaceId, personaId || null,
-        surveyUrl, surveyLabel || 'Main', responseId || null,
-        proxyCountry || null, proxyProvider || 'decodo',
-        deviceType || 'desktop', browserType || 'chrome',
-        aiStrategy || 'persona_true',
+        projectId, workspaceId, personaId || null, surveyUrl, surveyLabel || null,
+        responseId, proxyCountry || null, proxyProvider || null, deviceType || null,
+        browserType || null, aiStrategy || null, internalTesting || false,
       ]
     );
     return result.rows[0];
