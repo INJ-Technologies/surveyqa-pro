@@ -4,6 +4,14 @@ const { chromium } = require("playwright");
 const path = require("path");
 const fs = require("fs");
 
+const readSecret = (name) => {
+  try {
+    return fs.readFileSync(`/run/secrets/${name}`, 'utf8').trim();
+  } catch {
+    return null;
+  }
+};
+
 const { connection } = require("../../backend/src/queues/index");
 const {
   updateSessionStatus,
@@ -955,9 +963,9 @@ const formatFieldsForPrompt = (fields) => {
   }).join('\n\n');
 };
 
-const answerPageWithAI = async (page, persona, scenario, sessionHistory, questionsOnPage, pageOptions) => {
+const answerPageWithAI = async (page, persona, scenario, sessionHistory, questionsOnPage, pageOptions, ANTHROPIC_API_KEY) => {
   try {
-    if (!process.env.ANTHROPIC_API_KEY) {
+    if (!ANTHROPIC_API_KEY) {
       console.warn('[AI] ANTHROPIC_API_KEY not set — falling back to random');
       return null;
     }
@@ -1053,7 +1061,7 @@ IMPORTANT: Every field listed above MUST appear in the "answers" array. Missing 
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'x-api-key': ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
@@ -1267,9 +1275,11 @@ const processSession = async (job) => {
 
   // ── AI session history — full Q&A log for contradiction checking ──────────
   const sessionAnswerHistory = [];
+
   const ANTHROPIC_API_KEY =
     readSecret('anthropic_api_key_v1') ||
-    process.env.ANTHROPIC_API_KEY || null;
+    process.env.ANTHROPIC_API_KEY ||
+    null;
 
   if (!ANTHROPIC_API_KEY) {
     console.warn('⚠️ Anthropic API key not found. AI features disabled.');
@@ -1441,7 +1451,8 @@ const processSession = async (job) => {
           console.log(`[Worker] Page ${pageCount}: using AI answering`);
           answersGiven = await answerPageWithAI(
             page, persona, scenario,
-            sessionAnswerHistory, questionsOnPage, pageOptionsBefore
+            sessionAnswerHistory, questionsOnPage, pageOptionsBefore,
+            ANTHROPIC_API_KEY
           );
           if (answersGiven) {
             questionCount++;
