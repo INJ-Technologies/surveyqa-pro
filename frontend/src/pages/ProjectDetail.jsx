@@ -4867,7 +4867,9 @@ function SessionsTab({
                       </span>
                     </td>
                     <td style={s.td}>
-                      <span style={{ fontSize: "0.82rem", color: "#475569", fontFamily: FONT,
+                      <span style={{
+                        fontSize: "0.82rem",
+                        fontFamily: FONT,
                         fontWeight: ['queued','initialising','in_progress'].includes(session.status) ? 600 : 400,
                         color: ['queued','initialising','in_progress'].includes(session.status) ? "#2563eb" : "#475569",
                       }}>
