@@ -969,6 +969,14 @@ const processSession = async (job) => {
           scenarioStepUsed = 'country_mapping';
           answersGiven = [{ type: 'country_mapping', country: proxyCountry }];
           questionCount++;
+          const cm = countryLogic.country_mapping;
+          const waitMin = parseInt(cm.waitMinS) || 0;
+          const waitMax = parseInt(cm.waitMaxS) || waitMin;
+          if (waitMin > 0 || waitMax > 0) {
+            const waitMs = (waitMin + Math.random() * (waitMax - waitMin)) * 1000;
+            console.log(`[CountryLogic] Waiting ${Math.round(waitMs/1000)}s after country answer (range: ${waitMin}-${waitMax}s)`);
+            await page.waitForTimeout(waitMs);
+          }
           console.log(`[Worker] Page ${pageCount}: country mapping applied`);
         }
       }

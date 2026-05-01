@@ -1688,13 +1688,11 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
   const [countryMapping, setCountryMapping] = useState(
     scenario?.country_mapping || null,
   );
-  const [cmQuestionContains, setCmQuestionContains] = useState(
-    scenario?.country_mapping?.questionContains || "",
-  );
-  const [cmMappings, setCmMappings] = useState(
-    scenario?.country_mapping?.mappings || [],
-  );
+  const [cmQuestionContains, setCmQuestionContains] = useState(scenario?.country_mapping?.questionContains || '');
+  const [cmMappings, setCmMappings] = useState(scenario?.country_mapping?.mappings || []);
   const [cmOptions, setCmOptions] = useState([]);
+  const [cmWaitMin, setCmWaitMin] = useState(scenario?.country_mapping?.waitMinS ?? null);
+  const [cmWaitMax, setCmWaitMax] = useState(scenario?.country_mapping?.waitMaxS ?? null);
 
   // Load full country_mapping when editing Country Logic
   useEffect(() => {
@@ -1768,6 +1766,8 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
                 countryMapping: {
                   questionContains: cmQuestionContains,
                   mappings: cmMappings,
+                  waitMinS: cmWaitMin,
+                  waitMaxS: cmWaitMax,
                 },
               }
             : {}),
@@ -2057,19 +2057,52 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
                   </div>
                 ))}
                 {cmMappings.length === 0 && (
-                  <div
-                    style={{
-                      padding: "12px 14px",
-                      fontFamily: FONT,
-                      fontSize: "0.82rem",
-                      color: "#94a3b8",
-                    }}
-                  >
-                    No country mappings found.
-                  </div>
+                <div style={{ padding: "12px 14px", fontFamily: FONT, fontSize: "0.82rem", color: "#94a3b8" }}>No country mappings found.</div>
+              )}
+            </div>
+
+            {/* Wait time after answering country question */}
+            <div style={{ marginTop: 18, borderTop: "1px solid #dbeafe", paddingTop: 16 }}>
+              <label style={{ ...scenLabel, color: "#64748b" }}>
+                Wait after answering{" "}
+                <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional — simulates reading time)</span>
+              </label>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: "0.78rem", color: "#94a3b8", fontFamily: FONT }}>Min</span>
+                  <input
+                    type="number"
+                    min="0"
+                    style={{ ...scenInput, width: 70, padding: "6px 8px" }}
+                    value={cmWaitMin ?? ""}
+                    placeholder="e.g. 5"
+                    onChange={(e) => setCmWaitMin(e.target.value === "" ? null : parseInt(e.target.value))}
+                  />
+                </div>
+                <span style={{ fontSize: "0.78rem", color: "#94a3b8", fontFamily: FONT }}>—</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: "0.78rem", color: "#94a3b8", fontFamily: FONT }}>Max</span>
+                  <input
+                    type="number"
+                    min="0"
+                    style={{ ...scenInput, width: 70, padding: "6px 8px" }}
+                    value={cmWaitMax ?? ""}
+                    placeholder="e.g. 15"
+                    onChange={(e) => setCmWaitMax(e.target.value === "" ? null : parseInt(e.target.value))}
+                  />
+                </div>
+                <span style={{ fontSize: "0.75rem", color: "#94a3b8", fontFamily: FONT }}>seconds</span>
+                {(cmWaitMin || cmWaitMax) && (
+                  <span style={{ fontSize: "0.72rem", color: "#2563eb", fontFamily: FONT, background: "#eff6ff", padding: "2px 8px", borderRadius: 6 }}>
+                    Will wait {cmWaitMin || 0}–{cmWaitMax || cmWaitMin || 0}s after answering
+                  </span>
                 )}
               </div>
+              <div style={{ fontSize: "0.7rem", color: "#94a3b8", fontFamily: FONT, marginTop: 4 }}>
+                Bot waits a random duration in this range after selecting the country answer.
+              </div>
             </div>
+          </div>
           )}
           {loadingSteps ? (
             <div
