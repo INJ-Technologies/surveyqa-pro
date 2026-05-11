@@ -9,6 +9,69 @@ const { sessionQueue }   = require("../queues/index");
 const { getProjectById, getProjectSurveys } = require("../db/projects");
 const { getScenariosByIds } = require('../db/scenarios');
 
+// ── Quota-aware randomised session distribution ───────────────────────────────
+const shuffleArray = (arr) => {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
+const buildCountryDistribution = async (countryList, projectId, sessionLimit) => {
+  if (countryList.length === 0) return Array(sessionLimit).fill(null);
+  if (countryList.length === 1) return Array(sessionLimit).fill(countryList[0]);
+
+  try {
+    const quotaResult = await pool.query(
+      `SELECT dimensions->>'Country' as country,
+              target,
+              COALESCE(current_count, 0) as current_count,
+              status
+       FROM quota_cells
+       WHERE project_id = $1 AND dimensions ? 'Country'`,
+      [projectId]
+    );
+
+    if (quotaResult.rows.length > 0) {
+      const remaining = {};
+      for (const row of quotaResult.rows) {
+        const c = (row.country || '').toUpperCase();
+        if (!countryList.includes(c)) continue;
+        if (row.status === 'filled') continue;
+        const rem = Math.max(0, parseInt(row.target || 0) - parseInt(row.current_count || 0));
+        if (rem > 0) remaining[c] = (remaining[c] || 0) + rem;
+      }
+
+      const activeEntries = Object.entries(remaining);
+      if (activeEntries.length > 0) {
+        const totalRemaining = activeEntries.reduce((s, [, r]) => s + r, 0);
+        const allocated = [];
+
+        for (const [country, rem] of activeEntries) {
+          const share = Math.max(1, Math.round((rem / totalRemaining) * sessionLimit));
+          for (let i = 0; i < share; i++) allocated.push(country);
+        }
+
+        // Trim or pad to exact sessionLimit
+        while (allocated.length < sessionLimit) {
+          allocated.push(activeEntries[allocated.length % activeEntries.length][0]);
+        }
+        allocated.length = sessionLimit;
+
+        console.log(`[Trigger] Quota-aware distribution: ${activeEntries.map(([c, r]) => `${c}:${r} remaining`).join(', ')}`);
+        return shuffleArray(allocated);
+      }
+    }
+  } catch (e) {
+    console.warn('[Trigger] Quota distribution failed, using random fallback:', e.message);
+  }
+
+  // Fallback: equal-weight random (not round-robin)
+  const fallback = Array.from({ length: sessionLimit }, (_, i) => countryList[i % countryList.length]);
+  return shuffleArray(fallback);
+};
 
 const router = express.Router();
 
@@ -123,13 +186,12 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
     const sessionLimit = Math.min(parseInt(count) || 1, 20);
     const created = [];
 
+    // Quota-aware randomised country distribution
+    const distributedCountries = await buildCountryDistribution(countryList, projectId, sessionLimit);
+
     for (let i = 0; i < sessionLimit; i++) {
       const personaId = personaIds.length > 0 ? personaIds[i % personaIds.length] : null;
-
-      // Round-robin country per session
-      const country = countryList.length > 0
-        ? countryList[i % countryList.length]
-        : null;
+      const country = distributedCountries[i] || null;
 
       // Pick the survey URL that matches this country
       const survey = getSurveyForCountry(surveys, country);

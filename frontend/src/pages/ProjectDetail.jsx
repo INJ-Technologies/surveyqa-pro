@@ -5168,12 +5168,11 @@ function SessionsTab({
 
   // Returns live elapsed time for active sessions, stored duration for completed ones
   const getLiveDuration = (session) => {
-    if (["queued", "initialising", "in_progress"].includes(session.status)) {
-      const start = session.started_at || session.created_at;
+    if (["queued", "initialising"].includes(session.status)) return "Waiting...";
+    if (session.status === "in_progress") {
+      const start = session.started_at;
       if (!start) return "—";
-      const elapsed = Math.round(
-        (Date.now() - new Date(start).getTime()) / 1000,
-      );
+      const elapsed = Math.round((Date.now() - new Date(start).getTime()) / 1000);
       return fmtDuration(elapsed) + " ⏳";
     }
     return fmtDuration(session.total_duration_s);

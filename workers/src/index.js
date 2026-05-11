@@ -963,101 +963,163 @@ const formatFieldsForPrompt = (fields) => {
   }).join('\n\n');
 };
 
-const answerPageWithAI = async (page, persona, scenario, sessionHistory, questionsOnPage, pageOptions, ANTHROPIC_API_KEY) => {
+const answerPageWithAI = async (page, persona, scenario, factSheet, intentMap, quotaCellText, questionsOnPage, pageOptions, ANTHROPIC_API_KEY) => {
   try {
     if (!ANTHROPIC_API_KEY) {
-      console.warn('[AI] ANTHROPIC_API_KEY not set — falling back to random');
+      console.warn('[AI] No API key — falling back to random');
       return null;
     }
 
     const allFields = await captureAllPageFields(page);
     const actionableFields = allFields.filter(f =>
-      ['radio','checkbox','select','textarea','input'].includes(f.fieldType)
+      ['radio', 'checkbox', 'select', 'textarea', 'input'].includes(f.fieldType)
     );
     if (actionableFields.length === 0) {
-      console.log('[AI] No actionable fields on this page');
+      console.log('[AI] No actionable fields');
       return null;
     }
 
     const personaContext  = buildPersonaContext(persona);
     const scenarioContext = buildScenarioContext(scenario);
 
-    const historyBlock = sessionHistory.length > 0
-      ? sessionHistory.slice(-12).map((h, i) =>
-          `${i + 1}. Q: "${h.question?.slice(0, 100)}" → A: "${h.answer?.slice(0, 120)}"`
-        ).join('\n')
-      : 'This is the first answerable page — no prior answers yet.';
+    // ── Format fact sheet ─────────────────────────────────────────────────────
+    const factSheetLines = [];
+    for (const [k, v] of Object.entries(factSheet || {})) {
+      if (v === null || v === undefined) continue;
+      if (typeof v === 'object' && !Array.isArray(v)) {
+        const inner = Object.entries(v)
+          .filter(([, iv]) => iv !== null && (Array.isArray(iv) ? iv.length > 0 : true))
+          .map(([ik, iv]) => `  ${ik}: ${Array.isArray(iv) ? iv.join(', ') : JSON.stringify(iv)}`);
+        if (inner.length) factSheetLines.push(`${k}:\n${inner.join('\n')}`);
+      } else {
+        factSheetLines.push(`${k}: ${Array.isArray(v) ? v.join(', ') : v}`);
+      }
+    }
+    const factSheetText = factSheetLines.join('\n') || 'First page — establish baseline consistent with persona.';
+
+    // ── Match intents for this page ───────────────────────────────────────────
+    const normalize = s => (s || '').toLowerCase().trim();
+    const pageTextLower = questionsOnPage.map(normalize).join(' ');
+
+    const matchIntent = (intent) => {
+      if (intent.when_type === 'always') return true;
+      if (intent.when_type === 'page_number') return false;
+      return pageTextLower.includes(normalize(intent.when_value));
+    };
+
+    const matchingQ  = (intentMap?.qualifying    || []).filter(matchIntent);
+    const matchingDQ = (intentMap?.disqualifying || []).filter(matchIntent);
+
+    const intentLines = [
+      ...matchingQ.map(i  => `QUALIFY  — question about "${i.when_value}": prefer option indices [${i.qualifying_indices.join(', ')}] (1-based). These options qualify for your quota cell.`),
+      ...matchingDQ.map(i => `DISQUALIFY — question about "${i.when_value}": avoid option indices [${i.disqualifying_indices.join(', ')}] (1-based).`),
+    ];
+    const intentConstraintsText = intentLines.join('\n') || 'No specific constraints — answer naturally as this persona.';
+
+    // ── Web search for open-end / numeric fields ──────────────────────────────
+    let webSearchContext = '';
+    const flags = [];
+    const hasOpenOrNumeric = actionableFields.some(f => f.fieldType === 'textarea' || f.fieldType === 'input');
+
+    if (hasOpenOrNumeric) {
+      flags.push('web_search_used');
+      try {
+        const attrs = persona?.behavioural_attrs || {};
+        const industry = attrs.industry || 'enterprise';
+        const searchPrompt = `Find current benchmarks and realistic figures for answering these survey questions. Persona: ${attrs.designation || 'senior executive'} in ${industry}, large enterprise, USA. Questions: ${questionsOnPage.join('. ')}. Provide specific numbers, percentages, dollar amounts relevant to this context.`;
+
+        const searchRes = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 500,
+            tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+            messages: [{ role: 'user', content: searchPrompt }],
+          }),
+        });
+        const searchData = await searchRes.json();
+        const textBlocks = (searchData.content || []).filter(b => b.type === 'text');
+        webSearchContext = textBlocks.map(b => b.text).join('\n').slice(0, 600);
+        if (webSearchContext) console.log(`[AI] Web search context: ${webSearchContext.length} chars`);
+      } catch (e) {
+        console.warn('[AI] Web search error:', e.message);
+      }
+    }
 
     const systemPrompt =
-      `You are simulating a real human survey respondent. ` +
-      `You think, reason, and answer as a specific person with a consistent life story. ` +
-      `Your answers must be realistic, logically coherent, and free of contradictions. ` +
-      `You respond ONLY with valid JSON — no markdown fences, no explanation outside the JSON.`;
+      `You are simulating a real human survey respondent with a consistent life story. ` +
+      `Your answers must be realistic, internally coherent, and NEVER contradict the session fact sheet. ` +
+      `You respond ONLY with valid JSON — no markdown, no explanation outside JSON.`;
 
     const userPrompt =
 `═══════════════════════════════════════════════
-PERSONA
+PERSONA — YOU ARE THIS PERSON
 ═══════════════════════════════════════════════
 ${personaContext}
 
+═══════════════════════════════════════════════
+QUOTA CELL YOU ARE FILLING
+═══════════════════════════════════════════════
+${quotaCellText}
+Your screener answers MUST qualify for this demographic cell.
+
 ${scenarioContext ? `═══════════════════════════════════════════════\n${scenarioContext}\n═══════════════════════════════════════════════\n` : ''}
 ═══════════════════════════════════════════════
-ANSWERS ALREADY GIVEN IN THIS SURVEY (STAY CONSISTENT — CHECK FOR CONTRADICTIONS)
+SESSION FACT SHEET — NEVER CONTRADICT THESE
 ═══════════════════════════════════════════════
-${historyBlock}
+${factSheetText}
 
 ═══════════════════════════════════════════════
-QUESTIONS ON THIS PAGE (answer ALL of them)
+INTENT CONSTRAINTS FOR THIS PAGE
+═══════════════════════════════════════════════
+${intentConstraintsText}
+
+${webSearchContext ? `═══════════════════════════════════════════════\nWEB SEARCH — USE THESE FIGURES FOR REALISM\n═══════════════════════════════════════════════\n${webSearchContext}\n` : ''}
+═══════════════════════════════════════════════
+QUESTIONS ON THIS PAGE
 ═══════════════════════════════════════════════
 ${questionsOnPage.length > 0 ? questionsOnPage.map((q, i) => `${i + 1}. ${q}`).join('\n') : '(No question text detected)'}
 
 ═══════════════════════════════════════════════
-ALL FIELDS TO FILL (indexed, with options)
+FIELDS TO FILL
 ═══════════════════════════════════════════════
 ${formatFieldsForPrompt(actionableFields)}
 
 ═══════════════════════════════════════════════
-RULES — READ CAREFULLY
+RULES
 ═══════════════════════════════════════════════
-1. CONTRADICTION CHECK: Before answering, scan your past answers. If this question relates to something already answered, your answer MUST be logically consistent.
-   Example: If you said "5,000–9,999 employees" earlier, your budget figures must reflect that company scale.
-   Example: If you selected "No robotics deployment" earlier, don't claim a large robotics spend now.
-
-2. REAL-WORLD REALISM: All numeric values must reflect real-world plausibility for this persona.
-   - Employee counts: match the company size range you selected
-   - Budget/spend figures: scale appropriately to company size and industry
-   - Percentage fields: must be between 0–100
-   - "million" unit label = enter the number IN millions (e.g. 750 = $750 million)
-   - Multiple percentage fields on the same page should not sum to an impossible total
-
-3. OPEN-ENDS: Write 1–3 sentences. Sound like a real professional, not a chatbot.
-   Be specific to the persona's industry, role, and the survey topic.
-   Reference prior answers where relevant to maintain a coherent narrative.
-
-4. CHECKBOX: Select 1–4 options. Chosen options must be compatible — don't select contradicting options.
-
-5. AVOID "Don't know" / "Prefer not to say" unless the persona genuinely would not know this.
-
-6. SCENARIO: If a scenario directive is provided, steer your choices to naturally achieve it.
+1. FACT SHEET FIRST — Every answer must be consistent with committed facts above. If contradicting, resolve toward the fact sheet and note it.
+2. INTENT CONSTRAINTS — Follow qualifying/disqualifying rules exactly when they match this page. Indices are 1-based in constraints, 0-based in your answer.
+3. ATTENTION CHECKS — If any question says "please select option X", "type the word Y", or "do not select this" — follow that instruction literally regardless of persona.
+4. NUMERICS — Use web search figures. Numbers must be internally consistent (sub-budget ≤ total budget, percentages sum correctly, employee count matches company size).
+5. OPEN-ENDS — Write 1–3 sentences. Sound like a real ${persona?.behavioural_attrs?.designation || 'professional'}. Active or passive voice, varied. Specific to industry. Reference prior answers naturally.
+6. BRAND QUESTIONS — Only select brands this persona would genuinely know in their industry. Never select implausible/unknown brand names.
+7. CHECKBOX — Select 1–4 compatible options. No contradicting selections.
+8. AVOID "Don't know" / "Prefer not to say" unless persona genuinely could not know.
 
 ═══════════════════════════════════════════════
-RESPONSE FORMAT — return ONLY this JSON
+RETURN ONLY THIS JSON
 ═══════════════════════════════════════════════
 {
-  "contradictionCheck": "brief note on consistency concerns found and how you resolved them",
-  "reasoning": "one sentence explaining your overall answering approach for this page",
+  "contradictionCheck": "any fact sheet conflicts found and how resolved, or 'none'",
+  "intentApplied": "which intent constraint applied on this page, or 'none'",
+  "reasoning": "one sentence — your approach for this page",
   "answers": [
     { "fieldIndex": 0, "fieldType": "radio",    "selectedIndex": 2 },
     { "fieldIndex": 1, "fieldType": "checkbox",  "selectedIndices": [0, 2] },
     { "fieldIndex": 2, "fieldType": "select",    "selectedIndex": 1 },
-    { "fieldIndex": 3, "fieldType": "textarea",  "text": "Natural professional response here..." },
+    { "fieldIndex": 3, "fieldType": "textarea",  "text": "Natural professional response..." },
     { "fieldIndex": 4, "fieldType": "input",     "value": "15000" }
   ]
 }
+Every field above MUST appear in answers. Missing a fieldIndex = unanswered question.`;
 
-IMPORTANT: Every field listed above MUST appear in the "answers" array. Missing a field index means that question goes unanswered.`;
-
-    const apiResponse = await fetch('https://api.anthropic.com/v1/messages', {
+    const apiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1065,43 +1127,39 @@ IMPORTANT: Every field listed above MUST appear in the "answers" array. Missing 
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model:      'claude-sonnet-4-20250514',
-        max_tokens: 1200,
-        system:     systemPrompt,
-        messages:   [{ role: 'user', content: userPrompt }],
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1400,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
       }),
     });
 
-    if (!apiResponse.ok) {
-      const errText = await apiResponse.text().catch(() => '');
-      console.warn(`[AI] Claude API error ${apiResponse.status}: ${errText.slice(0, 200)}`);
+    if (!apiRes.ok) {
+      console.warn(`[AI] Claude API error ${apiRes.status}`);
       return null;
     }
 
-    const apiData = await apiResponse.json();
+    const apiData = await apiRes.json();
     const rawText = apiData.content?.[0]?.text || '';
-
     let decisions;
     try {
-      const clean = rawText.replace(/```json|```/g, '').trim();
-      decisions = JSON.parse(clean);
+      decisions = JSON.parse(rawText.replace(/```json|```/g, '').trim());
     } catch {
-      console.warn(`[AI] JSON parse failed — raw: ${rawText.slice(0, 400)}`);
+      console.warn(`[AI] JSON parse failed — raw: ${rawText.slice(0, 300)}`);
       return null;
     }
 
-    if (decisions.contradictionCheck) console.log(`[AI] Contradiction check: ${decisions.contradictionCheck}`);
-    if (decisions.reasoning)          console.log(`[AI] Reasoning: ${decisions.reasoning}`);
+    if (decisions.contradictionCheck && decisions.contradictionCheck !== 'none') console.log(`[AI] Contradiction: ${decisions.contradictionCheck}`);
+    if (decisions.intentApplied && decisions.intentApplied !== 'none') console.log(`[AI] Intent: ${decisions.intentApplied}`);
+    if (decisions.reasoning) console.log(`[AI] Reasoning: ${decisions.reasoning}`);
 
     const answersGiven = [];
 
     for (const ans of decisions.answers || []) {
       const field = actionableFields[ans.fieldIndex];
       if (!field) { console.warn(`[AI] fieldIndex ${ans.fieldIndex} not found`); continue; }
-
       try {
         switch (ans.fieldType) {
-
           case 'radio': {
             const allRadios = await page.locator('input[type="radio"]').all();
             const groupMap = {}; const groupOrder = [];
@@ -1111,38 +1169,35 @@ IMPORTANT: Every field listed above MUST appear in the "answers" array. Missing 
               if (!groupMap[name]) { groupMap[name] = []; groupOrder.push(name); }
               groupMap[name].push(r);
             }
-            const groupName = groupOrder[field.groupIndex];
-            const radios    = groupMap[groupName] || [];
-            const idx       = ans.selectedIndex ?? 0;
+            const radios = groupMap[groupOrder[field.groupIndex]] || [];
+            const idx = ans.selectedIndex ?? 0;
             if (idx < radios.length) {
               await clickRadioOption(page, radios[idx]);
               await fillFollowupInput(page);
               const label = field.options?.[idx] || `option ${idx}`;
-              answersGiven.push({ type: 'radio', selected: label, aiControlled: true });
+              answersGiven.push({ type: 'radio', selected: label, aiControlled: true, flags });
               console.log(`[AI] ✓ Radio [${field.groupIndex}] → "${label}"`);
             }
             break;
           }
-
           case 'checkbox': {
             const allCbs = await page.locator('input[type="checkbox"]').all();
             const visible = [];
             for (const cb of allCbs) { if (await cb.isVisible().catch(() => false)) visible.push(cb); }
             let groupStart = 0;
             for (let gi = 0; gi < field.groupIndex; gi++) {
-              const prevField = actionableFields.find(f => f.fieldType === 'checkbox' && f.groupIndex === gi);
-              if (prevField) groupStart += (prevField.options?.length || 0);
+              const pf = actionableFields.find(f => f.fieldType === 'checkbox' && f.groupIndex === gi);
+              if (pf) groupStart += (pf.options?.length || 0);
             }
             const selected = [];
             for (const idx of ans.selectedIndices || []) {
               const cbEl = visible[groupStart + idx];
               if (cbEl) { await cbEl.check().catch(() => {}); selected.push(field.options?.[idx] || `option ${idx}`); }
             }
-            answersGiven.push({ type: 'checkbox', selected, aiControlled: true });
+            answersGiven.push({ type: 'checkbox', selected, aiControlled: true, flags });
             console.log(`[AI] ✓ Checkbox [${field.groupIndex}] → [${selected.join(', ')}]`);
             break;
           }
-
           case 'select': {
             const allSels = await page.locator('select').all();
             const visible = [];
@@ -1152,13 +1207,12 @@ IMPORTANT: Every field listed above MUST appear in the "answers" array. Missing 
               const targetOpt = field.options?.[ans.selectedIndex];
               if (targetOpt?.value) {
                 await sel.selectOption(targetOpt.value).catch(() => {});
-                answersGiven.push({ type: 'select', selected: targetOpt.label, aiControlled: true });
+                answersGiven.push({ type: 'select', selected: targetOpt.label, aiControlled: true, flags });
                 console.log(`[AI] ✓ Select [${field.selectIndex}] → "${targetOpt.label}"`);
               }
             }
             break;
           }
-
           case 'textarea': {
             const allTas = await page.locator('textarea').all();
             const visible = [];
@@ -1166,12 +1220,11 @@ IMPORTANT: Every field listed above MUST appear in the "answers" array. Missing 
             const ta = visible[field.textareaIndex];
             if (ta && ans.text) {
               await ta.fill(ans.text).catch(() => {});
-              answersGiven.push({ type: 'open-end', text: ans.text, aiControlled: true });
+              answersGiven.push({ type: 'open-end', text: ans.text, aiControlled: true, flags });
               console.log(`[AI] ✓ Open-end [${field.textareaIndex}] → "${ans.text.slice(0, 80)}"`);
             }
             break;
           }
-
           case 'input': {
             const allInputs = await page.locator("input[type='text'], input[type='number']").all();
             const visible = [];
@@ -1185,24 +1238,265 @@ IMPORTANT: Every field listed above MUST appear in the "answers" array. Missing 
             if (inp && ans.value !== undefined && ans.value !== null && String(ans.value) !== '') {
               await inp.fill(String(ans.value)).catch(() => {});
               const label = field.rowLabel || field.columnHeader || field.contextText?.slice(0, 40) || `input ${field.inputIndex}`;
-              answersGiven.push({ type: 'numeric', value: ans.value, label, aiControlled: true });
+              answersGiven.push({ type: 'numeric', value: ans.value, label, aiControlled: true, flags });
               console.log(`[AI] ✓ Input [${field.inputIndex}] "${label}" → ${ans.value}`);
             }
             break;
           }
         }
       } catch (e) {
-        console.warn(`[AI] Error executing fieldIndex ${ans.fieldIndex}: ${e.message}`);
+        console.warn(`[AI] Error on fieldIndex ${ans.fieldIndex}: ${e.message}`);
       }
     }
 
-    if (answersGiven.length === 0) { console.log('[AI] No answers executed — returning null'); return null; }
+    if (answersGiven.length === 0) { console.log('[AI] No answers executed'); return null; }
     return answersGiven;
-
   } catch (e) {
     console.warn(`[AI] answerPageWithAI crashed: ${e.message}`);
     return null;
   }
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PRE-SESSION AGENT SETUP
+// ══════════════════════════════════════════════════════════════════════════════
+
+const buildIntentMap = (scenario) => {
+  if (!scenario?.steps?.length) return { qualifying: [], disqualifying: [], timerRules: [] };
+  const qualifying = [], disqualifying = [], timerRules = [];
+
+  for (const step of scenario.steps) {
+    if (step.when_type === 'question_contains' && !step.when_value) continue;
+    const vals = Array.isArray(step.action_values)
+      ? step.action_values.map(v => parseInt(v)).filter(n => !isNaN(n))
+      : [];
+
+    if (['select_exact', 'select_one_of'].includes(step.action) && vals.length > 0) {
+      qualifying.push({
+        topic: (step.when_value || '').toLowerCase(),
+        when_type: step.when_type,
+        when_value: step.when_value,
+        qualifying_indices: vals,
+        action: step.action,
+        wait_min_s: step.wait_min_s || null,
+        wait_max_s: step.wait_max_s || null,
+      });
+    }
+    if (step.action === 'select_not_in' && vals.length > 0) {
+      disqualifying.push({
+        topic: (step.when_value || '').toLowerCase(),
+        when_type: step.when_type,
+        when_value: step.when_value,
+        disqualifying_indices: vals,
+      });
+    }
+    if (step.wait_min_s || step.wait_max_s) {
+      timerRules.push({
+        topic: (step.when_value || '').toLowerCase(),
+        when_type: step.when_type,
+        when_value: step.when_value,
+        wait_min_s: step.wait_min_s,
+        wait_max_s: step.wait_max_s,
+      });
+    }
+  }
+  return { qualifying, disqualifying, timerRules };
+};
+
+const initFactSheet = (persona, country) => {
+  const attrs = persona?.behavioural_attrs || {};
+  return {
+    gender:             persona?.gender || null,
+    age:                persona?.age_min ? `${persona.age_min}${persona.age_max ? '–' + persona.age_max : '+'}` : null,
+    job_title:          attrs.designation || null,
+    seniority_level:    null,
+    industry:           attrs.industry || null,
+    country:            country || persona?.country || null,
+    company_size:       attrs.employeeSize || null,
+    company_revenue:    attrs.companyRevenue || null,
+    ai_adoption_status: null,
+    ai_budget:          null,
+    current_vendors:    null,
+    purchase_timeline:  null,
+    decision_maker:     null,
+    brand_awareness:    { aware_of: [], not_aware_of: [], used: [], satisfaction: {} },
+    committed_numbers:  {},
+    survey_specific:    {},
+  };
+};
+
+const resolveQuotaCell = async (persona, projectId, ANTHROPIC_API_KEY) => {
+  if (!ANTHROPIC_API_KEY || !projectId) return null;
+  try {
+    const result = await pool.query(
+      `SELECT dimensions FROM quota_cells WHERE project_id = $1`,
+      [projectId]
+    );
+    if (!result.rows.length) return null;
+
+    const dimMap = {};
+    for (const row of result.rows) {
+      for (const [dim, val] of Object.entries(row.dimensions || {})) {
+        if (!dimMap[dim]) dimMap[dim] = new Set();
+        dimMap[dim].add(val);
+      }
+    }
+    if (!Object.keys(dimMap).length) return null;
+
+    const dimensionsText = Object.entries(dimMap)
+      .map(([d, vals]) => `${d}: ${[...vals].join(', ')}`)
+      .join('\n');
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 250,
+        system: 'Map a persona to quota dimension values. Return only valid JSON, no explanation.',
+        messages: [{
+          role: 'user',
+          content: `Persona:\n${buildPersonaContext(persona)}\n\nAvailable quota dimensions:\n${dimensionsText}\n\nSelect the best matching value for each dimension. Return JSON: {"DimensionName": "matched_value", ...}`,
+        }],
+      }),
+    });
+    const data = await res.json();
+    const cell = JSON.parse((data.content?.[0]?.text || '{}').replace(/```json|```/g, '').trim());
+    console.log(`[Agent] Quota cell resolved: ${JSON.stringify(cell)}`);
+    return cell;
+  } catch (e) {
+    console.warn('[Agent] resolveQuotaCell failed:', e.message);
+    return null;
+  }
+};
+
+const prepareSessionAgent = async (persona, scenario, projectId, proxyCountry, ANTHROPIC_API_KEY) => {
+  const [quotaCell, intentMap, factSheet] = await Promise.all([
+    resolveQuotaCell(persona, projectId, ANTHROPIC_API_KEY),
+    Promise.resolve(buildIntentMap(scenario)),
+    Promise.resolve(initFactSheet(persona, proxyCountry)),
+  ]);
+
+  if (quotaCell) {
+    for (const [dim, val] of Object.entries(quotaCell)) {
+      const d = dim.toLowerCase();
+      if (d.includes('seniority') || d.includes('level') || d.includes('title') || d.includes('role')) {
+        factSheet.seniority_level = val;
+      }
+    }
+  }
+
+  const quotaCellText = quotaCell
+    ? Object.entries(quotaCell).map(([k, v]) => `${k}: ${v}`).join(' × ')
+    : 'Not defined — answer based on persona';
+
+  console.log(`[Agent] Ready — cell: ${quotaCellText} | intents: ${intentMap.qualifying.length}Q ${intentMap.disqualifying.length}DQ`);
+  return { personaBrief: buildPersonaContext(persona), quotaCellText, intentMap, factSheet };
+};
+
+// ── Attention check detection ──────────────────────────────────────────────────
+const detectAttentionCheck = async (questionsOnPage, allFields, ANTHROPIC_API_KEY) => {
+  if (!ANTHROPIC_API_KEY || !questionsOnPage.length) return null;
+
+  const fullText = questionsOnPage.join(' ');
+  const optionTexts = allFields
+    .filter(f => ['radio', 'checkbox'].includes(f.fieldType))
+    .flatMap(f => f.options || []).join(' ');
+
+  const botSignals = [
+    /please select.{0,50}(to continue|to verify|option \d|answer \d)/i,
+    /type the word/i, /enter the (word|number|text)/i,
+    /quality check/i, /attention check/i, /to verify you are/i,
+    /do not select this/i, /for quality control/i,
+    /select.{0,20}to proceed/i,
+  ];
+  const hasSignal = botSignals.some(p => p.test(fullText) || p.test(optionTexts));
+  if (!hasSignal) return null;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 200,
+        system: 'Detect survey attention/quality check questions. Return only JSON.',
+        messages: [{
+          role: 'user',
+          content: `Question text: ${fullText.slice(0, 400)}\nOption texts: ${optionTexts.slice(0, 300)}\n\nIs this an attention check or bot detection question? Return: {"isAttentionCheck": boolean, "confidence": "high" or "low", "instruction": "exact instruction to follow e.g. select option 3 or type apple" or null}`,
+        }],
+      }),
+    });
+    const data = await res.json();
+    return JSON.parse((data.content?.[0]?.text || '{}').replace(/```json|```/g, '').trim());
+  } catch {
+    return null;
+  }
+};
+
+// ── Fact sheet updater ────────────────────────────────────────────────────────
+const updateFactSheet = async (factSheet, answersGiven, questionsOnPage, ANTHROPIC_API_KEY) => {
+  if (!answersGiven?.length || !ANTHROPIC_API_KEY) return factSheet;
+
+  const answerSummary = answersGiven
+    .filter(a => a && a.type !== 'country_mapping')
+    .map(a => {
+      if (a.type === 'open-end')       return `Open-end: "${(a.text || '').slice(0, 150)}"`;
+      if (a.type === 'numeric')        return `Numeric "${a.label}": ${a.value}`;
+      if (Array.isArray(a.selected))   return `Multi-select: [${a.selected.join(', ')}]`;
+      return `Selected: "${a.selected}"`;
+    }).join('\n');
+
+  if (!answerSummary.trim()) return factSheet;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 300,
+        system: 'Extract semantic facts from survey answers to update a respondent profile. Return only JSON with new/updated keys. Return {} if nothing meaningful to extract.',
+        messages: [{
+          role: 'user',
+          content: `Questions: ${questionsOnPage.join(' | ')}\nAnswers:\n${answerSummary}\nExisting fact sheet: ${JSON.stringify(factSheet, null, 0).slice(0, 500)}\n\nExtract new/updated facts as snake_case keys. For brands use "brand_awareness.aware_of": ["Brand1"] or "brand_awareness.not_aware_of": ["Brand2"]. For committed numbers use "committed_numbers.budget_total": 5000000. Return only changed/new keys as JSON.`,
+        }],
+      }),
+    });
+    const data = await res.json();
+    const newFacts = JSON.parse((data.content?.[0]?.text || '{}').replace(/```json|```/g, '').trim());
+
+    for (const [key, value] of Object.entries(newFacts)) {
+      if (value === null || value === undefined) continue;
+      if (key.includes('.')) {
+        const [parent, child] = key.split('.');
+        if (factSheet[parent] && typeof factSheet[parent] === 'object') {
+          if (Array.isArray(factSheet[parent][child]) && Array.isArray(value)) {
+            factSheet[parent][child] = [...new Set([...factSheet[parent][child], ...value])];
+          } else {
+            factSheet[parent][child] = value;
+          }
+        }
+      } else {
+        factSheet[key] = value;
+      }
+    }
+  } catch (e) {
+    console.warn('[Agent] updateFactSheet error:', e.message);
+  }
+  return factSheet;
 };
 
 // ─── Main session processor ───────────────────────────────────────────────────
@@ -1273,8 +1567,13 @@ const processSession = async (job) => {
   const tracePath = path.join(TRACES_DIR, `${sessionId}.zip`);
   const pages = [];
 
-  // ── AI session history — full Q&A log for contradiction checking ──────────
-  const sessionAnswerHistory = [];
+  // ── AI agent setup (initialised with defaults, upgraded after key is loaded) ─
+  let agentSetup = {
+    personaBrief:  buildPersonaContext(persona),
+    quotaCellText: 'Not resolved',
+    intentMap:     buildIntentMap(scenario),
+    factSheet:     initFactSheet(persona, proxyCountry),
+  };
 
   const ANTHROPIC_API_KEY =
     readSecret('anthropic_api_key_v1') ||
@@ -1286,6 +1585,15 @@ const processSession = async (job) => {
   }
 
   const useAI = !!ANTHROPIC_API_KEY;
+
+  // Pre-session agent setup: quota cell mapping + intent compilation
+  if (useAI && persona) {
+    try {
+      agentSetup = await prepareSessionAgent(persona, scenario, projectId, proxyCountry, ANTHROPIC_API_KEY);
+    } catch (e) {
+      console.warn('[Agent] prepareSessionAgent failed, using defaults:', e.message);
+    }
+  }
 
   try {
     browser = await chromium.launch(launchOptions);
@@ -1399,6 +1707,25 @@ const processSession = async (job) => {
       await takeScreenshot(page, screenshotPath);
 
       const pageOptionsBefore = await capturePageOptions(page);
+      const pageFields = await captureAllPageFields(page);
+
+      // ── Pre-check: Attention / bot detection ──────────────────────────────
+      if (useAI && questionsOnPage.length > 0) {
+        const attCheck = await detectAttentionCheck(questionsOnPage, pageFields, ANTHROPIC_API_KEY);
+        if (attCheck?.isAttentionCheck) {
+          console.log(`[Agent] Attention check (${attCheck.confidence}): "${attCheck.instruction}"`);
+          await logSessionEvent(sessionId, 'attention_check_detected', {
+            page: pageCount, instruction: attCheck.instruction, confidence: attCheck.confidence,
+          });
+          if (attCheck.confidence === 'low') {
+            await logSessionEvent(sessionId, 'flag_warning', {
+              flag: 'NEED_ATTENTION_QUALITY_CHECK',
+              message: `Possible quality check — AI made best guess. Review page ${pageCount}.`,
+              page: pageCount,
+            });
+          }
+        }
+      }
 
       // ── Answer logic ────────────────────────────────────────────────────────
       let answersGiven = null;
@@ -1451,7 +1778,8 @@ const processSession = async (job) => {
           console.log(`[Worker] Page ${pageCount}: using AI answering`);
           answersGiven = await answerPageWithAI(
             page, persona, scenario,
-            sessionAnswerHistory, questionsOnPage, pageOptionsBefore,
+            agentSetup.factSheet, agentSetup.intentMap, agentSetup.quotaCellText,
+            questionsOnPage, pageOptionsBefore,
             ANTHROPIC_API_KEY
           );
           if (answersGiven) {
@@ -1468,27 +1796,22 @@ const processSession = async (job) => {
         }
       }
 
-      // Accumulate ALL answers into history for AI contradiction checking
-      if (answersGiven?.length > 0) {
-        for (const ans of answersGiven) {
-          if (!ans || ans.type === 'country_mapping') continue;
-          const answerText =
-            ans.type === 'open-end'     ? ans.text :
-            ans.type === 'numeric'      ? `${ans.value} (${ans.label || 'numeric'})` :
-            Array.isArray(ans.selected) ? ans.selected.join(', ') :
-            (ans.selected || String(ans.value || ''));
-          if (answerText) {
-            sessionAnswerHistory.push({
-              page:      pageCount,
-              question:  questionsOnPage[0] || `Page ${pageCount}`,
-              answer:    answerText.slice(0, 200),
-              fieldType: ans.type,
-            });
-          }
+      // Update fact sheet + log web search flags
+      if (useAI && answersGiven?.length > 0) {
+        const usedWebSearch = answersGiven.some(a => a?.flags?.includes('web_search_used'));
+        if (usedWebSearch) {
+          await logSessionEvent(sessionId, 'flag_warning', {
+            flag: 'NEED_ATTENTION_WEB_SEARCH',
+            message: `Web search used on page ${pageCount} — additional tokens consumed`,
+            page: pageCount,
+          });
         }
+        agentSetup.factSheet = await updateFactSheet(
+          agentSetup.factSheet, answersGiven, questionsOnPage, ANTHROPIC_API_KEY
+        );
       }
 
-      // Step 4: Fill any remaining unfilled inputs/selects on the page
+      // Step 4: Last-resort fill for anything AI or scenario missed
       // This catches: grid numeric inputs, standalone inputs, dropdowns
       // that answerPage or scenario actions didn't cover (Images 3-7)
       await fillRemainingInputs(page);
@@ -1519,6 +1842,7 @@ const processSession = async (job) => {
         screenshot: `${sessionId}/${screenshotFilename}`,
         scenarioStep: scenarioStepUsed || null,
         gridAnswers: gridAnswers.length > 0 ? gridAnswers : undefined,
+        factSheet: useAI ? agentSetup.factSheet : undefined,
       });
 
       // ── Click next ────────────────────────────────────────────────────────
