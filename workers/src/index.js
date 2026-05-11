@@ -1138,9 +1138,10 @@ const answerPageWithAI = async (page, persona, scenario, factSheet, intentMap, q
     const personaContext  = buildPersonaContext(persona);
     const scenarioContext = buildScenarioContext(scenario);
 
-    // ── Format fact sheet ─────────────────────────────────────────────────────
+    // ── Format semantic fact sheet (no pageHistory) ────────────────────────
     const factSheetLines = [];
     for (const [k, v] of Object.entries(factSheet || {})) {
+      if (k === 'pageHistory') continue; // handled separately below
       if (v === null || v === undefined) continue;
       if (typeof v === 'object' && !Array.isArray(v)) {
         const inner = Object.entries(v)
@@ -1151,26 +1152,33 @@ const answerPageWithAI = async (page, persona, scenario, factSheet, intentMap, q
         factSheetLines.push(`${k}: ${Array.isArray(v) ? v.join(', ') : v}`);
       }
     }
-    const factSheetText = factSheetLines.join('\n') || 'First page — establish baseline consistent with persona.';
+    const factSheetText = factSheetLines.join('\n') || 'No committed facts yet — establish baseline from persona.';
 
-    // ── Match intents for this page ───────────────────────────────────────────
+    // ── Full Q&A history for cross-referencing ────────────────────────────
+    const pageHistory = factSheet?.pageHistory || [];
+    const fullHistoryText = pageHistory.length > 0
+      ? pageHistory.map((h, i) =>
+          `  [Page ${h.page}] "${h.question.slice(0, 120)}" → "${h.answer.slice(0, 150)}"`
+        ).join('\n')
+      : '  No prior answers yet — this is the first answerable page.';
+
+    // ── Match intents for this page ────────────────────────────────────────
     const normalize = s => (s || '').toLowerCase().trim();
     const pageTextLower = questionsOnPage.map(normalize).join(' ');
 
     const matchIntent = (intent) => {
+      if (!intent.when_value && intent.when_type !== 'always') return false;
       if (intent.when_type === 'always') return true;
       if (intent.when_type === 'page_number') return false;
       return pageTextLower.includes(normalize(intent.when_value));
     };
 
-    const matchingQ  = (intentMap?.qualifying    || []).filter(matchIntent);
-    const matchingDQ = (intentMap?.disqualifying || []).filter(matchIntent);
-
-    const intentLines = [
-      ...matchingQ.map(i  => `QUALIFY  — question about "${i.when_value}": prefer option indices [${i.qualifying_indices.join(', ')}] (1-based). These options qualify for your quota cell.`),
-      ...matchingDQ.map(i => `DISQUALIFY — question about "${i.when_value}": avoid option indices [${i.disqualifying_indices.join(', ')}] (1-based).`),
-    ];
-    const intentConstraintsText = intentLines.join('\n') || 'No specific constraints — answer naturally as this persona.';
+    const matchingInstructions = (intentMap?.instructions || []).filter(matchIntent);
+    const intentConstraintsText = matchingInstructions.length > 0
+      ? matchingInstructions.map(i =>
+          `• WHEN "${i.when_value}": ${i.naturalInstruction}`
+        ).join('\n')
+      : 'No specific scenario constraints for this page — answer naturally as this persona while staying consistent with all prior answers.';
 
     // ── Web search for open-end / numeric fields ──────────────────────────────
     let webSearchContext = '';
@@ -1212,7 +1220,7 @@ const answerPageWithAI = async (page, persona, scenario, factSheet, intentMap, q
       `Your answers must be realistic, internally coherent, and NEVER contradict the session fact sheet. ` +
       `You respond ONLY with valid JSON — no markdown, no explanation outside JSON.`;
 
-    const userPrompt =
+const userPrompt =
 `═══════════════════════════════════════════════
 PERSONA — YOU ARE THIS PERSON
 ═══════════════════════════════════════════════
@@ -1226,20 +1234,35 @@ Your screener answers MUST qualify for this demographic cell.
 
 ${scenarioContext ? `═══════════════════════════════════════════════\n${scenarioContext}\n═══════════════════════════════════════════════\n` : ''}
 ═══════════════════════════════════════════════
-SESSION FACT SHEET — NEVER CONTRADICT THESE
+SCENARIO & ROUTING CONSTRAINTS FOR THIS PAGE
 ═══════════════════════════════════════════════
+${intentConstraintsText}
+
+═══════════════════════════════════════════════
+SEMANTIC FACT SHEET — NEVER CONTRADICT THESE
+═══════════════════════════════════════════════
+These are structured facts extracted from everything you have answered so far.
+Every new answer MUST be logically consistent with these committed facts.
+
 ${factSheetText}
 
 ═══════════════════════════════════════════════
-INTENT CONSTRAINTS FOR THIS PAGE
+FULL ANSWER HISTORY — ALL PRIOR Q&A (USE FOR CROSS-REFERENCING)
 ═══════════════════════════════════════════════
-${intentConstraintsText}
+Before answering ANY question on this page, scan this list.
+If a new question relates to ANY prior answer — budgets, headcount, AI adoption,
+vendors, revenue, job role, plans — your answer MUST be logically consistent.
+Example: If Page 5 says you have 75,000+ employees, budget questions must scale accordingly.
+Example: If Page 8 says revenue is $500M–$1B, departmental budget cannot exceed that.
+Example: If Page 11 says AI adoption is "evaluating/planning", you cannot claim AI revenue on Page 15.
+
+${fullHistoryText}
 
 ${webSearchContext ? `═══════════════════════════════════════════════\nWEB SEARCH — USE THESE FIGURES FOR REALISM\n═══════════════════════════════════════════════\n${webSearchContext}\n` : ''}
 ═══════════════════════════════════════════════
 QUESTIONS ON THIS PAGE
 ═══════════════════════════════════════════════
-${questionsOnPage.length > 0 ? questionsOnPage.map((q, i) => `${i + 1}. ${q}`).join('\n') : '(No question text detected)'}
+${questionsOnPage.length > 0 ? questionsOnPage.map((q, i) => `${i + 1}. ${q}`).join('\n') : '(No question text detected — may be intro or transition page)'}
 
 ═══════════════════════════════════════════════
 FIELDS TO FILL
@@ -1247,25 +1270,52 @@ FIELDS TO FILL
 ${formatFieldsForPrompt(actionableFields)}
 
 ═══════════════════════════════════════════════
-RULES
+RULES — FOLLOW IN THIS EXACT ORDER OF PRIORITY
 ═══════════════════════════════════════════════
-1. FACT SHEET FIRST — Every answer must be consistent with committed facts above. If contradicting, resolve toward the fact sheet and note it.
-2. INTENT CONSTRAINTS — Follow qualifying/disqualifying rules exactly when they match this page. Indices are 1-based in constraints, 0-based in your answer.
-3. ATTENTION CHECKS — If any question says "please select option X", "type the word Y", or "do not select this" — follow that instruction literally regardless of persona.
-4. NUMERICS — Use web search figures. Numbers must be internally consistent (sub-budget ≤ total budget, percentages sum correctly, employee count matches company size).
-5. OPEN-ENDS — Write 1–3 sentences. Sound like a real ${persona?.behavioural_attrs?.designation || 'professional'}. Active or passive voice, varied. Specific to industry. Reference prior answers naturally.
-6. BRAND QUESTIONS — Only select brands this persona would genuinely know in their industry. Never select implausible/unknown brand names.
-7. CHECKBOX — Select 1–4 compatible options. No contradicting selections.
-8. AVOID "Don't know" / "Prefer not to say" unless persona genuinely could not know.
-9. RADIO OPTIONS: Prefer options that do NOT require a follow-up text entry (i.e. avoid "Other - please specify", "Please state", or any option implying you must type additional detail), UNLESS no clean option fits the persona.
+1. SCENARIO CONSTRAINTS FIRST — If a constraint above matches this page, follow it exactly.
+   For COUNTRY LOGIC instructions, find the option label and select it by label not position.
+   For SELECT_EXACT, select that exact option index (convert 1-based to 0-based).
+   For SELECT_ONE_OF, pick the option from the list that best fits the persona.
+   For SELECT_NOT_IN, avoid those indices and pick the best remaining option for persona.
+
+2. CROSS-REFERENCE ALL PRIOR ANSWERS — Before answering, read the FULL ANSWER HISTORY above.
+   Any answer touching budget, headcount, technology, revenue, AI, vendors, or role
+   must be checked against ALL relevant prior answers — not just the last few.
+   If Q3 said "planning to adopt AI", Q15 cannot say "generating revenue from AI."
+   If Q7 said "10,000 employees", Q12 budget must match that scale.
+
+3. FACT SHEET CONSISTENCY — Answers must not contradict the semantic facts above.
+   If a contradiction is unavoidable, resolve toward the MOST RECENTLY COMMITTED fact.
+
+4. QUOTA CELL — All screener answers must qualify for your assigned demographic cell.
+
+5. PERSONA REALISM — Answers must be credible for this specific person in this role/industry.
+
+6. NUMERICS — Use web search figures. Ensure all numbers are internally consistent:
+   Sub-totals ≤ totals, percentages sum correctly, employee counts match company size.
+   Radio + spec box: select the range whose midpoint is closest to your target value.
+
+7. OPEN-ENDS — 1–3 sentences. Sound like a real ${persona?.behavioural_attrs?.designation || 'professional'}.
+   Active or passive voice, varied sentence structure. Reference prior answers naturally.
+   Never sound AI-generated. Be specific to your industry and the exact question asked.
+
+8. BRANDS — Only select brands this persona would genuinely know in their industry.
+   Never select implausible or unknown brand names — they may be phantom/fake brands.
+
+9. ATTENTION CHECKS — If question text says "select option X" or "type the word Y",
+   follow that instruction literally regardless of everything else.
+
+10. AVOID "Don't know" / "Prefer not to say" / "Other (please specify)" unless
+    genuinely unavoidable for this persona. Prefer clean options with no follow-up input.
 
 ═══════════════════════════════════════════════
-RETURN ONLY THIS JSON
+RETURN ONLY THIS JSON — NO MARKDOWN, NO EXPLANATION
 ═══════════════════════════════════════════════
 {
+  "crossReferenceCheck": "list any prior answers you checked and confirm consistency, or 'no conflicts'",
   "contradictionCheck": "any fact sheet conflicts found and how resolved, or 'none'",
-  "intentApplied": "which intent constraint applied on this page, or 'none'",
-  "reasoning": "one sentence — your approach for this page",
+  "intentApplied": "which scenario constraint applied, or 'none — persona-driven answer'",
+  "reasoning": "one sentence — your approach for this specific page",
   "answers": [
     { "fieldIndex": 0, "fieldType": "radio",    "selectedIndex": 2 },
     { "fieldIndex": 1, "fieldType": "checkbox",  "selectedIndices": [0, 2] },
@@ -1274,7 +1324,7 @@ RETURN ONLY THIS JSON
     { "fieldIndex": 4, "fieldType": "input",     "value": "15000" }
   ]
 }
-Every field above MUST appear in answers. Missing a fieldIndex = unanswered question.`;
+Every field above MUST appear in answers array. Missing a fieldIndex = unanswered question.`;
 
     const apiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1306,8 +1356,9 @@ Every field above MUST appear in answers. Missing a fieldIndex = unanswered ques
       return null;
     }
 
-    if (decisions.contradictionCheck && decisions.contradictionCheck !== 'none') console.log(`[AI] Contradiction: ${decisions.contradictionCheck}`);
-    if (decisions.intentApplied && decisions.intentApplied !== 'none') console.log(`[AI] Intent: ${decisions.intentApplied}`);
+    if (decisions.crossReferenceCheck && decisions.crossReferenceCheck !== 'no conflicts') console.log(`[AI] Cross-ref: ${decisions.crossReferenceCheck}`);
+    if (decisions.contradictionCheck  && decisions.contradictionCheck  !== 'none') console.log(`[AI] Contradiction: ${decisions.contradictionCheck}`);
+    if (decisions.intentApplied       && decisions.intentApplied       !== 'none — persona-driven answer') console.log(`[AI] Intent applied: ${decisions.intentApplied}`);
     if (decisions.reasoning) console.log(`[AI] Reasoning: ${decisions.reasoning}`);
 
     const answersGiven = [];
@@ -1419,8 +1470,8 @@ Every field above MUST appear in answers. Missing a fieldIndex = unanswered ques
 // ══════════════════════════════════════════════════════════════════════════════
 
 const buildIntentMap = (scenario) => {
-  if (!scenario?.steps?.length) return { qualifying: [], disqualifying: [], timerRules: [] };
-  const qualifying = [], disqualifying = [], timerRules = [];
+  if (!scenario?.steps?.length) return { instructions: [], timerRules: [] };
+  const instructions = [], timerRules = [];
 
   for (const step of scenario.steps) {
     if (step.when_type === 'question_contains' && !step.when_value) continue;
@@ -1428,41 +1479,82 @@ const buildIntentMap = (scenario) => {
       ? step.action_values.map(v => parseInt(v)).filter(n => !isNaN(n))
       : [];
 
-    if (['select_exact', 'select_one_of'].includes(step.action) && vals.length > 0) {
-      qualifying.push({
-        topic: (step.when_value || '').toLowerCase(),
+    let naturalInstruction = '';
+    switch (step.action) {
+      case 'select_exact':
+        naturalInstruction = vals.length === 1
+          ? `Select option ${vals[0]} (1-based) exactly — this is the required qualifying answer`
+          : `Select the first valid option from [${vals.join(', ')}] (1-based) — all are qualifying`;
+        break;
+      case 'select_one_of':
+        naturalInstruction = `Select any ONE option from these (1-based): [${vals.join(', ')}] — all qualify. Prefer the one most consistent with persona.`;
+        break;
+      case 'select_not_in':
+        naturalInstruction = `Avoid options [${vals.join(', ')}] (1-based, e.g. "Other/prefer not to say"). Pick anything else that fits persona.`;
+        break;
+      case 'numeric_fill':
+        naturalInstruction = `Enter a numeric value. Target range: ${vals[0] ?? 0}–${vals[1] ?? 100}. Select the radio option whose range contains this target, then fill the spec box.`;
+        break;
+      case 'open_end':
+        naturalInstruction = step.action_mode === 'specific' && step.action_text
+          ? `Type this exact text: "${step.action_text}"`
+          : `Write a natural open-end response consistent with persona and prior answers.`;
+        break;
+      case 'skip':
+        naturalInstruction = `Do not answer this question — click next immediately.`;
+        break;
+      case 'select_grid':
+        naturalInstruction = `This is a grid question. Follow persona to answer each row.`;
+        break;
+      default:
+        naturalInstruction = '';
+    }
+
+    if (naturalInstruction) {
+      instructions.push({
         when_type: step.when_type,
-        when_value: step.when_value,
-        qualifying_indices: vals,
+        when_value: step.when_value || '',
         action: step.action,
+        vals,
+        naturalInstruction,
         wait_min_s: step.wait_min_s || null,
         wait_max_s: step.wait_max_s || null,
       });
     }
-    if (step.action === 'select_not_in' && vals.length > 0) {
-      disqualifying.push({
-        topic: (step.when_value || '').toLowerCase(),
-        when_type: step.when_type,
-        when_value: step.when_value,
-        disqualifying_indices: vals,
-      });
-    }
+
     if (step.wait_min_s || step.wait_max_s) {
       timerRules.push({
-        topic: (step.when_value || '').toLowerCase(),
-        when_type: step.when_type,
-        when_value: step.when_value,
+        when_value: (step.when_value || '').toLowerCase(),
+        when_type:  step.when_type,
         wait_min_s: step.wait_min_s,
         wait_max_s: step.wait_max_s,
       });
     }
   }
-  return { qualifying, disqualifying, timerRules };
+  return { instructions, timerRules };
+};
+
+const buildCountryLogicIntent = (countryLogic, proxyCountry) => {
+  if (!countryLogic?.country_mapping) return null;
+  const { questionContains, mappings } = countryLogic.country_mapping;
+  if (!questionContains || !mappings?.length) return null;
+  const mapping = mappings.find(m => m.country.toUpperCase() === (proxyCountry || '').toUpperCase());
+  if (!mapping) return null;
+  return {
+    when_type: 'question_contains',
+    when_value: questionContains,
+    action: 'country_logic',
+    vals: [],
+    naturalInstruction: `COUNTRY LOGIC: Select the option whose label is exactly "${mapping.answer}". This is mandatory — do not deviate.`,
+    wait_min_s: countryLogic.country_mapping.waitMinS || null,
+    wait_max_s: countryLogic.country_mapping.waitMaxS || null,
+  };
 };
 
 const initFactSheet = (persona, country) => {
   const attrs = persona?.behavioural_attrs || {};
   return {
+    // Semantic facts — extracted and structured for contradiction checking
     gender:             persona?.gender || null,
     age:                persona?.age_min ? `${persona.age_min}${persona.age_max ? '–' + persona.age_max : '+'}` : null,
     job_title:          attrs.designation || null,
@@ -1479,6 +1571,9 @@ const initFactSheet = (persona, country) => {
     brand_awareness:    { aware_of: [], not_aware_of: [], used: [], satisfaction: {} },
     committed_numbers:  {},
     survey_specific:    {},
+    // Full Q&A history — every question + answer for cross-referencing
+    // Used by AI to check Q10 against Q3, Q15 against Q7, etc.
+    pageHistory:        [],
   };
 };
 
@@ -1531,12 +1626,19 @@ const resolveQuotaCell = async (persona, projectId, ANTHROPIC_API_KEY) => {
   }
 };
 
-const prepareSessionAgent = async (persona, scenario, projectId, proxyCountry, ANTHROPIC_API_KEY) => {
+const prepareSessionAgent = async (persona, scenario, countryLogic, projectId, proxyCountry, ANTHROPIC_API_KEY) => {
   const [quotaCell, intentMap, factSheet] = await Promise.all([
     resolveQuotaCell(persona, projectId, ANTHROPIC_API_KEY),
     Promise.resolve(buildIntentMap(scenario)),
     Promise.resolve(initFactSheet(persona, proxyCountry)),
   ]);
+
+  // Inject country logic as first instruction — highest priority
+  const countryIntent = buildCountryLogicIntent(countryLogic, proxyCountry);
+  if (countryIntent) {
+    intentMap.instructions.unshift(countryIntent);
+    console.log(`[Agent] Country logic injected as intent: "${countryIntent.naturalInstruction}"`);
+  }
 
   if (quotaCell) {
     for (const [dim, val] of Object.entries(quotaCell)) {
@@ -1600,8 +1702,30 @@ const detectAttentionCheck = async (questionsOnPage, allFields, ANTHROPIC_API_KE
 };
 
 // ── Fact sheet updater ────────────────────────────────────────────────────────
-const updateFactSheet = async (factSheet, answersGiven, questionsOnPage, ANTHROPIC_API_KEY) => {
-  if (!answersGiven?.length || !ANTHROPIC_API_KEY) return factSheet;
+const updateFactSheet = async (factSheet, answersGiven, questionsOnPage, pageNum, ANTHROPIC_API_KEY) => {
+  if (!answersGiven?.length) return factSheet;
+
+  // Always update pageHistory — no API needed for this
+  for (let i = 0; i < answersGiven.length; i++) {
+    const ans = answersGiven[i];
+    if (!ans || ans.type === 'country_mapping') continue;
+    const questionText = questionsOnPage[i] || questionsOnPage[0] || `Page ${pageNum} field ${i + 1}`;
+    const answerText =
+      ans.type === 'open-end'     ? ans.text :
+      ans.type === 'numeric'      ? `${ans.value} (${ans.label || 'numeric'})` :
+      Array.isArray(ans.selected) ? ans.selected.join(', ') :
+      (ans.selected || String(ans.value || ''));
+    if (answerText) {
+      factSheet.pageHistory.push({
+        page:     pageNum,
+        question: questionText.slice(0, 200),
+        answer:   answerText.slice(0, 200),
+        type:     ans.type,
+      });
+    }
+  }
+
+  if (!ANTHROPIC_API_KEY) return factSheet;
 
   const answerSummary = answersGiven
     .filter(a => a && a.type !== 'country_mapping')
@@ -1746,7 +1870,7 @@ const processSession = async (job) => {
   // Pre-session agent setup: quota cell mapping + intent compilation
   if (useAI && persona) {
     try {
-      agentSetup = await prepareSessionAgent(persona, scenario, projectId, proxyCountry, ANTHROPIC_API_KEY);
+      agentSetup = await prepareSessionAgent(persona, scenario, countryLogic, projectId, proxyCountry, ANTHROPIC_API_KEY);
     } catch (e) {
       console.warn('[Agent] prepareSessionAgent failed, using defaults:', e.message);
     }
@@ -1884,73 +2008,48 @@ const processSession = async (job) => {
         }
       }
 
-      // ── Answer logic ────────────────────────────────────────────────────────
+      // ── Answer logic — AI is always the primary executor ──────────────────
+      // Country Logic and Scenarios are context injected into AI, not independent executors.
       let answersGiven = null;
-      let scenarioStepUsed = null;
+      const scenarioStepUsed = 'ai';
 
-      // Step 1: Country Logic (global, always runs first)
-      if (countryLogic && questionsOnPage.length > 0) {
-        const countryHandled = await applyCountryMapping(page, countryLogic, proxyCountry, questionsOnPage);
-        if (countryHandled) {
-          scenarioStepUsed = 'country_mapping';
-          answersGiven = [{ type: 'country_mapping', country: proxyCountry }];
+      if (useAI) {
+        console.log(`[Worker] Page ${pageCount}: AI answering (persona + quota + intents + full history)`);
+        answersGiven = await answerPageWithAI(
+          page, persona, scenario,
+          agentSetup.factSheet, agentSetup.intentMap, agentSetup.quotaCellText,
+          questionsOnPage, pageOptionsBefore,
+          ANTHROPIC_API_KEY
+        );
+        if (answersGiven?.length > 0) {
           questionCount++;
-          const cm = countryLogic.country_mapping;
-          const waitMin = parseInt(cm.waitMinS) || 0;
-          const waitMax = parseInt(cm.waitMaxS) || waitMin;
-          if (waitMin > 0 || waitMax > 0) {
-            const waitMs = (waitMin + Math.random() * (waitMax - waitMin)) * 1000;
-            console.log(`[CountryLogic] Waiting ${Math.round(waitMs/1000)}s after country answer (range: ${waitMin}-${waitMax}s)`);
+          console.log(`[Worker] Page ${pageCount}: AI answered ${answersGiven.length} field(s)`);
+
+          // Apply wait time from matching intent timer rule
+          const normalize = s => (s || '').toLowerCase().trim();
+          const pageTextLower = questionsOnPage.map(normalize).join(' ');
+          const matchedTimer = (agentSetup.intentMap?.timerRules || []).find(r => {
+            if (r.when_type === 'always') return true;
+            if (r.when_type === 'question_contains') return pageTextLower.includes(normalize(r.when_value));
+            return false;
+          });
+          if (matchedTimer?.wait_min_s || matchedTimer?.wait_max_s) {
+            const wMin = parseInt(matchedTimer.wait_min_s) || 0;
+            const wMax = parseInt(matchedTimer.wait_max_s) || wMin;
+            const waitMs = (wMin + Math.random() * Math.max(0, wMax - wMin)) * 1000;
+            console.log(`[Worker] Page ${pageCount}: intent timer — waiting ${Math.round(waitMs/1000)}s (range: ${wMin}–${wMax}s)`);
             await page.waitForTimeout(waitMs);
           }
-          console.log(`[Worker] Page ${pageCount}: country mapping applied`);
-        }
-      }
-
-      // Step 2: Scenario steps
-      if (answersGiven === null && scenario && questionsOnPage.length > 0) {
-        const matchedStep = findMatchingStep(scenario, questionsOnPage, pageCount);
-        if (matchedStep) {
-          scenarioStepUsed = matchedStep.action;
-          answersGiven = await executeScenarioAction(page, matchedStep);
-          if (answersGiven !== null) {
-            questionCount++;
-            const waitMin = parseInt(matchedStep.wait_min_s) || 0;
-            const waitMax = parseInt(matchedStep.wait_max_s) || waitMin;
-            if (waitMin > 0 || waitMax > 0) {
-              const waitMs = (waitMin + Math.random() * (waitMax - waitMin)) * 1000;
-              console.log(`[Scenario] Waiting ${Math.round(waitMs/1000)}s (range: ${waitMin}-${waitMax}s)`);
-              await page.waitForTimeout(waitMs);
-            }
-            console.log(`[Worker] Page ${pageCount}: scenario step "${matchedStep.action}" executed`);
-          } else {
-            console.log(`[Worker] Page ${pageCount}: scenario action returned null — falling through to default`);
-          }
-        }
-      }
-
-      // Step 3: AI answering (falls back to random if AI unavailable or fails)
-      if (answersGiven === null) {
-        if (useAI && questionsOnPage.length > 0) {
-          console.log(`[Worker] Page ${pageCount}: using AI answering`);
-          answersGiven = await answerPageWithAI(
-            page, persona, scenario,
-            agentSetup.factSheet, agentSetup.intentMap, agentSetup.quotaCellText,
-            questionsOnPage, pageOptionsBefore,
-            ANTHROPIC_API_KEY
-          );
-          if (answersGiven) {
-            questionCount++;
-            console.log(`[Worker] Page ${pageCount}: AI answered ${answersGiven.length} field(s)`);
-          } else {
-            console.log(`[Worker] Page ${pageCount}: AI returned null — falling back to random`);
-          }
-        }
-        if (answersGiven === null) {
-          console.log(`[Worker] Page ${pageCount}: using default random answering`);
-          answersGiven = await answerPage(page, persona, readingSpeed);
+        } else {
+          console.warn(`[Worker] Page ${pageCount}: AI returned no answers — fillRemainingInputs will handle fields`);
+          answersGiven = [];
           questionCount++;
         }
+      } else {
+        // AI disabled (no API key) — use random as last resort
+        console.log(`[Worker] Page ${pageCount}: AI disabled — using random answering`);
+        answersGiven = await answerPage(page, persona, readingSpeed);
+        questionCount++;
       }
 
       // Update fact sheet + log web search flags
@@ -1964,7 +2063,7 @@ const processSession = async (job) => {
           });
         }
         agentSetup.factSheet = await updateFactSheet(
-          agentSetup.factSheet, answersGiven, questionsOnPage, ANTHROPIC_API_KEY
+          agentSetup.factSheet, answersGiven, questionsOnPage, pageCount, ANTHROPIC_API_KEY
         );
       }
 
