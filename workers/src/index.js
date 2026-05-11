@@ -1183,9 +1183,12 @@ const answerPageWithAI = async (page, persona, scenario, factSheet, intentMap, q
     // ── Web search for open-end / numeric fields ──────────────────────────────
     let webSearchContext = '';
     const flags = [];
-    const hasOpenOrNumeric = actionableFields.some(f => f.fieldType === 'textarea' || f.fieldType === 'input');
+    // Only search when question genuinely needs factual/benchmark data
+    const needsWebSearch = actionableFields.some(f => f.fieldType === 'textarea' || f.fieldType === 'input') &&
+      questionsOnPage.some(q => /revenue|budget|spend|growth|percent|employee|headcount|market|cost|price|salary|benchmark/i.test(q));
 
-    if (hasOpenOrNumeric) {
+    if (needsWebSearch) {
+      const hasOpenOrNumeric = true; // alias for flag below
       flags.push('web_search_used');
       try {
         const attrs = persona?.behavioural_attrs || {};
@@ -1312,10 +1315,14 @@ RULES — FOLLOW IN THIS EXACT ORDER OF PRIORITY
 RETURN ONLY THIS JSON — NO MARKDOWN, NO EXPLANATION
 ═══════════════════════════════════════════════
 {
-  "crossReferenceCheck": "list any prior answers you checked and confirm consistency, or 'no conflicts'",
-  "contradictionCheck": "any fact sheet conflicts found and how resolved, or 'none'",
-  "intentApplied": "which scenario constraint applied, or 'none — persona-driven answer'",
-  "reasoning": "one sentence — your approach for this specific page",
+  "crossReferenceCheck": "prior answers checked and consistency confirmed, or 'no conflicts'",
+  "contradictionCheck": "fact sheet conflicts and resolution, or 'none'",
+  "intentApplied": "scenario constraint applied, or 'none — persona-driven'",
+  "reasoning": "one sentence approach for this page",
+  "newFacts": {
+    "any_new_key": "value extracted from answers given on this page — snake_case keys only",
+    "committed_numbers.budget_total": 5000000
+  },
   "answers": [
     { "fieldIndex": 0, "fieldType": "radio",    "selectedIndex": 2 },
     { "fieldIndex": 1, "fieldType": "checkbox",  "selectedIndices": [0, 2] },
@@ -1324,27 +1331,49 @@ RETURN ONLY THIS JSON — NO MARKDOWN, NO EXPLANATION
     { "fieldIndex": 4, "fieldType": "input",     "value": "15000" }
   ]
 }
-Every field above MUST appear in answers array. Missing a fieldIndex = unanswered question.`;
+Every field above MUST appear in answers array. newFacts may be {} if nothing new to extract.`;
 
-    const apiRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 100000,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
-      }),
+// ── Retry wrapper with exponential backoff for rate limits ────────────
+    const callWithRetry = async (body, maxRetries = 4) => {
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify(body),
+        });
+
+        if (res.ok) return res;
+
+        if (res.status === 429 || res.status === 529) {
+          const retryAfter = parseInt(res.headers?.get?.('retry-after') || '0');
+          const waitMs = retryAfter > 0
+            ? retryAfter * 1000
+            : Math.min(1000 * Math.pow(2, attempt), 60000); // 2s, 4s, 8s, 16s, max 60s
+          console.warn(`[AI] Rate limited (${res.status}) — attempt ${attempt}/${maxRetries}, waiting ${Math.round(waitMs/1000)}s`);
+          await new Promise(r => setTimeout(r, waitMs));
+          continue;
+        }
+
+        // Non-retryable error
+        console.warn(`[AI] Claude API error ${res.status}`);
+        return res;
+      }
+      console.warn(`[AI] Max retries reached — giving up`);
+      return null;
+    };
+
+    const apiRes = await callWithRetry({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1400,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
     });
 
-    if (!apiRes.ok) {
-      console.warn(`[AI] Claude API error ${apiRes.status}`);
-      return null;
-    }
+    if (!apiRes || !apiRes.ok) return null;
 
     const apiData = await apiRes.json();
     const rawText = apiData.content?.[0]?.text || '';
@@ -1358,8 +1387,27 @@ Every field above MUST appear in answers array. Missing a fieldIndex = unanswere
 
     if (decisions.crossReferenceCheck && decisions.crossReferenceCheck !== 'no conflicts') console.log(`[AI] Cross-ref: ${decisions.crossReferenceCheck}`);
     if (decisions.contradictionCheck  && decisions.contradictionCheck  !== 'none') console.log(`[AI] Contradiction: ${decisions.contradictionCheck}`);
-    if (decisions.intentApplied       && decisions.intentApplied       !== 'none — persona-driven answer') console.log(`[AI] Intent applied: ${decisions.intentApplied}`);
+    if (decisions.intentApplied       && decisions.intentApplied       !== 'none — persona-driven') console.log(`[AI] Intent applied: ${decisions.intentApplied}`);
     if (decisions.reasoning) console.log(`[AI] Reasoning: ${decisions.reasoning}`);
+
+    // Apply newFacts inline — eliminates the separate updateFactSheet API call
+    if (decisions.newFacts && typeof decisions.newFacts === 'object') {
+      for (const [key, value] of Object.entries(decisions.newFacts)) {
+        if (value === null || value === undefined) continue;
+        if (key.includes('.')) {
+          const [parent, child] = key.split('.');
+          if (factSheet[parent] && typeof factSheet[parent] === 'object') {
+            if (Array.isArray(factSheet[parent][child]) && Array.isArray(value)) {
+              factSheet[parent][child] = [...new Set([...factSheet[parent][child], ...value])];
+            } else {
+              factSheet[parent][child] = value;
+            }
+          }
+        } else {
+          factSheet[key] = value;
+        }
+      }
+    }
 
     const answersGiven = [];
 
@@ -2041,18 +2089,25 @@ const processSession = async (job) => {
             await page.waitForTimeout(waitMs);
           }
         } else {
-          console.warn(`[Worker] Page ${pageCount}: AI returned no answers — fillRemainingInputs will handle fields`);
-          answersGiven = [];
-          questionCount++;
-        }
-      } else {
-        // AI disabled (no API key) — use random as last resort
-        console.log(`[Worker] Page ${pageCount}: AI disabled — using random answering`);
+        // AI returned nothing (rate limit hit after retries, or parse failure)
+        // Fall back to random answering which handles all field types
+        console.warn(`[Worker] Page ${pageCount}: AI returned no answers — falling back to random`);
+        await logSessionEvent(sessionId, 'flag_warning', {
+          flag: 'AI_FALLBACK_RANDOM',
+          message: `AI failed on page ${pageCount} (rate limit or parse error) — random answering used`,
+          page: pageCount,
+        });
         answersGiven = await answerPage(page, persona, readingSpeed);
         questionCount++;
       }
+    } else {
+      // AI disabled (no API key) — use random as last resort
+      console.log(`[Worker] Page ${pageCount}: AI disabled — using random answering`);
+      answersGiven = await answerPage(page, persona, readingSpeed);
+      questionCount++;
+    }
 
-      // Update fact sheet + log web search flags
+      // Log web search flag if used (fact extraction now happens inside answerPageWithAI)
       if (useAI && answersGiven?.length > 0) {
         const usedWebSearch = answersGiven.some(a => a?.flags?.includes('web_search_used'));
         if (usedWebSearch) {
@@ -2062,9 +2117,25 @@ const processSession = async (job) => {
             page: pageCount,
           });
         }
-        agentSetup.factSheet = await updateFactSheet(
-          agentSetup.factSheet, answersGiven, questionsOnPage, pageCount, ANTHROPIC_API_KEY
-        );
+        // Update pageHistory in fact sheet (no API call needed)
+        for (let i = 0; i < answersGiven.length; i++) {
+          const ans = answersGiven[i];
+          if (!ans || ans.type === 'country_mapping') continue;
+          const questionText = questionsOnPage[i] || questionsOnPage[0] || `Page ${pageCount} field ${i+1}`;
+          const answerText =
+            ans.type === 'open-end'     ? ans.text :
+            ans.type === 'numeric'      ? `${ans.value} (${ans.label || 'numeric'})` :
+            Array.isArray(ans.selected) ? ans.selected.join(', ') :
+            (ans.selected || String(ans.value || ''));
+          if (answerText) {
+            agentSetup.factSheet.pageHistory.push({
+              page:     pageCount,
+              question: questionText.slice(0, 200),
+              answer:   answerText.slice(0, 200),
+              type:     ans.type,
+            });
+          }
+        }
       }
 
       // Step 4: Last-resort fill for anything AI or scenario missed
