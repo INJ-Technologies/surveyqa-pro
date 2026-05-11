@@ -1350,9 +1350,17 @@ Every field above MUST appear in answers array. newFacts may be {} if nothing ne
 
         if (res.status === 429 || res.status === 529) {
           const retryAfter = parseInt(res.headers?.get?.('retry-after') || '0');
+
+          // If Anthropic says wait more than 30s, don't retry — go straight to fallback
+          // This prevents 7-10 minute page freezes on free tier
+          if (retryAfter > 60) {
+            console.warn(`[AI] Rate limited — retry-after ${retryAfter}s is too long, falling back immediately`);
+            return null;
+          }
+
           const waitMs = retryAfter > 0
             ? retryAfter * 1000
-            : Math.min(1000 * Math.pow(2, attempt), 60000); // 2s, 4s, 8s, 16s, max 60s
+            : Math.min(1000 * Math.pow(2, attempt), 30000); // 2s, 4s, 8s, 16s, max 30s
           console.warn(`[AI] Rate limited (${res.status}) — attempt ${attempt}/${maxRetries}, waiting ${Math.round(waitMs/1000)}s`);
           await new Promise(r => setTimeout(r, waitMs));
           continue;
@@ -2039,22 +2047,24 @@ const processSession = async (job) => {
       const pageFields = await captureAllPageFields(page);
 
       // ── Pre-check: Attention / bot detection ──────────────────────────────
-      if (useAI && questionsOnPage.length > 0) {
-        const attCheck = await detectAttentionCheck(questionsOnPage, pageFields, ANTHROPIC_API_KEY);
-        if (attCheck?.isAttentionCheck) {
-          console.log(`[Agent] Attention check (${attCheck.confidence}): "${attCheck.instruction}"`);
-          await logSessionEvent(sessionId, 'attention_check_detected', {
-            page: pageCount, instruction: attCheck.instruction, confidence: attCheck.confidence,
-          });
-          if (attCheck.confidence === 'low') {
-            await logSessionEvent(sessionId, 'flag_warning', {
-              flag: 'NEED_ATTENTION_QUALITY_CHECK',
-              message: `Possible quality check — AI made best guess. Review page ${pageCount}.`,
-              page: pageCount,
-            });
-          }
-        }
-      }
+      // Attention check is handled inline by the main AI answer call (Rule 9 in prompt)
+      // Separate API call disabled to reduce rate limit pressure
+      // if (useAI && questionsOnPage.length > 0) {
+      //   const attCheck = await detectAttentionCheck(questionsOnPage, pageFields, ANTHROPIC_API_KEY);
+      //   if (attCheck?.isAttentionCheck) {
+      //     console.log(`[Agent] Attention check (${attCheck.confidence}): "${attCheck.instruction}"`);
+      //     await logSessionEvent(sessionId, 'attention_check_detected', {
+      //       page: pageCount, instruction: attCheck.instruction, confidence: attCheck.confidence,
+      //     });
+      //     if (attCheck.confidence === 'low') {
+      //       await logSessionEvent(sessionId, 'flag_warning', {
+      //         flag: 'NEED_ATTENTION_QUALITY_CHECK',
+      //         message: `Possible quality check — AI made best guess. Review page ${pageCount}.`,
+      //         page: pageCount,
+      //       });
+      //     }
+      //   }
+      // }
 
       // ── Answer logic — AI is always the primary executor ──────────────────
       // Country Logic and Scenarios are context injected into AI, not independent executors.
