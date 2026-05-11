@@ -703,6 +703,38 @@ const executeScenarioAction = async (page, step) => {
       console.log(`[Scenario] Found ${groupOrder.length} radio group(s) on page`);
       return { groupMap, groupOrder };
     };
+
+    // Returns true if a radio option's container has a follow-up text/number input or textarea
+    // Used to deprioritise options like "Other (please specify)" that require extra typing
+    const hasFollowupField = async (radio) => {
+      try {
+        return await radio.evaluate(el => {
+          let node = el.parentElement;
+          for (let i = 0; i < 5; i++) {
+            if (!node) break;
+            if (node.querySelector('input[type="text"], input[type="number"], textarea')) return true;
+            // Stop walking up if this container holds multiple radios (we've left the option scope)
+            if (node.querySelectorAll('input[type="radio"]').length > 1) break;
+            node = node.parentElement;
+          }
+          return false;
+        });
+      } catch {
+        return false;
+      }
+    };
+
+    // Partition radio options into clean (no follow-up) and with-followup
+    // Returns clean options first, followup options as fallback
+    const partitionByFollowup = async (options) => {
+      const clean = [], withFollowup = [];
+      for (let i = 0; i < options.length; i++) {
+        const hasField = await hasFollowupField(options[i]);
+        if (hasField) withFollowup.push(i);
+        else clean.push(i);
+      }
+      return { clean, withFollowup };
+    };
     if (action === 'select_exact') {
       if (vals.length === 0) { console.warn('[Scenario] select_exact: no action_values configured — skipping'); return null; }
       const { groupMap, groupOrder } = await getRadioGroups();
@@ -725,10 +757,16 @@ const executeScenarioAction = async (page, step) => {
       const options = groupMap[groupOrder[0]];
       const valid = vals.filter(v => v >= 1 && v <= options.length);
       if (valid.length === 0) { console.warn(`[Scenario] select_one_of: no valid options from [${vals}]`); return null; }
-      const chosen = valid[Math.floor(Math.random() * valid.length)];
+
+      // Prefer options without follow-up input fields
+      const { clean } = await partitionByFollowup(valid.map(v => options[v - 1]));
+      const preferredIndices = clean.length > 0
+        ? clean.map(ci => valid[ci])   // indices into valid[] that are clean
+        : valid;
+      const chosen = preferredIndices[Math.floor(Math.random() * preferredIndices.length)];
       await clickRadioOption(page, options[chosen - 1]);
       await fillFollowupInput(page);
-      console.log(`[Scenario] select_one_of → picked option ${chosen}`);
+      console.log(`[Scenario] select_one_of → picked option ${chosen}${clean.length > 0 && clean.length < valid.length ? ' (preferred no-followup)' : ''}`);
       return [{ type: 'radio', scenarioControlled: true }];
     }
     if (action === 'select_not_in') {
@@ -738,10 +776,14 @@ const executeScenarioAction = async (page, step) => {
       const excludeIdxs = new Set(vals.map(v => v - 1));
       const available = options.filter((_, i) => !excludeIdxs.has(i));
       if (available.length === 0) return null;
-      const chosen = available[Math.floor(Math.random() * available.length)];
+
+      // Prefer options without follow-up input fields
+      const { clean, withFollowup } = await partitionByFollowup(available);
+      const pool = clean.length > 0 ? clean.map(ci => available[ci]) : available;
+      const chosen = pool[Math.floor(Math.random() * pool.length)];
       await clickRadioOption(page, chosen);
       await fillFollowupInput(page);
-      console.log(`[Scenario] select_not_in → picked from ${available.length} available`);
+      console.log(`[Scenario] select_not_in → picked from ${available.length} available${clean.length > 0 && withFollowup.length > 0 ? ` (${withFollowup.length} follow-up options deprioritised)` : ''}`);
       return [{ type: 'radio', scenarioControlled: true }];
     }
     if (action === 'select_random') {
@@ -1150,7 +1192,7 @@ const answerPageWithAI = async (page, persona, scenario, factSheet, intentMap, q
             'anthropic-version': '2023-06-01',
           },
           body: JSON.stringify({
-            model: 'claude-sonnet-4-20250514',
+            model: 'claude-sonnet-4-6',
             max_tokens: 500,
             tools: [{ type: 'web_search_20250305', name: 'web_search' }],
             messages: [{ role: 'user', content: searchPrompt }],
@@ -1215,6 +1257,7 @@ RULES
 6. BRAND QUESTIONS — Only select brands this persona would genuinely know in their industry. Never select implausible/unknown brand names.
 7. CHECKBOX — Select 1–4 compatible options. No contradicting selections.
 8. AVOID "Don't know" / "Prefer not to say" unless persona genuinely could not know.
+9. RADIO OPTIONS: Prefer options that do NOT require a follow-up text entry (i.e. avoid "Other - please specify", "Please state", or any option implying you must type additional detail), UNLESS no clean option fits the persona.
 
 ═══════════════════════════════════════════════
 RETURN ONLY THIS JSON
@@ -1469,7 +1512,7 @@ const resolveQuotaCell = async (persona, projectId, ANTHROPIC_API_KEY) => {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 250,
         system: 'Map a persona to quota dimension values. Return only valid JSON, no explanation.',
         messages: [{
@@ -1540,7 +1583,7 @@ const detectAttentionCheck = async (questionsOnPage, allFields, ANTHROPIC_API_KE
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 200,
         system: 'Detect survey attention/quality check questions. Return only JSON.',
         messages: [{
@@ -1580,7 +1623,7 @@ const updateFactSheet = async (factSheet, answersGiven, questionsOnPage, ANTHROP
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 300,
         system: 'Extract semantic facts from survey answers to update a respondent profile. Return only JSON with new/updated keys. Return {} if nothing meaningful to extract.',
         messages: [{
