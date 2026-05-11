@@ -457,6 +457,21 @@ const fillRemainingInputs = async (page) => {
       const existing = await input.inputValue().catch(() => '');
       if (existing && existing.trim() !== '') continue;
 
+      // Skip spec boxes whose parent radio option was NOT selected
+      // Decipher renders all spec boxes but only the selected option's box should be filled
+      const isOrphanSpecBox = await input.evaluate(el => {
+        let node = el.parentElement;
+        for (let i = 0; i < 6; i++) {
+          if (!node) break;
+          // If this input is inside a radio option container, check if that radio is checked
+          const radio = node.querySelector('input[type="radio"]');
+          if (radio) return !radio.checked;
+          node = node.parentElement;
+        }
+        return false; // Not inside a radio container — fill it normally
+      }).catch(() => false);
+      if (isOrphanSpecBox) continue;
+
       // Detect unit from HTML attrs + surrounding text
       const attrMin = await input.getAttribute('min').catch(() => null);
       const attrMax = await input.getAttribute('max').catch(() => null);
@@ -756,16 +771,115 @@ const executeScenarioAction = async (page, step) => {
       const min = parseFloat(vals[0] ?? 0);
       const max = parseFloat(vals[1] ?? 100);
       const roundTo = parseFloat(action_text) || 1;
-      const inputs = await page.locator("input[type='number'], input[type='text'][class*='num'], input[class*='number']").all();
+      const midpoint = (min + max) / 2;
+
+      // Strategy 1: Direct numeric inputs (no radio involved)
+      const strictInputs = await page.locator("input[type='number']").all();
+      const visibleStrict = [];
+      for (const inp of strictInputs) {
+        if (await inp.isVisible().catch(() => false)) visibleStrict.push(inp);
+      }
+      if (visibleStrict.length > 0) {
+        const results = [];
+        for (const inp of visibleStrict) {
+          const raw = min + Math.random() * (max - min);
+          const rounded = Math.round(raw / roundTo) * roundTo;
+          await inp.fill(String(rounded)).catch(() => {});
+          results.push(rounded);
+        }
+        console.log(`[Scenario] numeric_fill → ${results.join(', ')}`);
+        return [{ type: 'numeric', values: results, scenarioControlled: true }];
+      }
+
+      // Strategy 2: Radio + spec box pattern (Decipher style)
+      // Find the radio option whose label range best contains our target value
+      const allRadios = await page.locator('input[type="radio"]').all();
+      const groupMap = {}; const groupOrder = [];
+      for (const r of allRadios) {
+        const name = await r.getAttribute('name').catch(() => null);
+        if (!name) continue;
+        if (!groupMap[name]) { groupMap[name] = []; groupOrder.push(name); }
+        groupMap[name].push(r);
+      }
+
+      if (groupOrder.length > 0) {
+        const options = groupMap[groupOrder[0]];
+        let bestRadio = null;
+        let bestIdx = -1;
+        let fallbackRadio = null;
+        let fallbackIdx = Math.floor(options.length / 2); // middle option as fallback
+
+        for (let i = 0; i < options.length; i++) {
+          const radio = options[i];
+          const id = await radio.getAttribute('id').catch(() => null);
+          let labelText = '';
+          if (id) labelText = (await page.locator(`label[for="${id}"]`).textContent().catch(() => '')) || '';
+          if (!labelText) labelText = (await radio.locator('xpath=ancestor::label').textContent().catch(() => '')) || '';
+
+          const hasMillion = /\b(million|mn)\b/i.test(labelText);
+          const hasBillion = /\b(billion|bn)\b/i.test(labelText);
+          const hasThousand = /\b(thousand|,000|k)\b/i.test(labelText);
+
+          // Parse range from label
+          const range = extractRange(labelText, hasMillion || hasBillion);
+
+          if (range) {
+            const rangeMin = range.min;
+            const rangeMax = range.max;
+            if (midpoint >= rangeMin && midpoint <= rangeMax) {
+              bestRadio = radio; bestIdx = i; break;
+            }
+          }
+
+          // Handle "Less than X" — target value < X
+          if (/less than|under|below/i.test(labelText)) {
+            const nums = labelText.match(/[\d,.]+/g);
+            if (nums) {
+              let threshold = parseNum(nums[0], hasMillion || hasBillion);
+              if (threshold && midpoint < threshold) {
+                if (!bestRadio) { bestRadio = radio; bestIdx = i; }
+              }
+            }
+          }
+
+          // Handle "Over X / More than X" — target value > X
+          if (/over|more than|greater than|above/i.test(labelText)) {
+            const nums = labelText.match(/[\d,.]+/g);
+            if (nums) {
+              let threshold = parseNum(nums[0], hasMillion || hasBillion);
+              if (threshold && midpoint > threshold) {
+                fallbackRadio = radio; fallbackIdx = i; // keep as candidate but don't break
+              }
+            }
+          }
+        }
+
+        // Pick best match, then fallback, then middle
+        const chosenRadio = bestRadio || fallbackRadio || options[fallbackIdx];
+        const chosenIdx   = bestRadio ? bestIdx : (fallbackRadio ? fallbackIdx : Math.floor(options.length / 2));
+
+        if (chosenRadio) {
+          await clickRadioOption(page, chosenRadio);
+          await fillFollowupInput(page); // handles the revealed spec input
+          console.log(`[Scenario] numeric_fill → clicked radio option ${chosenIdx + 1} (range target: ${min}–${max}), spec box filled by followup handler`);
+          return [{ type: 'numeric', values: [Math.round(midpoint)], scenarioControlled: true }];
+        }
+      }
+
+      // Strategy 3: Last resort — all visible plain text inputs
+      const allTextInputs = await page.locator("input[type='text']").all();
       const results = [];
-      for (const input of inputs) {
-        if (!await input.isVisible().catch(() => false)) continue;
+      for (const inp of allTextInputs) {
+        if (!await inp.isVisible().catch(() => false)) continue;
+        const existing = await inp.inputValue().catch(() => '');
+        if (existing && existing.trim() !== '') continue;
         const raw = min + Math.random() * (max - min);
         const rounded = Math.round(raw / roundTo) * roundTo;
-        await input.fill(String(rounded)).catch(() => {});
+        await inp.fill(String(rounded)).catch(() => {});
         results.push(rounded);
       }
-      console.log(`[Scenario] numeric_fill → ${results.join(', ')}`);
+      if (results.length > 0) console.log(`[Scenario] numeric_fill (fallback text) → ${results.join(', ')}`);
+      else console.warn('[Scenario] numeric_fill: no inputs found on page');
       return [{ type: 'numeric', values: results, scenarioControlled: true }];
     }
   } catch (e) {
@@ -1127,8 +1241,8 @@ Every field above MUST appear in answers. Missing a fieldIndex = unanswered ques
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1400,
+        model: 'claude-sonnet-4-6',
+        max_tokens: 100000,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
       }),
