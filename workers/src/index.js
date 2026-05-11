@@ -779,8 +779,8 @@ const executeScenarioAction = async (page, step) => {
 
       // Prefer options without follow-up input fields
       const { clean, withFollowup } = await partitionByFollowup(available);
-      const pool = clean.length > 0 ? clean.map(ci => available[ci]) : available;
-      const chosen = pool[Math.floor(Math.random() * pool.length)];
+      const candidatePool = clean.length > 0 ? clean.map(ci => available[ci]) : available;
+      const chosen = candidatePool[Math.floor(Math.random() * candidatePool.length)];
       await clickRadioOption(page, chosen);
       await fillFollowupInput(page);
       console.log(`[Scenario] select_not_in → picked from ${available.length} available${clean.length > 0 && withFollowup.length > 0 ? ` (${withFollowup.length} follow-up options deprioritised)` : ''}`);
@@ -1701,7 +1701,7 @@ const prepareSessionAgent = async (persona, scenario, countryLogic, projectId, p
     ? Object.entries(quotaCell).map(([k, v]) => `${k}: ${v}`).join(' × ')
     : 'Not defined — answer based on persona';
 
-  console.log(`[Agent] Ready — cell: ${quotaCellText} | intents: ${intentMap.qualifying.length}Q ${intentMap.disqualifying.length}DQ`);
+  console.log(`[Agent] Ready — cell: ${quotaCellText} | intents: ${intentMap.instructions.length} instructions`);
   return { personaBrief: buildPersonaContext(persona), quotaCellText, intentMap, factSheet };
 };
 
@@ -2089,18 +2089,18 @@ const processSession = async (job) => {
             await page.waitForTimeout(waitMs);
           }
         } else {
-        // AI returned nothing (rate limit hit after retries, or parse failure)
-        // Fall back to random answering which handles all field types
-        console.warn(`[Worker] Page ${pageCount}: AI returned no answers — falling back to random`);
-        await logSessionEvent(sessionId, 'flag_warning', {
-          flag: 'AI_FALLBACK_RANDOM',
-          message: `AI failed on page ${pageCount} (rate limit or parse error) — random answering used`,
-          page: pageCount,
-        });
-        answersGiven = await answerPage(page, persona, readingSpeed);
-        questionCount++;
-      }
-    } else {
+          // AI returned nothing (rate limit hit after retries, or parse failure)
+          // Fall back to random answering which handles all field types
+          console.warn(`[Worker] Page ${pageCount}: AI returned no answers — falling back to random`);
+          await logSessionEvent(sessionId, 'flag_warning', {
+            flag: 'AI_FALLBACK_RANDOM',
+            message: `AI failed on page ${pageCount} (rate limit or parse error) — random answering used`,
+            page: pageCount,
+          });
+          answersGiven = await answerPage(page, persona, readingSpeed);
+          questionCount++;
+        }
+      } else {
       // AI disabled (no API key) — use random as last resort
       console.log(`[Worker] Page ${pageCount}: AI disabled — using random answering`);
       answersGiven = await answerPage(page, persona, readingSpeed);
