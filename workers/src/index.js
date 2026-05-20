@@ -304,10 +304,90 @@ const fillFollowupInput = async (page) => {
   try {
     await page.waitForTimeout(900);
 
-    // ── Check for revealed text/number inputs first ────────────────────────
+    // ── Only fill inputs that are children of the currently selected radio ──
+    // This prevents filling spec boxes belonging to unselected options
+    const checkedRadioContainer = await page.evaluate(() => {
+      const checked = document.querySelector('input[type="radio"]:checked');
+      if (!checked) return null;
+      // Walk up to find the option container (td, li, div that holds just this option)
+      let node = checked.parentElement;
+      for (let i = 0; i < 6; i++) {
+        if (!node) break;
+        // Stop if container holds multiple radios — we've gone too far up
+        if (node.querySelectorAll('input[type="radio"]').length > 1) break;
+        // Check if this container has a text/number input
+        const inp = node.querySelector('input[type="text"], input[type="number"], textarea');
+        if (inp) return true; // container with followup exists
+        node = node.parentElement;
+      }
+      return false;
+    }).catch(() => false);
+
+    // No followup input inside the selected radio's container — skip entirely
+    if (!checkedRadioContainer) {
+      // Still check for standalone selects (not inside radio containers)
+      const selects = await page.locator('select').all();
+      for (const sel of selects) {
+        if (!await sel.isVisible().catch(() => false)) continue;
+        const current = await sel.inputValue().catch(() => '');
+        const selectedText = await sel.evaluate(el =>
+          el.options[el.selectedIndex]?.text || ''
+        ).catch(() => '');
+        const isPlaceholder = !current || current.trim() === '' ||
+          /^(select one|--|please select|choose|select\.\.\.)/i.test(selectedText.trim());
+        if (!isPlaceholder) continue;
+        // Only fill if this select is inside the checked radio's container
+        const isInCheckedContainer = await sel.evaluate(el => {
+          const checked = document.querySelector('input[type="radio"]:checked');
+          if (!checked) return false;
+          let node = checked.parentElement;
+          for (let i = 0; i < 6; i++) {
+            if (!node) break;
+            if (node.contains(el)) return true;
+            if (node.querySelectorAll('input[type="radio"]').length > 1) break;
+            node = node.parentElement;
+          }
+          return false;
+        }).catch(() => false);
+        if (!isInCheckedContainer) continue;
+        const optEls = await sel.locator('option').all();
+        const validOpts = [];
+        for (const opt of optEls) {
+          const val  = await opt.getAttribute('value').catch(() => '');
+          const text = (await opt.textContent().catch(() => '')).trim();
+          if (val && val !== '' && !/^(select one|--|please select)/i.test(text)) {
+            validOpts.push(val);
+          }
+        }
+        if (validOpts.length > 0) {
+          const chosen = validOpts[Math.floor(Math.random() * validOpts.length)];
+          await sel.selectOption(chosen).catch(() => {});
+          console.log(`[Scenario] ✓ Auto-selected follow-up dropdown: "${chosen}"`);
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // ── Check for revealed text/number inputs inside checked radio container ──
     const inputs = await page.locator("input[type='text'], input[type='number']").all();
     for (const input of inputs) {
       if (!await input.isVisible().catch(() => false)) continue;
+
+      // Only fill if this input is inside the currently selected radio's container
+      const isInCheckedContainer = await input.evaluate(el => {
+        const checked = document.querySelector('input[type="radio"]:checked');
+        if (!checked) return false;
+        let node = checked.parentElement;
+        for (let i = 0; i < 6; i++) {
+          if (!node) break;
+          if (node.contains(el)) return true;
+          if (node.querySelectorAll('input[type="radio"]').length > 1) break;
+          node = node.parentElement;
+        }
+        return false;
+      }).catch(() => false);
+      if (!isInCheckedContainer) continue;
 
       let min = null;
       let max = null;
@@ -404,6 +484,7 @@ const fillFollowupInput = async (page) => {
     }
 
     // ── Check for revealed <select> dropdown (e.g. Image 3: radio → dropdown) ──
+// ── Check for revealed <select> dropdown inside checked radio container ──
     const selects = await page.locator('select').all();
     for (const sel of selects) {
       if (!await sel.isVisible().catch(() => false)) continue;
@@ -413,7 +494,22 @@ const fillFollowupInput = async (page) => {
       ).catch(() => '');
       const isPlaceholder = !current || current.trim() === '' ||
         /^(select one|--|please select|choose|select\.\.\.)/i.test(selectedText.trim());
-      if (!isPlaceholder) continue; // already has a real answer
+      if (!isPlaceholder) continue;
+
+      // Only fill if inside the checked radio's container
+      const isInCheckedContainer = await sel.evaluate(el => {
+        const checked = document.querySelector('input[type="radio"]:checked');
+        if (!checked) return false;
+        let node = checked.parentElement;
+        for (let i = 0; i < 6; i++) {
+          if (!node) break;
+          if (node.contains(el)) return true;
+          if (node.querySelectorAll('input[type="radio"]').length > 1) break;
+          node = node.parentElement;
+        }
+        return false;
+      }).catch(() => false);
+      if (!isInCheckedContainer) continue;
 
       const optEls = await sel.locator('option').all();
       const validOpts = [];
@@ -2005,9 +2101,14 @@ const processSession = async (job) => {
 // ── Load AI provider config + resolve API key from Docker secret ──────────
   let providerConfig = null;
 
+  console.log(`[Worker] aiProviderId received: ${aiProviderId || 'NONE'}`);
   if (aiProviderId) {
-    const providerRecord = await getProviderByIdInternal(aiProviderId).catch(() => null);
+    const providerRecord = await getProviderByIdInternal(aiProviderId).catch((e) => {
+      console.warn(`[Worker] getProviderByIdInternal failed: ${e.message}`);
+      return null;
+    });
     if (providerRecord) {
+      console.log(`[Worker] Provider record found: ${providerRecord.name} | secret: ${providerRecord.secret_name}`);
       const resolvedKey = readSecret(providerRecord.secret_name);
       if (resolvedKey) {
         providerConfig = {
@@ -2016,11 +2117,20 @@ const processSession = async (job) => {
           model:         providerRecord.model,
           base_url:      providerRecord.base_url || null,
         };
-        console.log(`[Worker] AI provider: ${providerRecord.name} (${providerRecord.provider_type} / ${providerRecord.model})`);
+        console.log(`[Worker] ✓ AI provider loaded: ${providerRecord.name} (${providerRecord.provider_type} / ${providerRecord.model})`);
       } else {
-        console.warn(`[Worker] ⚠️ Docker secret "${providerRecord.secret_name}" not found for provider "${providerRecord.name}"`);
+        console.warn(`[Worker] ⚠️ Docker secret "${providerRecord.secret_name}" not found at /run/secrets/${providerRecord.secret_name} — falling back to Anthropic`);
+        // List available secrets to help diagnose
+        try {
+          const available = fs.readdirSync('/run/secrets/').join(', ');
+          console.warn(`[Worker] Available secrets: ${available}`);
+        } catch {}
       }
+    } else {
+      console.warn(`[Worker] Provider record not found for id: ${aiProviderId}`);
     }
+  } else {
+    console.warn(`[Worker] No aiProviderId in job — will use env fallback`);
   }
 
   // Fallback: env key as Anthropic
