@@ -328,7 +328,20 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
   const [allScenarios, setAllScenarios] = useState([]);
   const [selectedScenarios, setSelectedScenarios] = useState([]);
   const [scenariosLoading, setScenariosLoading] = useState(true);
-  const [testingMode, setTestingMode] = useState("live"); // 'internal' | 'live'
+  const [testingMode, setTestingMode] = useState("internal"); // 'internal' | 'live'
+  const [aiProviders, setAiProviders] = useState([]);
+  const [selectedProvider, setSelectedProvider] = useState('');
+
+  useEffect(() => {
+    api.get('/ai-providers')
+      .then(res => {
+        const list = res.data.providers || [];
+        setAiProviders(list);
+        const def = list.find(p => p.is_default && p.is_active);
+        if (def) setSelectedProvider(def.id);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     api
@@ -412,6 +425,7 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
         proxyCountry: countryCodes.length > 0 ? countryCodes : null,
         scenarioIds: selectedScenarios,
         internalTesting: testingMode === "internal",
+        aiProviderId: selectedProvider || null,
       });
       onTriggered();
     } catch (err) {
@@ -1067,6 +1081,27 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
             </div>
           )}
         </div>
+
+        {/* AI Provider selector */}
+        {aiProviders.length > 0 && (
+          <div style={{ marginBottom: 18 }}>
+            <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#374151', fontFamily: FONT, display: 'block', marginBottom: 6 }}>
+              AI Provider
+            </label>
+            <select
+              style={{ width: '100%', padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.88rem', fontFamily: FONT, outline: 'none', background: 'white' }}
+              value={selectedProvider}
+              onChange={e => setSelectedProvider(e.target.value)}
+            >
+              <option value="">Use default provider</option>
+              {aiProviders.filter(p => p.is_active).map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.name} — {p.model} {p.is_default ? '(default)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div
           style={{

@@ -9,6 +9,7 @@ import Projects      from "./pages/Projects";
 import ProjectDetail from "./pages/ProjectDetail";
 import Personas      from "./pages/Personas";
 import Sessions      from "./pages/Sessions";
+import AIProviders   from './pages/AIProviders';
 
 // ─── Auth Context ─────────────────────────────────────────────────────────────
 export const AuthContext = createContext(null);
@@ -86,6 +87,10 @@ export default function App() {
 
         <Route path="/sessions" element={
           <ProtectedRoute><Sessions /></ProtectedRoute>
+        } />
+
+        <Route path="/ai-providers" element={
+          <ProtectedRoute><AIProviders /></ProtectedRoute>
         } />
 
         {/* Wildcard — ALWAYS last */}

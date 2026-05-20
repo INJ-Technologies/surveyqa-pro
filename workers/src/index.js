@@ -32,6 +32,7 @@ const {
 } = require("../../backend/src/services/decipherEngine");
 const { pool } = require("../../backend/src/db/index");
 const { getActiveScenarios } = require("../../backend/src/db/scenarios");
+const { getProviderByIdInternal }   = require("../../backend/src/db/ai_providers");
 
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY) || 5;
 const MAX_PAGES = 200;
@@ -1119,12 +1120,145 @@ const formatFieldsForPrompt = (fields) => {
   }).join('\n\n');
 };
 
-const answerPageWithAI = async (page, persona, scenario, factSheet, intentMap, quotaCellText, questionsOnPage, pageOptions, ANTHROPIC_API_KEY) => {
+// ══════════════════════════════════════════════════════════════════════════════
+// MULTI-PROVIDER AI CALLER
+// ══════════════════════════════════════════════════════════════════════════════
+
+const PROVIDER_MODELS = {
+  anthropic:   { default: 'claude-sonnet-4-6' },
+  openrouter:  { default: 'google/gemini-2.5-flash' },
+  openai:      { default: 'gpt-4o-mini' },
+};
+
+const callAIProvider = async (providerConfig, { systemPrompt, staticPart, dynamicPart, maxTokens = 1400, isSearch = false, searchPrompt = null }) => {
+ const { provider_type, api_key, model, base_url } = providerConfig;
+
+  // ── Anthropic (native format + prompt caching) ────────────────────────────
+  if (provider_type === 'anthropic') {
+    const callWithRetry = async (body, maxRetries = 4) => {
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type':    'application/json',
+            'x-api-key':       api_key,
+            'anthropic-version': '2023-06-01',
+            'anthropic-beta':  'prompt-caching-2024-07-31',
+          },
+          body: JSON.stringify(body),
+        });
+        if (res.ok) return res;
+        if (res.status === 429 || res.status === 529) {
+          const retryAfter = parseInt(res.headers?.get?.('retry-after') || '0');
+          if (retryAfter > 60) {
+            console.warn(`[AI] Rate limited — retry-after ${retryAfter}s too long, falling back`);
+            return null;
+          }
+          const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(1000 * Math.pow(2, attempt), 30000);
+          console.warn(`[AI] Rate limited (${res.status}) — attempt ${attempt}/${maxRetries}, waiting ${Math.round(waitMs/1000)}s`);
+          await new Promise(r => setTimeout(r, waitMs));
+          continue;
+        }
+        console.warn(`[AI] Anthropic error ${res.status}`);
+        return res;
+      }
+      return null;
+    };
+
+    if (isSearch && searchPrompt) {
+      const res = await callWithRetry({
+        model, max_tokens: 500,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        messages: [{ role: 'user', content: searchPrompt }],
+      });
+      if (!res?.ok) return null;
+      const data = await res.json();
+      return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+    }
+
+    const res = await callWithRetry({
+      model, max_tokens: maxTokens,
+      system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: staticPart, cache_control: { type: 'ephemeral' } },
+          { type: 'text', text: dynamicPart },
+        ]
+      }],
+    });
+    if (!res?.ok) return null;
+    const data = await res.json();
+    return data.content?.[0]?.text || '';
+  }
+
+  // ── OpenRouter + OpenAI (OpenAI-compatible format) ────────────────────────
+  const baseUrl = providerConfig.base_url ||
+    (provider_type === 'openrouter'
+      ? 'https://openrouter.ai/api/v1/chat/completions'
+      : 'https://api.openai.com/v1/chat/completions');
+
+  const headers = {
+    'Content-Type':  'application/json',
+    'Authorization': `Bearer ${api_key}`,
+  };
+  if (provider_type === 'openrouter') {
+    headers['HTTP-Referer'] = 'https://surveyqa.pro';
+    headers['X-Title']      = 'SurveyQA Pro';
+  }
+
+  const callWithRetry = async (body, maxRetries = 3) => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const res = await fetch(baseUrl, {
+        method: 'POST', headers, body: JSON.stringify(body),
+      });
+      if (res.ok) return res;
+      if (res.status === 429) {
+        const waitMs = Math.min(1000 * Math.pow(2, attempt), 30000);
+        console.warn(`[AI] ${provider_type} rate limited — waiting ${Math.round(waitMs/1000)}s`);
+        await new Promise(r => setTimeout(r, waitMs));
+        continue;
+      }
+      console.warn(`[AI] ${provider_type} error ${res.status}`);
+      return res;
+    }
+    return null;
+  };
+
+  if (isSearch && searchPrompt) {
+    // OpenRouter/OpenAI don't have built-in web search — use knowledge only
+    const res = await callWithRetry({
+      model, max_tokens: 500,
+      messages: [
+        { role: 'system', content: 'Provide current industry benchmarks and realistic figures. Be specific with numbers.' },
+        { role: 'user',   content: searchPrompt },
+      ],
+    });
+    if (!res?.ok) return null;
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
+
+  const fullUserContent = staticPart + '\n\n' + dynamicPart;
+  const res = await callWithRetry({
+    model, max_tokens: maxTokens,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user',   content: fullUserContent },
+    ],
+  });
+  if (!res?.ok) return null;
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || '';
+};
+
+const answerPageWithAI = async (page, persona, scenario, factSheet, intentMap, quotaCellText, questionsOnPage, pageOptions, providerConfig) => {
   try {
-    if (!ANTHROPIC_API_KEY) {
-      console.warn('[AI] No API key — falling back to random');
+    if (!providerConfig?.api_key) {
+      console.warn('[AI] No provider config — falling back to random');
       return null;
     }
+    const ANTHROPIC_API_KEY = providerConfig.api_key; // keep for legacy refs below
 
     const allFields = await captureAllPageFields(page);
     const actionableFields = allFields.filter(f =>
@@ -1195,23 +1329,12 @@ const answerPageWithAI = async (page, persona, scenario, factSheet, intentMap, q
         const industry = attrs.industry || 'enterprise';
         const searchPrompt = `Find current benchmarks and realistic figures for answering these survey questions. Persona: ${attrs.designation || 'senior executive'} in ${industry}, large enterprise, USA. Questions: ${questionsOnPage.join('. ')}. Provide specific numbers, percentages, dollar amounts relevant to this context.`;
 
-        const searchRes = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': ANTHROPIC_API_KEY,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({
-            model: 'claude-sonnet-4-6',
-            max_tokens: 500,
-            tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-            messages: [{ role: 'user', content: searchPrompt }],
-          }),
+        const searchResult = await callAIProvider(providerConfig, {
+          systemPrompt: 'Provide current industry benchmarks and realistic figures.',
+          staticPart: '', dynamicPart: '',
+          isSearch: true, searchPrompt,
         });
-        const searchData = await searchRes.json();
-        const textBlocks = (searchData.content || []).filter(b => b.type === 'text');
-        webSearchContext = textBlocks.map(b => b.text).join('\n').slice(0, 600);
+        webSearchContext = (searchResult || '').slice(0, 600);
         if (webSearchContext) console.log(`[AI] Web search context: ${webSearchContext.length} chars`);
       } catch (e) {
         console.warn('[AI] Web search error:', e.message);
@@ -1223,7 +1346,8 @@ const answerPageWithAI = async (page, persona, scenario, factSheet, intentMap, q
       `Your answers must be realistic, internally coherent, and NEVER contradict the session fact sheet. ` +
       `You respond ONLY with valid JSON — no markdown, no explanation outside JSON.`;
 
-const userPrompt =
+    // ── Static: persona + quota + scenario name only (cached per session) ─
+    const staticPromptPart =
 `═══════════════════════════════════════════════
 PERSONA — YOU ARE THIS PERSON
 ═══════════════════════════════════════════════
@@ -1235,8 +1359,11 @@ QUOTA CELL YOU ARE FILLING
 ${quotaCellText}
 Your screener answers MUST qualify for this demographic cell.
 
-${scenarioContext ? `═══════════════════════════════════════════════\n${scenarioContext}\n═══════════════════════════════════════════════\n` : ''}
-═══════════════════════════════════════════════
+${scenarioContext ? `═══════════════════════════════════════════════\n${scenarioContext}\n═══════════════════════════════════════════════\n` : ''}`;
+
+    // ── Dynamic: intents + fact sheet + history + current page ────────────
+    const dynamicPromptPart =
+`═══════════════════════════════════════════════
 SCENARIO & ROUTING CONSTRAINTS FOR THIS PAGE
 ═══════════════════════════════════════════════
 ${intentConstraintsText}
@@ -1320,8 +1447,7 @@ RETURN ONLY THIS JSON — NO MARKDOWN, NO EXPLANATION
   "intentApplied": "scenario constraint applied, or 'none — persona-driven'",
   "reasoning": "one sentence approach for this page",
   "newFacts": {
-    "any_new_key": "value extracted from answers given on this page — snake_case keys only",
-    "committed_numbers.budget_total": 5000000
+    "any_new_key": "value extracted from answers given on this page — snake_case keys only"
   },
   "answers": [
     { "fieldIndex": 0, "fieldType": "radio",    "selectedIndex": 2 },
@@ -1334,57 +1460,14 @@ RETURN ONLY THIS JSON — NO MARKDOWN, NO EXPLANATION
 Every field above MUST appear in answers array. newFacts may be {} if nothing new to extract.`;
 
 // ── Retry wrapper with exponential backoff for rate limits ────────────
-    const callWithRetry = async (body, maxRetries = 4) => {
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        const res = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': ANTHROPIC_API_KEY,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify(body),
-        });
-
-        if (res.ok) return res;
-
-        if (res.status === 429 || res.status === 529) {
-          const retryAfter = parseInt(res.headers?.get?.('retry-after') || '0');
-
-          // If Anthropic says wait more than 30s, don't retry — go straight to fallback
-          // This prevents 7-10 minute page freezes on free tier
-          if (retryAfter > 60) {
-            console.warn(`[AI] Rate limited — retry-after ${retryAfter}s is too long, falling back immediately`);
-            return null;
-          }
-
-          const waitMs = retryAfter > 0
-            ? retryAfter * 1000
-            : Math.min(1000 * Math.pow(2, attempt), 30000); // 2s, 4s, 8s, 16s, max 30s
-          console.warn(`[AI] Rate limited (${res.status}) — attempt ${attempt}/${maxRetries}, waiting ${Math.round(waitMs/1000)}s`);
-          await new Promise(r => setTimeout(r, waitMs));
-          continue;
-        }
-
-        // Non-retryable error
-        console.warn(`[AI] Claude API error ${res.status}`);
-        return res;
-      }
-      console.warn(`[AI] Max retries reached — giving up`);
-      return null;
-    };
-
-    const apiRes = await callWithRetry({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1400,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
+    const rawText = await callAIProvider(providerConfig, {
+      systemPrompt,
+      staticPart:  staticPromptPart,
+      dynamicPart: dynamicPromptPart,
+      maxTokens:   1400,
     });
 
-    if (!apiRes || !apiRes.ok) return null;
-
-    const apiData = await apiRes.json();
-    const rawText = apiData.content?.[0]?.text || '';
+    if (!rawText) return null;
     let decisions;
     try {
       decisions = JSON.parse(rawText.replace(/```json|```/g, '').trim());
@@ -1655,25 +1738,14 @@ const resolveQuotaCell = async (persona, projectId, ANTHROPIC_API_KEY) => {
       .map(([d, vals]) => `${d}: ${[...vals].join(', ')}`)
       .join('\n');
 
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 250,
-        system: 'Map a persona to quota dimension values. Return only valid JSON, no explanation.',
-        messages: [{
-          role: 'user',
-          content: `Persona:\n${buildPersonaContext(persona)}\n\nAvailable quota dimensions:\n${dimensionsText}\n\nSelect the best matching value for each dimension. Return JSON: {"DimensionName": "matched_value", ...}`,
-        }],
-      }),
+    const mockProvider = { provider_type: 'anthropic', api_key: ANTHROPIC_API_KEY, model: 'claude-sonnet-4-6' };
+    const cellText = await callAIProvider(mockProvider, {
+      systemPrompt: 'Map a persona to quota dimension values. Return only valid JSON, no explanation.',
+      staticPart: '',
+      dynamicPart: `Persona:\n${buildPersonaContext(persona)}\n\nAvailable quota dimensions:\n${dimensionsText}\n\nSelect the best matching value for each dimension. Return JSON: {"DimensionName": "matched_value", ...}`,
+      maxTokens: 250,
     });
-    const data = await res.json();
-    const cell = JSON.parse((data.content?.[0]?.text || '{}').replace(/```json|```/g, '').trim());
+    const cell = JSON.parse((cellText || '{}').replace(/```json|```/g, '').trim());
     console.log(`[Agent] Quota cell resolved: ${JSON.stringify(cell)}`);
     return cell;
   } catch (e) {
@@ -1841,7 +1913,7 @@ const processSession = async (job) => {
   const {
     sessionId, projectId, personaId, surveyUrl,
     responseId, proxyProvider, proxyCountry, deviceType, scenarioIds,
-    internalTesting,
+    internalTesting, aiProviderId,
   } = job.data;
 
   console.log(`[Worker] Session ${sessionId} | Country: ${proxyCountry} | ResponseID: ${responseId}`);
@@ -1912,16 +1984,42 @@ const processSession = async (job) => {
     factSheet:     initFactSheet(persona, proxyCountry),
   };
 
-  const ANTHROPIC_API_KEY =
-    readSecret('anthropic_api_key_v1') ||
-    process.env.ANTHROPIC_API_KEY ||
-    null;
+// ── Load AI provider config + resolve API key from Docker secret ──────────
+  let providerConfig = null;
 
-  if (!ANTHROPIC_API_KEY) {
-    console.warn('⚠️ Anthropic API key not found. AI features disabled.');
+  if (aiProviderId) {
+    const providerRecord = await getProviderByIdInternal(aiProviderId).catch(() => null);
+    if (providerRecord) {
+      const resolvedKey = readSecret(providerRecord.secret_name);
+      if (resolvedKey) {
+        providerConfig = {
+          provider_type: providerRecord.provider_type,
+          api_key:       resolvedKey,
+          model:         providerRecord.model,
+          base_url:      providerRecord.base_url || null,
+        };
+        console.log(`[Worker] AI provider: ${providerRecord.name} (${providerRecord.provider_type} / ${providerRecord.model})`);
+      } else {
+        console.warn(`[Worker] ⚠️ Docker secret "${providerRecord.secret_name}" not found for provider "${providerRecord.name}"`);
+      }
+    }
   }
 
-  const useAI = !!ANTHROPIC_API_KEY;
+  // Fallback: env key as Anthropic
+  if (!providerConfig) {
+    const fallbackKey = readSecret('anthropic_api_key_v1') || process.env.ANTHROPIC_API_KEY || null;
+    if (fallbackKey) {
+      providerConfig = { provider_type: 'anthropic', api_key: fallbackKey, model: 'claude-sonnet-4-6', base_url: null };
+      console.log('[Worker] AI provider: fallback (anthropic env key)');
+    }
+  }
+
+  if (!providerConfig) {
+    console.warn('⚠️ No AI provider resolved. AI features disabled.');
+  }
+
+  const useAI          = !!providerConfig;
+  const ANTHROPIC_API_KEY = providerConfig?.api_key || null; // legacy compat for resolveQuotaCell
 
   // Pre-session agent setup: quota cell mapping + intent compilation
   if (useAI && persona) {
@@ -2077,7 +2175,7 @@ const processSession = async (job) => {
           page, persona, scenario,
           agentSetup.factSheet, agentSetup.intentMap, agentSetup.quotaCellText,
           questionsOnPage, pageOptionsBefore,
-          ANTHROPIC_API_KEY
+          providerConfig
         );
         if (answersGiven?.length > 0) {
           questionCount++;

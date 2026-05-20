@@ -13,6 +13,7 @@ const quotaRoutes = require('./routes/quota');
 const sessionRoutes = require('./routes/sessions');
 const proxyRoutes = require('./routes/proxy');
 const scenarioRoutes = require('./routes/scenarios');
+const aiProviderRoutes = require('./routes/ai_providers');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -76,6 +77,7 @@ app.use('/api/projects/:id/quota', quotaRoutes);
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/proxy', proxyRoutes);
 app.use('/api/scenarios', scenarioRoutes);
+app.use('/api/ai-providers', aiProviderRoutes);
 
 // ─── 404 handler ─────────────────────────────────────────────────────────────
 app.use('/api/*', (req, res) => {
