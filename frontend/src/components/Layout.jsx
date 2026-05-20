@@ -11,6 +11,7 @@ import {
   X,
   ChevronRight,
   Bell,
+  Bot,
 } from "lucide-react";
 
 const NAV = [
