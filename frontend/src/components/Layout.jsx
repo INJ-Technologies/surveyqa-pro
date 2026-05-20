@@ -18,6 +18,7 @@ const NAV = [
   { path: "/projects", label: "Projects", icon: FolderKanban },
   { path: "/personas", label: "Personas", icon: Users },
   { path: "/sessions", label: "Sessions", icon: Activity },
+  { path: "/ai_providers", label: "AI Providers", icon: Bot },
 ];
 
 export default function Layout({ children, title }) {
