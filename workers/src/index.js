@@ -304,226 +304,162 @@ const fillFollowupInput = async (page) => {
   try {
     await page.waitForTimeout(900);
 
-    // ── Only fill inputs that are children of the currently selected radio ──
-    // This prevents filling spec boxes belonging to unselected options
-    const checkedRadioContainer = await page.evaluate(() => {
+    // ── Find inputs/selects that belong to the currently checked radio ──────
+    // Strategy: walk up from the checked radio to its option container
+    // (the nearest ancestor that holds only this radio, not others),
+    // then look for inputs/selects within that container only.
+    const filledByContainer = await page.evaluate(() => {
       const checked = document.querySelector('input[type="radio"]:checked');
-      if (!checked) return null;
-      // Walk up to find the option container (td, li, div that holds just this option)
-      let node = checked.parentElement;
-      for (let i = 0; i < 6; i++) {
-        if (!node) break;
-        // Stop if container holds multiple radios — we've gone too far up
-        if (node.querySelectorAll('input[type="radio"]').length > 1) break;
-        // Check if this container has a text/number input
-        const inp = node.querySelector('input[type="text"], input[type="number"], textarea');
-        if (inp) return true; // container with followup exists
-        node = node.parentElement;
-      }
-      return false;
-    }).catch(() => false);
+      if (!checked) return { found: false };
 
-    // No followup input inside the selected radio's container — skip entirely
-    if (!checkedRadioContainer) {
-      // Still check for standalone selects (not inside radio containers)
+      // Walk up to find the option container boundary
+      let container = checked.parentElement;
+      for (let i = 0; i < 8; i++) {
+        if (!container) break;
+        const sibling = container.parentElement;
+        if (!sibling) break;
+        // Stop walking up once the parent contains more than one radio
+        // — that means we've found the option-level container
+        if (sibling.querySelectorAll('input[type="radio"]').length > 1) break;
+        container = sibling;
+      }
+
+      // Now look for a text/number input within this container
+      const inp = container?.querySelector('input[type="text"], input[type="number"]');
+      if (inp && inp.offsetParent) {
+        return {
+          found: true,
+          type: 'input',
+          hasMin: inp.min || null,
+          hasMax: inp.max || null,
+        };
+      }
+
+      // Look for a select within this container
+      const sel = container?.querySelector('select');
+      if (sel && sel.offsetParent) {
+        const opts = Array.from(sel.options)
+          .filter(o => o.value && o.value !== '' && !/^(select one|--|please select)/i.test(o.text))
+          .map(o => o.value);
+        if (opts.length > 0) return { found: true, type: 'select', options: opts };
+      }
+
+      return { found: false };
+    }).catch(() => ({ found: false }));
+
+    if (!filledByContainer.found) return false;
+
+    if (filledByContainer.type === 'select') {
+      // Click the select inside the checked radio container
+      const chosen = filledByContainer.options[Math.floor(Math.random() * filledByContainer.options.length)];
+      // Find and click the select that's visible
       const selects = await page.locator('select').all();
       for (const sel of selects) {
         if (!await sel.isVisible().catch(() => false)) continue;
-        const current = await sel.inputValue().catch(() => '');
-        const selectedText = await sel.evaluate(el =>
-          el.options[el.selectedIndex]?.text || ''
-        ).catch(() => '');
-        const isPlaceholder = !current || current.trim() === '' ||
-          /^(select one|--|please select|choose|select\.\.\.)/i.test(selectedText.trim());
-        if (!isPlaceholder) continue;
-        // Only fill if this select is inside the checked radio's container
-        const isInCheckedContainer = await sel.evaluate(el => {
+        const isInChecked = await sel.evaluate(el => {
           const checked = document.querySelector('input[type="radio"]:checked');
           if (!checked) return false;
-          let node = checked.parentElement;
-          for (let i = 0; i < 6; i++) {
-            if (!node) break;
-            if (node.contains(el)) return true;
-            if (node.querySelectorAll('input[type="radio"]').length > 1) break;
-            node = node.parentElement;
+          let container = checked.parentElement;
+          for (let i = 0; i < 8; i++) {
+            if (!container) break;
+            if (container.contains(el)) return true;
+            const sibling = container.parentElement;
+            if (!sibling || sibling.querySelectorAll('input[type="radio"]').length > 1) break;
+            container = sibling;
           }
           return false;
         }).catch(() => false);
-        if (!isInCheckedContainer) continue;
-        const optEls = await sel.locator('option').all();
-        const validOpts = [];
-        for (const opt of optEls) {
-          const val  = await opt.getAttribute('value').catch(() => '');
-          const text = (await opt.textContent().catch(() => '')).trim();
-          if (val && val !== '' && !/^(select one|--|please select)/i.test(text)) {
-            validOpts.push(val);
-          }
-        }
-        if (validOpts.length > 0) {
-          const chosen = validOpts[Math.floor(Math.random() * validOpts.length)];
-          await sel.selectOption(chosen).catch(() => {});
-          console.log(`[Scenario] ✓ Auto-selected follow-up dropdown: "${chosen}"`);
-          return true;
-        }
-      }
-      return false;
-    }
-
-    // ── Check for revealed text/number inputs inside checked radio container ──
-    const inputs = await page.locator("input[type='text'], input[type='number']").all();
-    for (const input of inputs) {
-      if (!await input.isVisible().catch(() => false)) continue;
-
-      // Only fill if this input is inside the currently selected radio's container
-      const isInCheckedContainer = await input.evaluate(el => {
-        const checked = document.querySelector('input[type="radio"]:checked');
-        if (!checked) return false;
-        let node = checked.parentElement;
-        for (let i = 0; i < 6; i++) {
-          if (!node) break;
-          if (node.contains(el)) return true;
-          if (node.querySelectorAll('input[type="radio"]').length > 1) break;
-          node = node.parentElement;
-        }
-        return false;
-      }).catch(() => false);
-      if (!isInCheckedContainer) continue;
-
-      let min = null;
-      let max = null;
-
-      // Strategy 1: HTML min/max attributes
-      const attrMin = await input.getAttribute('min').catch(() => null);
-      const attrMax = await input.getAttribute('max').catch(() => null);
-      if (attrMin !== null && attrMin !== '') min = parseFloat(attrMin);
-      if (attrMax !== null && attrMax !== '') max = parseFloat(attrMax);
-
-      // Detect if input has a unit label beside it (million, billion, %)
-      const adjacentText = await input.evaluate(el => {
-        const parent = el.parentElement;
-        return (parent?.innerText || parent?.textContent || '').toLowerCase();
-      }).catch(() => '');
-      const hasUnitLabel = /\b(million|billion|thousand|mn|bn|%)\b/i.test(adjacentText);
-
-      // Strategy 2: range from the currently selected radio label text
-      if (min === null || max === null) {
-        const selectedLabel = await page.evaluate(() => {
-          const checked = document.querySelector('input[type="radio"]:checked');
-          if (!checked) return '';
-          if (checked.id) {
-            const lbl = document.querySelector(`label[for="${checked.id}"]`);
-            if (lbl) return lbl.innerText || lbl.textContent || '';
-          }
-          const parentLabel = checked.closest('label');
-          if (parentLabel) return parentLabel.innerText || parentLabel.textContent || '';
-          return '';
-        }).catch(() => '');
-
-        if (selectedLabel) {
-          const parsed = extractRange(selectedLabel, hasUnitLabel);
-          if (parsed) {
-            min = parsed.min;
-            max = parsed.max;
-            console.log(`[Scenario] Range from selected radio label: ${min}–${max}`);
-          }
-        }
-      }
-
-      // Strategy 3: range from nearby parent text
-      if (min === null || max === null) {
-        const nearbyText = await input.evaluate(el => {
-          let node = el.parentElement;
-          for (let i = 0; i < 5; i++) {
-            const t = (node?.innerText || '').trim();
-            if (t.length > 10) return t;
-            node = node?.parentElement;
-          }
-          return '';
-        }).catch(() => '');
-        const parsed = extractRange(nearbyText, hasUnitLabel);
-        if (parsed) { min = parsed.min; max = parsed.max; }
-      }
-
-      // Strategy 4: error/hint elements only
-      if (min === null || max === null) {
-        const errorText = await page.evaluate(() => {
-          const selectors = ['.error', '.validation-error', '.field-error', '[class*="error"]', '[class*="invalid"]', '.hint', '.help-text', '[class*="hint"]'];
-          const texts = [];
-          for (const sel of selectors) {
-            document.querySelectorAll(sel).forEach(el => {
-              const t = (el.innerText || el.textContent || '').trim();
-              if (t) texts.push(t);
-            });
-          }
-          return texts.join(' ');
-        }).catch(() => '');
-        if (errorText) {
-          const parsed = extractRange(errorText, hasUnitLabel);
-          if (parsed) { min = parsed.min; max = parsed.max; }
-        }
-      }
-
-      // Strategy 5: placeholder fallback
-      if (min === null && max === null) {
-        const placeholder = await input.getAttribute('placeholder').catch(() => '');
-        const parsed = extractRange(placeholder || '', false);
-        if (parsed) { min = parsed.min; max = parsed.max; }
-      }
-
-      // Ensure valid range
-      if (min === null) min = 0;
-      if (max === null) max = min * 2 || 100;
-      if (min > max) [min, max] = [max, min];
-      if (min === max) max = min + Math.max(1, Math.floor(min * 0.1));
-
-      const rawValue = min + Math.random() * (max - min);
-      const value = smartRound(rawValue, min, max);
-      await input.fill(String(value)).catch(() => {});
-      console.log(`[Scenario] ✓ Auto-filled follow-up input: ${value} (range: ${min}–${max}, unitLabel: ${hasUnitLabel})`);
-      return true;
-    }
-
-    // ── Check for revealed <select> dropdown (e.g. Image 3: radio → dropdown) ──
-// ── Check for revealed <select> dropdown inside checked radio container ──
-    const selects = await page.locator('select').all();
-    for (const sel of selects) {
-      if (!await sel.isVisible().catch(() => false)) continue;
-      const current = await sel.inputValue().catch(() => '');
-      const selectedText = await sel.evaluate(el =>
-        el.options[el.selectedIndex]?.text || ''
-      ).catch(() => '');
-      const isPlaceholder = !current || current.trim() === '' ||
-        /^(select one|--|please select|choose|select\.\.\.)/i.test(selectedText.trim());
-      if (!isPlaceholder) continue;
-
-      // Only fill if inside the checked radio's container
-      const isInCheckedContainer = await sel.evaluate(el => {
-        const checked = document.querySelector('input[type="radio"]:checked');
-        if (!checked) return false;
-        let node = checked.parentElement;
-        for (let i = 0; i < 6; i++) {
-          if (!node) break;
-          if (node.contains(el)) return true;
-          if (node.querySelectorAll('input[type="radio"]').length > 1) break;
-          node = node.parentElement;
-        }
-        return false;
-      }).catch(() => false);
-      if (!isInCheckedContainer) continue;
-
-      const optEls = await sel.locator('option').all();
-      const validOpts = [];
-      for (const opt of optEls) {
-        const val  = await opt.getAttribute('value').catch(() => '');
-        const text = (await opt.textContent().catch(() => '')).trim();
-        if (val && val !== '' && !/^(select one|--|please select)/i.test(text)) {
-          validOpts.push(val);
-        }
-      }
-      if (validOpts.length > 0) {
-        const chosen = validOpts[Math.floor(Math.random() * validOpts.length)];
+        if (!isInChecked) continue;
         await sel.selectOption(chosen).catch(() => {});
         console.log(`[Scenario] ✓ Auto-selected follow-up dropdown: "${chosen}"`);
+        return true;
+      }
+    }
+
+    if (filledByContainer.type === 'input') {
+      // Find the input inside the checked radio container
+      const inputs = await page.locator("input[type='text'], input[type='number']").all();
+      for (const input of inputs) {
+        if (!await input.isVisible().catch(() => false)) continue;
+
+        const isInChecked = await input.evaluate(el => {
+          const checked = document.querySelector('input[type="radio"]:checked');
+          if (!checked) return false;
+          let container = checked.parentElement;
+          for (let i = 0; i < 8; i++) {
+            if (!container) break;
+            if (container.contains(el)) return true;
+            const sibling = container.parentElement;
+            if (!sibling || sibling.querySelectorAll('input[type="radio"]').length > 1) break;
+            container = sibling;
+          }
+          return false;
+        }).catch(() => false);
+        if (!isInChecked) continue;
+
+        // Already has a value — skip
+        const existing = await input.inputValue().catch(() => '');
+        if (existing && existing.trim() !== '') continue;
+
+        // Determine range
+        let min = null, max = null;
+
+        const attrMin = await input.getAttribute('min').catch(() => null);
+        const attrMax = await input.getAttribute('max').catch(() => null);
+        if (attrMin !== null && attrMin !== '') min = parseFloat(attrMin);
+        if (attrMax !== null && attrMax !== '') max = parseFloat(attrMax);
+
+        const adjacentText = await input.evaluate(el => {
+          const parent = el.parentElement;
+          return (parent?.innerText || parent?.textContent || '').toLowerCase();
+        }).catch(() => '');
+        const hasUnitLabel = /\b(million|billion|thousand|mn|bn|%)\b/i.test(adjacentText);
+
+        if (min === null || max === null) {
+          const selectedLabel = await page.evaluate(() => {
+            const checked = document.querySelector('input[type="radio"]:checked');
+            if (!checked) return '';
+            if (checked.id) {
+              const lbl = document.querySelector(`label[for="${checked.id}"]`);
+              if (lbl) return lbl.innerText || lbl.textContent || '';
+            }
+            const parentLabel = checked.closest('label');
+            if (parentLabel) return parentLabel.innerText || parentLabel.textContent || '';
+            return '';
+          }).catch(() => '');
+          if (selectedLabel) {
+            const parsed = extractRange(selectedLabel, hasUnitLabel);
+            if (parsed) {
+              min = parsed.min;
+              max = parsed.max;
+              console.log(`[Scenario] Range from selected radio label: ${min}–${max}`);
+            }
+          }
+        }
+
+        if (min === null || max === null) {
+          const nearbyText = await input.evaluate(el => {
+            let node = el.parentElement;
+            for (let i = 0; i < 5; i++) {
+              const t = (node?.innerText || '').trim();
+              if (t.length > 10) return t;
+              node = node?.parentElement;
+            }
+            return '';
+          }).catch(() => '');
+          const parsed = extractRange(nearbyText, hasUnitLabel);
+          if (parsed) { min = parsed.min; max = parsed.max; }
+        }
+
+        if (min === null) min = 0;
+        if (max === null) max = min * 2 || 100;
+        if (min > max) [min, max] = [max, min];
+        if (min === max) max = min + Math.max(1, Math.floor(min * 0.1));
+
+        const rawValue = min + Math.random() * (max - min);
+        const value = smartRound(rawValue, min, max);
+        await input.fill(String(value)).catch(() => {});
+        console.log(`[Scenario] ✓ Auto-filled follow-up input: ${value} (range: ${min}–${max}, unitLabel: ${hasUnitLabel})`);
         return true;
       }
     }
