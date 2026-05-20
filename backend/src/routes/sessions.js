@@ -184,7 +184,7 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
       countryList = [...allSurveyCodes];
     }
 
-    const sessionLimit = Math.min(parseInt(count) || 1, 20);
+    const sessionLimit = Math.min(parseInt(count) || 1, 100);
     const created = [];
 
     // Quota-aware randomised country distribution

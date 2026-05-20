@@ -1288,13 +1288,31 @@ const answerPageWithAI = async (page, persona, scenario, factSheet, intentMap, q
     }
     const factSheetText = factSheetLines.join('\n') || 'No committed facts yet — establish baseline from persona.';
 
-    // ── Full Q&A history for cross-referencing ────────────────────────────
+// ── Full Q&A history with sliding window to control token growth ──────
     const pageHistory = factSheet?.pageHistory || [];
-    const fullHistoryText = pageHistory.length > 0
-      ? pageHistory.map((h, i) =>
+    let fullHistoryText;
+    if (pageHistory.length === 0) {
+      fullHistoryText = '  No prior answers yet — this is the first answerable page.';
+    } else if (pageHistory.length <= 20) {
+      fullHistoryText = pageHistory.map(h =>
+        `  [Page ${h.page}] "${h.question.slice(0, 120)}" → "${h.answer.slice(0, 150)}"`
+      ).join('\n');
+    } else {
+      // Keep last 20 entries verbatim, summarise earlier ones
+      const recent = pageHistory.slice(-20);
+      const older  = pageHistory.slice(0, -20);
+      // Build a compact summary of older entries grouped by topic
+      const olderSummary = older.map(h =>
+        `${h.question.slice(0, 60).replace(/\s+/g, ' ')}: ${h.answer.slice(0, 80)}`
+      ).join(' | ');
+      fullHistoryText =
+        `  SUMMARY OF EARLIER PAGES (${older.length} answers):\n` +
+        `  ${olderSummary}\n\n` +
+        `  RECENT PAGES (verbatim — use these for contradiction checking):\n` +
+        recent.map(h =>
           `  [Page ${h.page}] "${h.question.slice(0, 120)}" → "${h.answer.slice(0, 150)}"`
-        ).join('\n')
-      : '  No prior answers yet — this is the first answerable page.';
+        ).join('\n');
+    }
 
     // ── Match intents for this page ────────────────────────────────────────
     const normalize = s => (s || '').toLowerCase().trim();
@@ -1464,7 +1482,7 @@ Every field above MUST appear in answers array. newFacts may be {} if nothing ne
       systemPrompt,
       staticPart:  staticPromptPart,
       dynamicPart: dynamicPromptPart,
-      maxTokens:   1400,
+      maxTokens:   10240,
     });
 
     if (!rawText) return null;
