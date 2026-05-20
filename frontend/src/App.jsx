@@ -89,7 +89,7 @@ export default function App() {
           <ProtectedRoute><Sessions /></ProtectedRoute>
         } />
 
-        <Route path="/ai-providers" element={
+        <Route path="/ai_providers" element={
           <ProtectedRoute><AIProviders /></ProtectedRoute>
         } />
 
