@@ -224,10 +224,14 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
 
       // Resolve AI provider ID: explicit selection > project default > workspace default
       let resolvedProviderId = aiProviderId || null;
-      if (!resolvedProviderId) {
-        const defaultProv = await getDefaultProvider(req.user.workspace_id);
-        resolvedProviderId = defaultProv?.id || null;
-      }
+        if (!resolvedProviderId) {
+          const wsId = req.user.workspace_id || req.user.workspaceId || req.user.workspace?.id || null;
+          console.log(`[Trigger] Resolving default AI provider for workspace: ${wsId}`);
+          const defaultProv = await getDefaultProvider(wsId);
+          console.log(`[Trigger] Default provider resolved: ${defaultProv ? defaultProv.name + ' / ' + defaultProv.id : 'NONE'}`);
+          resolvedProviderId = defaultProv?.id || null;
+        }
+        console.log(`[Trigger] Final aiProviderId for job: ${resolvedProviderId || 'NONE — will use env fallback'}`);
 
       await sessionQueue.add('run-session', {
         sessionId:       session.id,
