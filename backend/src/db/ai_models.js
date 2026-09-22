@@ -31,10 +31,9 @@ const getDefaultModel = async (workspaceId) => {
 
 const activateModel = async ({
   workspaceId, modelId, displayName, provider,
-  inputPricePer1m, outputPricePer1m, contextLength,
-  supportsReasoning, reasoningLevel, notes,
+  inputPricePer1m, outputPricePer1m, reasoningPricePer1m,
+  contextLength, supportsReasoning, reasoningLevel, notes,
 }) => {
-  // Check if already activated
   const existing = await pool.query(
     `SELECT id FROM ai_models WHERE workspace_id = $1 AND model_id = $2`,
     [workspaceId, modelId]
@@ -43,7 +42,6 @@ const activateModel = async ({
     throw new Error('Model already activated. Use update to modify it.');
   }
 
-  // If this is the first model, make it default
   const countResult = await pool.query(
     `SELECT COUNT(*) FROM ai_models WHERE workspace_id = $1 AND is_active = true`,
     [workspaceId]
@@ -53,22 +51,24 @@ const activateModel = async ({
   const { rows } = await pool.query(
     `INSERT INTO ai_models (
       workspace_id, model_id, display_name, provider,
-      input_price_per_1m, output_price_per_1m, context_length,
-      supports_reasoning, reasoning_level, notes, is_default
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      input_price_per_1m, output_price_per_1m, reasoning_price_per_1m,
+      context_length, supports_reasoning, reasoning_level, notes, is_default
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
     RETURNING *`,
     [
       workspaceId, modelId, displayName, provider,
-      inputPricePer1m, outputPricePer1m, contextLength,
-      supportsReasoning, reasoningLevel, notes, isFirst,
+      inputPricePer1m, outputPricePer1m, reasoningPricePer1m || 0,
+      contextLength, supportsReasoning, reasoningLevel, notes, isFirst,
     ]
   );
   return rows[0];
 };
 
 const updateModel = async (id, workspaceId, fields) => {
-  const allowed = ['display_name', 'notes', 'reasoning_level',
-                   'input_price_per_1m', 'output_price_per_1m'];
+  const allowed = [
+    'display_name', 'notes', 'reasoning_level',
+    'input_price_per_1m', 'output_price_per_1m', 'reasoning_price_per_1m',
+  ];
   const updates = [];
   const values  = [];
   let   idx     = 1;
@@ -93,7 +93,6 @@ const updateModel = async (id, workspaceId, fields) => {
 };
 
 const setDefaultModel = async (id, workspaceId) => {
-  // Unset all defaults first, then set the new one
   await pool.query(
     `UPDATE ai_models SET is_default = false WHERE workspace_id = $1`,
     [workspaceId]

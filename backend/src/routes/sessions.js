@@ -8,7 +8,7 @@ const { createSession, getLiveSessions, getSessionDetail } = require("../db/sess
 const { sessionQueue }   = require("../queues/index");
 const { getProjectById, getProjectSurveys } = require("../db/projects");
 const { getScenariosByIds } = require('../db/scenarios');
-const { getDefaultProvider } = require('../db/ai_providers');
+const { getDefaultModel } = require('../db/ai_models');
 
 // ── Quota-aware randomised session distribution ───────────────────────────────
 const shuffleArray = (arr) => {
@@ -127,7 +127,7 @@ const getSurveyForCountry = (surveys, countryCode) => {
 // ─── POST /api/sessions/trigger ───────────────────────────────────────────────
 router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res) => {
   try {
-    const { projectId, personaIds = [], count = 1, proxyCountry, scenarioIds, internalTesting = false, aiProviderId } = req.body;
+    const { projectId, personaIds = [], count = 1, proxyCountry, scenarioIds, internalTesting = false, aiModelId } = req.body;
 
     if (!projectId)
       return res.status(400).json({ error: 'projectId is required' });
@@ -222,16 +222,14 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
         internalTesting: internalTesting || false,   // ← ADD THIS
       });
 
-      // Resolve AI provider ID: explicit selection > project default > workspace default
-      let resolvedProviderId = aiProviderId || null;
-        if (!resolvedProviderId) {
-          const wsId = req.user.workspace_id || req.user.workspaceId || req.user.workspace?.id || null;
-          console.log(`[Trigger] Resolving default AI provider for workspace: ${wsId}`);
-          const defaultProv = await getDefaultProvider(wsId);
-          console.log(`[Trigger] Default provider resolved: ${defaultProv ? defaultProv.name + ' / ' + defaultProv.id : 'NONE'}`);
-          resolvedProviderId = defaultProv?.id || null;
+      // Resolve AI model: explicit selection > workspace default AI model
+      let resolvedModelId = aiModelId || null;
+        if (!resolvedModelId) {
+          const wsId = req.user.workspace_id || null;
+          const defaultModel = await getDefaultModel(wsId);
+          resolvedModelId = defaultModel?.model_id || null;
+          console.log(`[Trigger] Default AI model: ${defaultModel ? defaultModel.display_name + ' / ' + defaultModel.model_id : 'NONE — env fallback'}`);
         }
-        console.log(`[Trigger] Final aiProviderId for job: ${resolvedProviderId || 'NONE — will use env fallback'}`);
 
       await sessionQueue.add('run-session', {
         sessionId:       session.id,
@@ -245,7 +243,7 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
         proxyCountry:    country,
         deviceType:      project.device_type    || 'desktop',
         aiStrategy:      project.ai_strategy    || 'persona_true',
-        aiProviderId:    resolvedProviderId,
+        aiModelId:       resolvedModelId,
       }, { jobId: `session-${session.id}`, priority: 1 });
 
       created.push(session);

@@ -9,8 +9,7 @@ import Projects      from "./pages/Projects";
 import ProjectDetail from "./pages/ProjectDetail";
 import Personas      from "./pages/Personas";
 import Sessions      from "./pages/Sessions";
-import AIProviders   from './pages/AIProviders';
-import AIModels      from './pages/AIModels';
+import AIModels      from "./pages/AIModels";
 
 // ─── Auth Context ─────────────────────────────────────────────────────────────
 export const AuthContext = createContext(null);
@@ -47,7 +46,6 @@ function AuthProvider({ children }) {
   );
 }
 
-// ─── Protected Route ──────────────────────────────────────────────────────────
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return (
@@ -59,48 +57,18 @@ function ProtectedRoute({ children }) {
   return children;
 }
 
-// ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
   return (
     <AuthProvider>
       <Routes>
-
-        {/* Public */}
         <Route path="/login" element={<Login />} />
-
-        {/* Protected — specific routes MUST come before the wildcard */}
-        <Route path="/" element={
-          <ProtectedRoute><Dashboard /></ProtectedRoute>
-        } />
-
-        <Route path="/projects" element={
-          <ProtectedRoute><Projects /></ProtectedRoute>
-        } />
-
-        {/* This MUST be before path="*" */}
-        <Route path="/projects/:id" element={
-          <ProtectedRoute><ProjectDetail /></ProtectedRoute>
-        } />
-
-        <Route path="/personas" element={
-          <ProtectedRoute><Personas /></ProtectedRoute>
-        } />
-
-        <Route path="/sessions" element={
-          <ProtectedRoute><Sessions /></ProtectedRoute>
-        } />
-
-        <Route path="/ai_providers" element={
-          <ProtectedRoute><AIProviders /></ProtectedRoute>
-        } />
-
-        <Route path="/ai-models" element={
-          <ProtectedRoute><AIModels /></ProtectedRoute>
-        } />
-
-        {/* Wildcard — ALWAYS last */}
+        <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+        <Route path="/projects" element={<ProtectedRoute><Projects /></ProtectedRoute>} />
+        <Route path="/projects/:id" element={<ProtectedRoute><ProjectDetail /></ProtectedRoute>} />
+        <Route path="/personas" element={<ProtectedRoute><Personas /></ProtectedRoute>} />
+        <Route path="/sessions" element={<ProtectedRoute><Sessions /></ProtectedRoute>} />
+        <Route path="/ai-models" element={<ProtectedRoute><AIModels /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
-
       </Routes>
     </AuthProvider>
   );

@@ -11,16 +11,14 @@ import {
   X,
   ChevronRight,
   Bell,
-  Bot,
   Brain
 } from "lucide-react";
 
 const NAV = [
-  { path: "/", label: "Dashboard", icon: LayoutDashboard },
-  { path: "/projects", label: "Projects", icon: FolderKanban },
-  { path: "/personas", label: "Personas", icon: Users },
-  { path: "/sessions", label: "Sessions", icon: Activity },
-  { path: "/ai_providers", label: "AI Providers", icon: Bot },
+  { path: '/',          label: 'Dashboard', icon: LayoutDashboard },
+  { path: '/projects',  label: 'Projects',  icon: FolderKanban },
+  { path: '/personas',  label: 'Personas',  icon: Users },
+  { path: '/sessions',  label: 'Sessions',  icon: Activity },
   { path: '/ai-models', label: 'AI Models', icon: Brain },
 ];
 

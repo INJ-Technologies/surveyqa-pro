@@ -329,16 +329,16 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
   const [selectedScenarios, setSelectedScenarios] = useState([]);
   const [scenariosLoading, setScenariosLoading] = useState(true);
   const [testingMode, setTestingMode] = useState("internal"); // 'internal' | 'live'
-  const [aiProviders, setAiProviders] = useState([]);
-  const [selectedProvider, setSelectedProvider] = useState('');
+  const [aiModels, setAiModels]       = useState([]);
+  const [selectedModel, setSelectedModel] = useState('');
 
   useEffect(() => {
-    api.get('/ai-providers')
+    api.get('/openrouter/active')
       .then(res => {
-        const list = res.data.providers || [];
-        setAiProviders(list);
-        const def = list.find(p => p.is_default && p.is_active);
-        if (def) setSelectedProvider(def.id);
+        const list = res.data.models || [];
+        setAiModels(list);
+        const def = list.find(m => m.is_default);
+        if (def) setSelectedModel(def.model_id);
       })
       .catch(() => {});
   }, []);
@@ -425,7 +425,7 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
         proxyCountry: countryCodes.length > 0 ? countryCodes : null,
         scenarioIds: selectedScenarios,
         internalTesting: testingMode === "internal",
-        aiProviderId: selectedProvider || null,
+        aiModelId: selectedModel || null,
       });
       onTriggered();
     } catch (err) {
@@ -1083,25 +1083,49 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
         </div>
 
         {/* AI Provider selector */}
-        {aiProviders.length > 0 && (
-          <div style={{ marginBottom: 18 }}>
-            <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#374151', fontFamily: FONT, display: 'block', marginBottom: 6 }}>
-              AI Provider
-            </label>
-            <select
-              style={{ width: '100%', padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.88rem', fontFamily: FONT, outline: 'none', background: 'white' }}
-              value={selectedProvider}
-              onChange={e => setSelectedProvider(e.target.value)}
-            >
-              <option value="">Use default provider</option>
-              {aiProviders.filter(p => p.is_active).map(p => (
-                <option key={p.id} value={p.id}>
-                  {p.name} — {p.model} {p.is_default ? '(default)' : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+        {aiModels.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <label style={{
+            fontSize: '0.8rem', fontWeight: 600, color: '#374151',
+            fontFamily: FONT, display: 'block', marginBottom: 6,
+          }}>
+            AI Model
+          </label>
+          <select
+            style={{
+              width: '100%', padding: '9px 12px', border: '1.5px solid #e2e8f0',
+              borderRadius: 8, fontSize: '0.88rem', fontFamily: FONT,
+              outline: 'none', background: 'white',
+            }}
+            value={selectedModel}
+            onChange={e => setSelectedModel(e.target.value)}
+          >
+            <option value="">Use default model</option>
+            {aiModels.map(m => (
+              <option key={m.id} value={m.model_id}>
+                {m.display_name} {m.is_default ? '(default)' : ''}
+                {m.reasoning_level && m.reasoning_level !== 'off' ? ` · reasoning: ${m.reasoning_level}` : ''}
+              </option>
+            ))}
+          </select>
+          {selectedModel && (() => {
+            const m = aiModels.find(x => x.model_id === selectedModel);
+            if (!m) return null;
+            const inP  = parseFloat(m.input_price_per_1m  || 0);
+            const outP = parseFloat(m.output_price_per_1m || 0);
+            const est  = ((1200 / 1e6) * inP + (150 / 1e6) * outP) * 20;
+            return (
+              <div style={{
+                fontSize: '0.72rem', color: '#64748b', fontFamily: FONT,
+                marginTop: 4,
+              }}>
+                ${inP.toFixed(4)}/1M input · ${outP.toFixed(4)}/1M output
+                {' · '}est. <strong style={{ color: '#059669' }}>${est.toFixed(6)}</strong>/session
+              </div>
+            );
+          })()}
+        </div>
+      )}
 
         <div
           style={{
@@ -5337,6 +5361,16 @@ function SessionsTab({
               val: stats.avg_quality ? `${stats.avg_quality}/100` : "—",
               color: "#7c3aed",
             },
+            {
+              label: "Total AI Cost",
+              val: (() => {
+                const total = sessions.reduce((a, s) => a + (parseFloat(s.ai_cost_usd) || 0), 0);
+                return total > 0
+                  ? `$${total.toLocaleString('en-IN', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`
+                  : '—';
+              })(),
+              color: "#1e3a5f",
+            },
           ].map(({ label, val, color }) => (
             <div key={label} style={s.sessionStat}>
               <div
@@ -5567,6 +5601,7 @@ function SessionsTab({
                     "State",
                     "Status",
                     "Quality",
+                    "AI Cost",
                     "Actions",
                   ].map((h) => (
                     <th key={h} style={s.th}>
@@ -5835,6 +5870,29 @@ function SessionsTab({
                         </span>
                       )}
                     </td>
+                    {/* AI Cost */}
+                    <td style={s.td}>
+                      {session.ai_cost_usd && parseFloat(session.ai_cost_usd) > 0 ? (
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{
+                            fontSize: '0.82rem', fontWeight: 700,
+                            color: '#1e3a5f', fontFamily: FONT,
+                          }}>
+                            ${parseFloat(session.ai_cost_usd).toLocaleString('en-IN', {
+                              minimumFractionDigits: 6,
+                              maximumFractionDigits: 6,
+                            })}
+                          </div>
+                          {session.ai_calls_count > 0 && (
+                            <div style={{ fontSize: '0.68rem', color: '#94a3b8', fontFamily: FONT }}>
+                              {new Intl.NumberFormat('en-IN').format(session.ai_calls_count)} calls
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span style={{ color: '#94a3b8', fontSize: '0.75rem' }}>—</span>
+                      )}
+                    </td>
                     {/* 15. Actions */}
                     <td style={s.td}>
                       <div
@@ -6057,126 +6115,107 @@ const paginationBtn = (disabled) => ({
 // ══════════════════════════════════════════════════════════════════════════════
 function CostsTab({ projectId, showToast }) {
   const [summary, setSummary] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [costData, setCostData] = useState(null);
+  const [loading, setLoading]   = useState(true);
+
+  // Indian number formatting
+  const fmtIN = (num, dec = 6) => {
+    if (!num || isNaN(num)) return '0';
+    return new Intl.NumberFormat('en-IN', {
+      minimumFractionDigits: dec,
+      maximumFractionDigits: dec,
+    }).format(num);
+  };
+  const fmtCost = (num) => {
+    if (!num || isNaN(parseFloat(num))) return '$0.00';
+    const n = parseFloat(num);
+    if (n < 0.000001) return `$${fmtIN(n, 8)}`;
+    if (n < 0.001)    return `$${fmtIN(n, 6)}`;
+    if (n < 1)        return `$${fmtIN(n, 4)}`;
+    return `$${fmtIN(n, 2)}`;
+  };
 
   useEffect(() => {
-    api
-      .get(`/projects/${projectId}/costs`)
-      .then((res) => setSummary(res.data.summary))
-      .catch(() => showToast("Failed to load cost data", "error"))
+    Promise.all([
+      api.get(`/projects/${projectId}/costs`),
+      api.get(`/projects/${projectId}/sessions?limit=1000&offset=0`),
+    ])
+      .then(([costRes, sessRes]) => {
+        setSummary(costRes.data.summary);
+        // Calculate real AI cost from session data
+        const sessions = sessRes.data.sessions || [];
+        const completed = sessions.filter(s =>
+          ['completed', 'terminated', 'over_quota'].includes(s.status)
+        );
+        const totalInput    = completed.reduce((a, s) => a + (parseInt(s.input_tokens_total)  || 0), 0);
+        const totalOutput   = completed.reduce((a, s) => a + (parseInt(s.output_tokens_total) || 0), 0);
+        const totalCalls    = completed.reduce((a, s) => a + (parseInt(s.ai_calls_count)      || 0), 0);
+        const totalAiCost   = completed.reduce((a, s) => a + (parseFloat(s.ai_cost_usd)       || 0), 0);
+        const modelsUsed    = [...new Set(completed.map(s => s.model_used).filter(Boolean))];
+        const avgCost       = completed.length > 0 ? totalAiCost / completed.length : 0;
+        const compSessions  = completed.filter(s => s.status === 'completed');
+        const costPerComplete = compSessions.length > 0 ? totalAiCost / compSessions.length : 0;
+        setCostData({
+          totalInput, totalOutput, totalCalls, totalAiCost,
+          modelsUsed, avgCost, costPerComplete,
+          sessionCount: completed.length,
+        });
+      })
+      .catch(() => showToast('Failed to load cost data', 'error'))
       .finally(() => setLoading(false));
   }, [projectId]);
 
   if (loading) return <div style={s.tabCenter}>Loading cost data...</div>;
 
-  const completed = parseInt(summary?.completed_sessions) || 0;
+  const completed  = parseInt(summary?.completed_sessions)  || 0;
   const terminated = parseInt(summary?.terminated_sessions) || 0;
-  const errors = parseInt(summary?.error_sessions) || 0;
-  const active = parseInt(summary?.active_sessions) || 0;
-  const total = parseInt(summary?.total_sessions) || 0;
-  const target = parseInt(summary?.target_completes) || 0;
-  const completionPct =
-    target > 0 ? Math.min(Math.round((completed / target) * 100), 100) : 0;
+  const errors     = parseInt(summary?.error_sessions)      || 0;
+  const active     = parseInt(summary?.active_sessions)     || 0;
+  const total      = parseInt(summary?.total_sessions)      || 0;
+  const target     = parseInt(summary?.target_completes)    || 0;
+  const completionPct = target > 0 ? Math.min(Math.round((completed / target) * 100), 100) : 0;
 
   return (
     <div>
+      {/* Stat cards */}
       <div style={s.statsGrid}>
-        <StatCard
-          label="URL Hits"
-          value={total}
-          icon={Activity}
-          color="#f59e0b"
-        />
-        <StatCard
-          label="Completes"
-          value={completed}
-          sub={`${completionPct}% of target`}
-          icon={CheckCircle}
-          color="#059669"
-        />
-        <StatCard
-          label="Incompletes"
-          value={active}
-          sub="In progress or errored"
-          icon={TrendingDown}
-          color="#f97316"
-        />
-        <StatCard
-          label="Terminates"
-          value={terminated}
-          sub="Screener fails + OQ"
-          icon={StopCircle}
-          color="#ef4444"
-        />
+        <StatCard label="URL Hits"    value={total}     icon={Activity}    color="#f59e0b" />
+        <StatCard label="Completes"   value={completed} sub={`${completionPct}% of target`} icon={CheckCircle} color="#059669" />
+        <StatCard label="Incompletes" value={active}    sub="In progress or errored" icon={TrendingDown} color="#f97316" />
+        <StatCard label="Terminates"  value={terminated} sub="Screener fails + OQ" icon={StopCircle} color="#ef4444" />
       </div>
+
+      {/* Completion progress */}
       {target > 0 && (
         <div style={s.progressCard}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              marginBottom: 8,
-            }}
-          >
-            <span
-              style={{
-                fontSize: "0.85rem",
-                fontWeight: 600,
-                color: "#1e293b",
-                fontFamily: FONT,
-              }}
-            >
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#1e293b', fontFamily: FONT }}>
               Completion Progress
             </span>
-            <span
-              style={{
-                fontSize: "0.85rem",
-                fontWeight: 700,
-                color: "#2563eb",
-                fontFamily: FONT,
-              }}
-            >
+            <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#2563eb', fontFamily: FONT }}>
               {completionPct}%
             </span>
           </div>
-          <div
-            style={{
-              height: 8,
-              background: "#f1f5f9",
-              borderRadius: 4,
-              overflow: "hidden",
-              marginBottom: 6,
-            }}
-          >
-            <div
-              style={{
-                height: "100%",
-                width: `${completionPct}%`,
-                background: "linear-gradient(90deg, #1e3a5f, #2563eb)",
-                borderRadius: 4,
-              }}
-            />
+          <div style={{ height: 8, background: '#f1f5f9', borderRadius: 4, overflow: 'hidden', marginBottom: 6 }}>
+            <div style={{ height: '100%', width: `${completionPct}%`, background: 'linear-gradient(90deg, #1e3a5f, #2563eb)', borderRadius: 4 }} />
           </div>
-          <div
-            style={{ fontSize: "0.75rem", color: "#94a3b8", fontFamily: FONT }}
-          >
+          <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontFamily: FONT }}>
             {completed} of {target} target completes
           </div>
         </div>
       )}
+
+      {/* Session breakdown */}
       <div style={{ ...s.detailCard, marginBottom: 16 }}>
         <div style={s.detailCardTitle}>Session Breakdown</div>
         {[
-          ["Total Sessions", total],
-          ["Completed", completed],
-          ["Terminated", terminated],
-          ["Errors / Flagged", errors],
-          ["Active / Running", active],
-          ["Avg Duration", fmtDuration(summary?.avg_duration_s)],
-          [
-            "Avg Quality Score",
-            summary?.avg_quality ? `${summary.avg_quality} / 100` : "—",
-          ],
+          ['Total Sessions',    total],
+          ['Completed',         completed],
+          ['Terminated',        terminated],
+          ['Errors / Flagged',  errors],
+          ['Active / Running',  active],
+          ['Avg Duration',      fmtDuration(summary?.avg_duration_s)],
+          ['Avg Quality Score', summary?.avg_quality ? `${summary.avg_quality} / 100` : '—'],
         ].map(([k, v]) => (
           <div key={k} style={s.detailRow}>
             <span style={s.detailKey}>{k}</span>
@@ -6184,58 +6223,75 @@ function CostsTab({ projectId, showToast }) {
           </div>
         ))}
       </div>
-      <div style={s.detailCard}>
-        <div style={s.detailCardTitle}>Cost Breakdown</div>
-        <div style={s.costNotice}>
-          <DollarSign size={20} color="#94a3b8" />
-          <div>
-            <div
-              style={{
-                fontSize: "0.88rem",
-                fontWeight: 600,
-                color: "#1e293b",
-                fontFamily: FONT,
-                marginBottom: 4,
-              }}
-            >
-              Pricing rates not configured
+
+      {/* AI Cost breakdown — real data */}
+      <div style={{ ...s.detailCard, marginBottom: 16 }}>
+        <div style={s.detailCardTitle}>AI Cost Breakdown</div>
+
+        {/* Cost summary cards */}
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+          gap: 12, marginBottom: 16,
+        }}>
+          {[
+            { label: 'Total AI Cost',      value: fmtCost(costData?.totalAiCost),    color: '#1e3a5f' },
+            { label: 'Avg Cost / Session', value: fmtCost(costData?.avgCost),         color: '#2563eb' },
+            { label: 'Cost / Complete',    value: fmtCost(costData?.costPerComplete),  color: '#059669' },
+            { label: 'Total AI Calls',     value: new Intl.NumberFormat('en-IN').format(costData?.totalCalls || 0), color: '#7c3aed' },
+          ].map(({ label, value, color }) => (
+            <div key={label} style={{
+              background: '#f8fafc', borderRadius: 8,
+              padding: '12px 14px', textAlign: 'center',
+            }}>
+              <div style={{ fontSize: '1.1rem', fontWeight: 800, color, fontFamily: FONT }}>
+                {value}
+              </div>
+              <div style={{ fontSize: '0.72rem', color: '#94a3b8', fontFamily: FONT, marginTop: 2 }}>
+                {label}
+              </div>
             </div>
-            <div
-              style={{
-                fontSize: "0.82rem",
-                color: "#64748b",
-                fontFamily: FONT,
-                lineHeight: 1.6,
-              }}
-            >
-              Configurable in <strong>Settings → Billing</strong>.
+          ))}
+        </div>
+
+        {/* Token detail rows */}
+        {[
+          ['Sessions Analysed',    `${new Intl.NumberFormat('en-IN').format(costData?.sessionCount || 0)} sessions`],
+          ['Total Input Tokens',   new Intl.NumberFormat('en-IN').format(costData?.totalInput  || 0)],
+          ['Total Output Tokens',  new Intl.NumberFormat('en-IN').format(costData?.totalOutput || 0)],
+          ['Total Token Cost',     fmtCost(costData?.totalAiCost)],
+          ['Model(s) Used',        costData?.modelsUsed?.length > 0 ? costData.modelsUsed.join(', ') : '—'],
+        ].map(([k, v]) => (
+          <div key={k} style={s.detailRow}>
+            <span style={s.detailKey}>{k}</span>
+            <span style={{ ...s.detailVal, maxWidth: 280, wordBreak: 'break-word' }}>{v}</span>
+          </div>
+        ))}
+
+        {/* Note if no cost data yet */}
+        {(!costData?.totalAiCost || costData.totalAiCost === 0) && (
+          <div style={{
+            background: '#f0f7ff', border: '1px solid #dbeafe',
+            borderRadius: 8, padding: '12px 14px', marginTop: 12,
+            fontSize: '0.82rem', color: '#1e3a5f', fontFamily: FONT,
+          }}>
+            💡 Cost data populates automatically as sessions complete.
+            Token counts are recorded per AI call during each session.
+          </div>
+        )}
+      </div>
+
+      {/* Proxy cost placeholder */}
+      <div style={s.detailCard}>
+        <div style={s.detailCardTitle}>Proxy Cost</div>
+        <div style={{ ...s.detailRow }}>
+          <span style={s.detailKey}>Proxy Spend</span>
+          <div style={{ textAlign: 'right' }}>
+            <span style={s.detailVal}>—</span>
+            <div style={{ fontSize: '0.72rem', color: '#94a3b8', fontFamily: FONT }}>
+              Configure proxy pricing in Settings → Billing
             </div>
           </div>
         </div>
-        {[
-          ["AI Token Cost", "—", "Rate not configured"],
-          ["Proxy Cost", "—", "Rate not configured"],
-          ["Total Spend", "—", "Awaiting rate config"],
-          ["Cost per Complete", "—", "Awaiting rate config"],
-        ].map(([k, v, note]) => (
-          <div key={k} style={s.detailRow}>
-            <span style={s.detailKey}>{k}</span>
-            <div style={{ textAlign: "right" }}>
-              <span style={s.detailVal}>{v}</span>
-              {note && (
-                <div
-                  style={{
-                    fontSize: "0.72rem",
-                    color: "#94a3b8",
-                    fontFamily: FONT,
-                  }}
-                >
-                  {note}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
       </div>
     </div>
   );
