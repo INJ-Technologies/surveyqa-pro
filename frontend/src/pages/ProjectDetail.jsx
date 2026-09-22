@@ -2904,6 +2904,7 @@ function ScenariosTab({ projectId, showToast }) {
   const [showCreate, setShowCreate] = useState(false);
   const [editScenario, setEditScenario] = useState(null);
   const [countryLogicScenario, setCountryLogicScenario] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // {id, name}
 
   const load = async () => {
     try {
@@ -2924,15 +2925,16 @@ function ScenariosTab({ projectId, showToast }) {
     setCountryLogicScenario(cl || null);
   }, [scenarios]);
 
-  const handleDelete = async (id, name) => {
-    if (!window.confirm(`Delete scenario "${name}"? This cannot be undone.`))
-      return;
+  const handleDelete = async () => {
+    if (!deleteConfirm) return;
     try {
-      await api.delete(`/scenarios/${id}`);
-      setScenarios((prev) => prev.filter((s) => s.id !== id));
+      await api.delete(`/scenarios/${deleteConfirm.id}`);
+      setScenarios((prev) => prev.filter((s) => s.id !== deleteConfirm.id));
       showToast("Scenario deleted");
     } catch {
       showToast("Failed to delete scenario", "error");
+    } finally {
+      setDeleteConfirm(null);
     }
   };
 
@@ -3225,7 +3227,7 @@ function ScenariosTab({ projectId, showToast }) {
                           </button>
                           <button
                             title="Delete"
-                            onClick={() => handleDelete(sc.id, sc.name)}
+                            onClick={() => setDeleteConfirm({ id: sc.id, name: sc.name })}
                             style={{
                               background: "#fef2f2",
                               border: "1px solid #fecaca",
@@ -3264,6 +3266,17 @@ function ScenariosTab({ projectId, showToast }) {
           onClose={() => setEditScenario(null)}
           onSaved={load}
           showToast={showToast}
+        />
+      )}
+      {deleteConfirm && (
+        <ConfirmModal
+          title="Delete Scenario"
+          message={`Are you sure you want to delete <strong>"${deleteConfirm.name}"</strong>?<br/><br/>All steps will be permanently removed. <strong>This cannot be undone.</strong>`}
+          confirmLabel="Delete Scenario"
+          confirmColor="#ef4444"
+          icon={Trash2}
+          onConfirm={handleDelete}
+          onCancel={() => setDeleteConfirm(null)}
         />
       )}
     </div>
@@ -4673,6 +4686,7 @@ function SurveyCardReadOnly({ survey, index }) {
 function SurveyCardEdit({ survey, index, onChange, onRemove, onCopyUrlToAll, totalSurveys }) {
   const { asOptions: countryOptions, loading: countriesLoading } = useCountries();
   const [copied, setCopied] = useState(false);
+  const [showCopyConfirm, setShowCopyConfirm] = useState(false);
 
   const languageOptions = [
     { value: "en", label: "English" },
@@ -4697,9 +4711,13 @@ function SurveyCardEdit({ survey, index, onChange, onRemove, onCopyUrlToAll, tot
 
   const handleCopyToAll = () => {
     if (!survey.url) return;
-    if (!window.confirm(`Copy this URL to all ${totalSurveys} segments?\n\n${survey.url}`)) return;
+    setShowCopyConfirm(true);
+  };
+
+  const doCopyToAll = () => {
     onCopyUrlToAll(index);
     setCopied(true);
+    setShowCopyConfirm(false);
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -4794,6 +4812,17 @@ function SurveyCardEdit({ survey, index, onChange, onRemove, onCopyUrlToAll, tot
           placeholder="Select languages..."
         />
       </FormGrid>
+      {showCopyConfirm && (
+        <ConfirmModal
+          title={`Copy URL to all ${totalSurveys} segments?`}
+          message={`This will overwrite the URL in all survey segments with:<br/><br/><code style="word-break:break-all;font-size:0.78rem;background:#f1f5f9;padding:4px 8px;border-radius:4px;">${survey.url}</code>`}
+          confirmLabel={`Copy to all ${totalSurveys} segments`}
+          confirmColor="#1e3a5f"
+          icon={Copy}
+          onConfirm={doCopyToAll}
+          onCancel={() => setShowCopyConfirm(false)}
+        />
+      )}
     </div>
   );
 }
@@ -5216,6 +5245,7 @@ function SessionsTab({
   const [clearing, setClearing] = useState(false);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [deleteOneConfirm, setDeleteOneConfirm] = useState(null); // sessionId
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const PAGE_SIZE = 20;
@@ -5336,17 +5366,16 @@ function SessionsTab({
     }
   };
 
-  const handleDeleteOne = async (sessionId) => {
-    if (!window.confirm("Delete this session? This cannot be undone.")) return;
+  const handleDeleteOne = async () => {
+    if (!deleteOneConfirm) return;
     try {
-      await api.delete(`/sessions/${sessionId}`);
+      await api.delete(`/sessions/${deleteOneConfirm}`);
       showToast("Session deleted ✓");
       load(true);
     } catch (err) {
-      showToast(
-        err.response?.data?.error || "Failed to delete session",
-        "error",
-      );
+      showToast(err.response?.data?.error || "Failed to delete session", "error");
+    } finally {
+      setDeleteOneConfirm(null);
     }
   };
 
@@ -5986,7 +6015,7 @@ function SessionsTab({
                         )}
                         {isAdmin && (
                           <button
-                            onClick={() => handleDeleteOne(session.id)}
+                            onClick={() => setDeleteOneConfirm(session.id)}
                             title="Delete this session"
                             style={{
                               display: "flex",
@@ -6129,6 +6158,17 @@ function SessionsTab({
           onConfirm={handleStopSessions}
           onCancel={() => setShowStopConfirm(false)}
           loading={stopping}
+        />
+      )}
+      {deleteOneConfirm && (
+        <ConfirmModal
+          title="Delete Session"
+          message="This will permanently delete the session and all its data including events, screenshots, and logs.<br/><br/><strong>This cannot be undone.</strong>"
+          confirmLabel="Delete Session"
+          confirmColor="#ef4444"
+          icon={Trash2}
+          onConfirm={handleDeleteOne}
+          onCancel={() => setDeleteOneConfirm(null)}
         />
       )}
     </div>
