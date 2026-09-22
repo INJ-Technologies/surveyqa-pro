@@ -12,7 +12,8 @@ router.use(requireAuth);
 
 // ─── Read OpenRouter API key ──────────────────────────────────────────────────
 const getORKey = () => {
-  try { return fs.readFileSync('/run/secrets/openrouter_synthfield', 'utf8').trim(); } catch { return null; }
+  try { return fs.readFileSync('/run/secrets/openrouter_synthfield', 'utf8').trim(); }
+  catch { return null; }
 };
 
 // ─── GET /api/personas ────────────────────────────────────────────────────────
@@ -38,7 +39,6 @@ router.get('/:id', async (req, res) => {
 });
 
 // ─── POST /api/personas/generate-description — AI generates persona bio ───────
-// Receives structured persona fields, returns a rich behavioural description.
 router.post('/generate-description', async (req, res) => {
   const apiKey = getORKey();
   if (!apiKey) return res.status(500).json({ error: 'AI API key not configured' });
@@ -74,18 +74,16 @@ Company Size (employees): ${employeeSize || 'Not specified'}` : 'Persona Type: B
 Behavioural Tags: ${behaviouralTags.length > 0 ? behaviouralTags.join(', ') : 'Not specified'}
 
 INSTRUCTIONS:
-Write a 180–220 word persona description in the third person (e.g. "Rajiv is a..."). 
-
-Include ALL of the following (adapt for B2B or B2C as relevant):
+Write a 180–220 word persona description in the third person. Include:
 1. A realistic name and brief personal snapshot (age, location, life stage)
-2. ${isB2B ? 'Professional role, responsibilities, team size, reporting line, and decision-making authority' : 'Daily lifestyle, occupation or life stage, and typical weekly routine'}
-3. ${isB2B ? 'Business priorities, key pain points, and what success looks like in their role' : 'Consumer priorities, lifestyle goals, and key frustrations'}
-4. Purchasing behaviour — what they buy, how they decide, how long consideration takes, who influences them
-5. Brand and media preferences — specific brands they trust, media channels they use, how they research before buying
-6. ${isB2B ? 'Technology posture — current tools/vendors, openness to new software, IT security stance' : 'Digital behaviour — social media habits, app usage, online vs offline preference'}
-7. One specific opinion or attitude that a survey question might probe (e.g. their stance on sustainability, AI, data privacy, luxury vs value, etc.)
+2. ${isB2B ? 'Professional role, responsibilities, decision-making authority' : 'Daily lifestyle, occupation, and typical weekly routine'}
+3. ${isB2B ? 'Business priorities, key pain points, and success metrics' : 'Consumer priorities, lifestyle goals, and key frustrations'}
+4. Purchasing behaviour — what they buy, how they decide, what influences them
+5. Brand and media preferences — specific brands they trust, media channels used
+6. ${isB2B ? 'Technology posture — current tools/vendors, openness to new software' : 'Digital behaviour — social media habits, app usage, online vs offline'}
+7. One specific opinion or attitude relevant to survey research
 
-Do NOT use bullet points. Write in plain prose, as a character brief. Be specific with numbers and names where realistic. Do NOT mention this is an AI-generated persona.`;
+Do NOT use bullet points. Write in plain prose. Be specific with numbers and names. Do NOT mention this is AI-generated.`;
 
   try {
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -104,18 +102,18 @@ Do NOT use bullet points. Write in plain prose, as a character brief. Be specifi
     });
 
     if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      console.error('[Persona AI] OpenRouter error:', response.status, errData);
-      return res.status(502).json({ error: 'AI service returned an error. Please try again.' });
+      const err = await response.json().catch(() => ({}));
+      console.error('[Persona AI] Error:', response.status, err);
+      return res.status(502).json({ error: 'AI service error. Please try again.' });
     }
 
     const data = await response.json();
     const description = data.choices?.[0]?.message?.content?.trim() || '';
-    if (!description) return res.status(500).json({ error: 'AI returned empty response. Please try again.' });
+    if (!description) return res.status(500).json({ error: 'AI returned empty response.' });
 
     res.json({ description });
   } catch (err) {
-    console.error('[Persona AI] Generate description error:', err.message);
+    console.error('[Persona AI] generate-description error:', err.message);
     res.status(500).json({ error: 'Failed to generate description' });
   }
 });
@@ -125,6 +123,7 @@ router.post('/', async (req, res) => {
   try {
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: 'Persona name is required' });
+
     const persona = await createPersona({
       workspaceId: req.user.workspace_id,
       createdBy:   req.user.id,
@@ -140,10 +139,13 @@ router.post('/', async (req, res) => {
 // ─── PATCH /api/personas/:id ──────────────────────────────────────────────────
 router.patch('/:id', async (req, res) => {
   try {
-    const persona = await updatePersona(req.params.id, req.user.workspace_id, req.body);
+    const persona = await updatePersona(
+      req.params.id, req.user.workspace_id, req.body
+    );
     if (!persona) return res.status(404).json({ error: 'Persona not found' });
     res.json({ message: 'Persona updated', persona });
   } catch (err) {
+    console.error('Update persona error:', err.message);
     res.status(500).json({ error: 'Failed to update persona' });
   }
 });

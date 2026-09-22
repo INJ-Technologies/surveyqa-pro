@@ -1,96 +1,140 @@
 'use strict';
 const { pool } = require('./index');
 
-// ─── Get all personas for a workspace ────────────────────────────────────────
+// ─── Helper: build behavioural_attrs from flat form fields ────────────────────
+// The frontend sends flat fields. This packages them into the JSONB column.
+const buildBehaviouralAttrs = (fields) => ({
+  designation:          fields.designation          || null,
+  department:           fields.department           || null,
+  industry:             fields.industry             || null,
+  companyRevenue:       fields.companyRevenue        || null,
+  employeeSize:         fields.employeeSize          || null,
+  annualIncome:         fields.annualIncome          || null,
+  educationLevel:       fields.educationLevel        || null,
+  maritalStatus:        fields.maritalStatus         || null,
+  childrenStatus:       fields.childrenStatus        || null,
+  secondaryDescription: fields.secondaryDescription  || null,
+  behaviouralTags:      Array.isArray(fields.behaviouralTags) ? fields.behaviouralTags : [],
+  deviceOs:             fields.deviceOs              || null,
+  browser:              fields.browser               || 'Chrome',
+  readingSpeed:         fields.readingSpeed          || 'Normal — average reading pace',
+  responseStyle:        fields.responseStyle         || 'Neutral — balanced, moderate responses',
+});
+
+// ─── GET all personas for workspace ──────────────────────────────────────────
 const getPersonas = async (workspaceId) => {
-  const result = await pool.query(
+  const { rows } = await pool.query(
     `SELECT * FROM personas
-     WHERE workspace_id = $1
+     WHERE workspace_id = $1 AND is_active = true
      ORDER BY created_at DESC`,
     [workspaceId]
   );
-  return result.rows;
+  return rows;
 };
 
-// ─── Get single persona ───────────────────────────────────────────────────────
+// ─── GET single persona ───────────────────────────────────────────────────────
 const getPersonaById = async (id, workspaceId) => {
-  const result = await pool.query(
+  const { rows } = await pool.query(
     `SELECT * FROM personas WHERE id = $1 AND workspace_id = $2`,
     [id, workspaceId]
   );
-  return result.rows[0] || null;
+  return rows[0] || null;
 };
 
-// ─── Create persona ───────────────────────────────────────────────────────────
-const createPersona = async ({
-  workspaceId, createdBy, name, description, tags,
-  ageMin, ageMax, gender, country, language,
-  designation, department, companyRevenue, employeeSize,
-  secondaryDescription, behaviouralTags,
-  deviceType, deviceOs, browser, readingSpeed, responseStyle,
-  customAttrs,
-}) => {
-  const result = await pool.query(
+// ─── CREATE persona ───────────────────────────────────────────────────────────
+const createPersona = async (fields) => {
+  const {
+    workspaceId, createdBy,
+    name, tags = [], country, language,
+    ageMin, ageMax, gender,
+    deviceType = 'desktop',
+    aiGenerated = false,
+  } = fields;
+
+  const behaviouralAttrs = buildBehaviouralAttrs(fields);
+
+  const { rows } = await pool.query(
     `INSERT INTO personas (
-       workspace_id, created_by, name, description, tags,
-       age_min, age_max, gender, country, language,
-       device_type,
-       behavioural_attrs, custom_attrs
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       workspace_id, created_by,
+       name, tags, country, language,
+       age_min, age_max, gender,
+       device_type, behavioural_attrs,
+       ai_generated
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      RETURNING *`,
     [
-      workspaceId, createdBy, name, description, tags || [],
-      ageMin || null, ageMax || null,
-      gender || null, country || null, language || 'en',
-      deviceType || 'desktop',
-      JSON.stringify({
-        designation, department, companyRevenue, employeeSize,
-        secondaryDescription, behaviouralTags: behaviouralTags || [],
-        deviceOs, browser, readingSpeed, responseStyle,
-      }),
-      JSON.stringify(customAttrs || {}),
+      workspaceId, createdBy || null,
+      name,
+      Array.isArray(tags) ? tags : [],
+      country  || null,
+      language || 'en',
+      ageMin   ? parseInt(ageMin)  : null,
+      ageMax   ? parseInt(ageMax)  : null,
+      gender   || null,
+      deviceType,
+      JSON.stringify(behaviouralAttrs),
+      !!aiGenerated,
     ]
   );
-  return result.rows[0];
+  return rows[0];
 };
 
-// ─── Update persona ───────────────────────────────────────────────────────────
-const updatePersona = async (id, workspaceId, updates) => {
-  const result = await pool.query(
-    `UPDATE personas SET
-       name               = COALESCE($1, name),
-       description        = COALESCE($2, description),
-       tags               = COALESCE($3, tags),
-       age_min            = COALESCE($4, age_min),
-       age_max            = COALESCE($5, age_max),
-       gender             = COALESCE($6, gender),
-       country            = COALESCE($7, country),
-       language           = COALESCE($8, language),
-       device_type        = COALESCE($9, device_type),
-       behavioural_attrs  = COALESCE($10, behavioural_attrs),
-       custom_attrs       = COALESCE($11, custom_attrs),
-       updated_at         = NOW()
-     WHERE id = $12 AND workspace_id = $13
+// ─── UPDATE persona ───────────────────────────────────────────────────────────
+// Accepts flat form fields from the frontend and rebuilds behavioural_attrs
+const updatePersona = async (id, workspaceId, fields) => {
+  const {
+    name, tags, country, language,
+    ageMin, ageMax, gender,
+    deviceType, aiGenerated,
+  } = fields;
+
+  // Always rebuild behavioural_attrs from the full form payload
+  // This is the key fix: previously only top-level columns were updated,
+  // leaving behavioural_attrs (designation, description, etc.) stale
+  const behaviouralAttrs = buildBehaviouralAttrs(fields);
+
+  const updates = [];
+  const values  = [];
+  let   idx     = 1;
+
+  const set = (col, val) => { updates.push(`${col} = $${idx++}`); values.push(val); };
+
+  if (name        !== undefined) set('name',       name);
+  if (tags        !== undefined) set('tags',       Array.isArray(tags) ? tags : []);
+  if (country     !== undefined) set('country',    country    || null);
+  if (language    !== undefined) set('language',   language   || 'en');
+  if (ageMin      !== undefined) set('age_min',    ageMin     ? parseInt(ageMin) : null);
+  if (ageMax      !== undefined) set('age_max',    ageMax     ? parseInt(ageMax) : null);
+  if (gender      !== undefined) set('gender',     gender     || null);
+  if (deviceType  !== undefined) set('device_type', deviceType || 'desktop');
+  if (aiGenerated !== undefined) set('ai_generated', !!aiGenerated);
+
+  // Always update behavioural_attrs when form fields are present
+  set('behavioural_attrs', JSON.stringify(behaviouralAttrs));
+  set('updated_at', new Date().toISOString());
+
+  if (updates.length === 0) return null;
+
+  values.push(id, workspaceId);
+  const { rows } = await pool.query(
+    `UPDATE personas
+     SET ${updates.join(', ')}
+     WHERE id = $${idx++} AND workspace_id = $${idx}
      RETURNING *`,
-    [
-      updates.name, updates.description, updates.tags,
-      updates.ageMin, updates.ageMax, updates.gender,
-      updates.country, updates.language, updates.deviceType,
-      updates.behaviouralAttrs ? JSON.stringify(updates.behaviouralAttrs) : null,
-      updates.customAttrs      ? JSON.stringify(updates.customAttrs)      : null,
-      id, workspaceId,
-    ]
+    values
   );
-  return result.rows[0] || null;
+  return rows[0] || null;
 };
 
-// ─── Delete persona ───────────────────────────────────────────────────────────
+// ─── DELETE (soft) ────────────────────────────────────────────────────────────
 const deletePersona = async (id, workspaceId) => {
-  const result = await pool.query(
-    `DELETE FROM personas WHERE id = $1 AND workspace_id = $2 RETURNING id`,
+  const { rows } = await pool.query(
+    `UPDATE personas SET is_active = false, updated_at = NOW()
+     WHERE id = $1 AND workspace_id = $2
+     RETURNING id`,
     [id, workspaceId]
   );
-  return result.rows[0] || null;
+  return rows[0] || null;
 };
 
 module.exports = {
