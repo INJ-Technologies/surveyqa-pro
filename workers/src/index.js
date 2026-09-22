@@ -48,14 +48,52 @@ console.log(`[Worker] Screenshots: ${SCREENSHOTS_DIR}`);
 console.log(`[Worker] Traces:      ${TRACES_DIR}`);
 
 // ─── Load persona ─────────────────────────────────────────────────────────────
-const getPersona = async (personaId) => {
-  if (!personaId) return null;
-  try {
-    const result = await pool.query(`SELECT * FROM personas WHERE id = $1`, [personaId]);
-    return result.rows[0] || null;
-  } catch {
-    return null;
+// ─── Load persona — from session record or random from project pool ────────────
+const getPersona = async (personaId, projectId) => {
+  // If a specific persona is already assigned to this session, use it
+  if (personaId) {
+    try {
+      const result = await pool.query(
+        `SELECT * FROM personas WHERE id = $1`, [personaId]
+      );
+      if (result.rows[0]) {
+        console.log(`[Persona] Loaded assigned persona: "${result.rows[0].name}"`);
+        return result.rows[0];
+      }
+    } catch { }
   }
+ 
+  // No persona assigned — check if project has a persona pool
+  if (projectId) {
+    try {
+      const poolResult = await pool.query(
+        `SELECT p.* FROM project_personas pp
+         JOIN personas p ON p.id = pp.persona_id
+         WHERE pp.project_id = $1 AND pp.is_active = true
+         ORDER BY RANDOM()
+         LIMIT 1`,
+        [projectId]
+      );
+      if (poolResult.rows[0]) {
+        const picked = poolResult.rows[0];
+        console.log(`[Persona] Auto-assigned from project pool (random): "${picked.name}"`);
+        // Store the persona assignment on the session record
+        await pool.query(
+          `UPDATE sessions SET persona_id = $1, persona_name = $2 WHERE id = (
+             SELECT id FROM sessions WHERE project_id = $3 AND status IN ('queued','initialising')
+             ORDER BY created_at DESC LIMIT 1
+           )`,
+          [picked.id, picked.name, projectId]
+        ).catch(() => {}); // non-fatal
+        return picked;
+      }
+    } catch (e) {
+      console.warn('[Persona] Pool lookup failed:', e.message);
+    }
+  }
+ 
+  console.log('[Persona] No persona assigned — using default AI respondent');
+  return null;
 };
 
 // ─── Build human-readable answer summary ─────────────────────────────────────
@@ -1019,34 +1057,76 @@ const findMatchingStep = (scenario, questionsOnPage, pageNum) => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 const buildPersonaContext = (persona) => {
-  if (!persona) return 'You are a typical senior professional respondent. Be realistic and consistent.';
+  if (!persona) return 'You are a realistic, thoughtful survey respondent. Answer questions naturally and consistently.';
+ 
   const attrs = persona.behavioural_attrs || {};
-  const lines = ['YOU ARE THIS PERSON — answer every question as them:'];
-  if (persona.name)           lines.push(`Name: ${persona.name}`);
-  if (persona.description)    lines.push(`Bio: ${persona.description}`);
-  if (persona.country)        lines.push(`Country: ${persona.country}`);
-  if (persona.language)       lines.push(`Language: ${persona.language}`);
-  if (persona.gender)         lines.push(`Gender: ${persona.gender}`);
+  const isB2B = !!(attrs.designation || attrs.department || attrs.industry);
+ 
+  const lines = [
+    '══════════════════════════════════════════',
+    'YOU ARE THIS PERSON — embody them completely.',
+    'Every answer must be consistent with their profile below.',
+    '══════════════════════════════════════════',
+    '',
+    '── IDENTITY ──',
+  ];
+ 
+  if (persona.name)    lines.push(`Name: ${persona.name}`);
+  if (persona.country) lines.push(`Country / Location: ${persona.country}`);
+  if (persona.language)lines.push(`Language: ${persona.language}`);
+ 
   if (persona.age_min && persona.age_max)
-                              lines.push(`Age: ${persona.age_min}–${persona.age_max}`);
-  else if (persona.age_min)   lines.push(`Age: ${persona.age_min}+`);
-  if (persona.device_type)    lines.push(`Device: ${persona.device_type}`);
-  if (attrs.designation)      lines.push(`Job Title / Designation: ${attrs.designation}`);
-  if (attrs.department)       lines.push(`Department: ${attrs.department}`);
-  if (attrs.industry)         lines.push(`Industry: ${attrs.industry}`);
-  if (attrs.companyRevenue)   lines.push(`Company Revenue: ${attrs.companyRevenue}`);
-  if (attrs.employeeSize)     lines.push(`Company Size (employees): ${attrs.employeeSize}`);
-  if (attrs.readingSpeed)     lines.push(`Reading Speed: ${attrs.readingSpeed}`);
-  if (attrs.responseStyle)    lines.push(`Response Style: ${attrs.responseStyle}`);
-  if (attrs.deviceOs)         lines.push(`Device OS: ${attrs.deviceOs}`);
-  if (attrs.browser)          lines.push(`Browser: ${attrs.browser}`);
-  if (attrs.behaviouralTags?.length > 0)
-                              lines.push(`Behavioural Profile: ${attrs.behaviouralTags.join(', ')}`);
+    lines.push(`Age: ${persona.age_min}–${persona.age_max} years`);
+  else if (persona.age_min)
+    lines.push(`Age: ${persona.age_min}+ years`);
+ 
+  if (persona.gender)  lines.push(`Gender: ${persona.gender}`);
+ 
+  if (attrs.educationLevel) lines.push(`Education: ${attrs.educationLevel}`);
+  if (attrs.maritalStatus)  lines.push(`Marital Status: ${attrs.maritalStatus}`);
+  if (attrs.childrenStatus) lines.push(`Children / Dependants: ${attrs.childrenStatus}`);
+  if (attrs.annualIncome)   lines.push(`Annual Income: ${attrs.annualIncome}`);
+ 
+  if (isB2B) {
+    lines.push('');
+    lines.push('── PROFESSIONAL PROFILE ──');
+    if (attrs.designation)   lines.push(`Job Title / Designation: ${attrs.designation}`);
+    if (attrs.department)    lines.push(`Department / Function: ${attrs.department}`);
+    if (attrs.industry)      lines.push(`Industry: ${attrs.industry}`);
+    if (attrs.companyRevenue)lines.push(`Company Revenue: ${attrs.companyRevenue}`);
+    if (attrs.employeeSize)  lines.push(`Company Size: ${attrs.employeeSize}`);
+  }
+ 
+  lines.push('');
+  lines.push('── DEVICE & BEHAVIOUR ──');
+  if (persona.device_type)  lines.push(`Device: ${persona.device_type}`);
+  if (attrs.deviceOs)       lines.push(`OS: ${attrs.deviceOs}`);
+  if (attrs.browser)        lines.push(`Browser: ${attrs.browser}`);
+  if (attrs.readingSpeed)   lines.push(`Reading Speed: ${attrs.readingSpeed}`);
+  if (attrs.responseStyle)  lines.push(`Response Style: ${attrs.responseStyle}`);
+ 
+  if (attrs.behaviouralTags?.length > 0) {
+    lines.push(`Behavioural Profile: ${attrs.behaviouralTags.join(', ')}`);
+  }
+ 
   if (attrs.secondaryDescription) {
     lines.push('');
-    lines.push('FULL PERSONA DESCRIPTION (treat this as your character brief):');
+    lines.push('── CHARACTER BRIEF ──');
+    lines.push('(This is your full persona description. Treat it as your character brief:)');
     lines.push(attrs.secondaryDescription);
   }
+ 
+  lines.push('');
+  lines.push('── ANSWERING RULES ──');
+  lines.push('1. Read each question carefully and match it to your profile above.');
+  lines.push('2. Age questions: pick a specific age within your range.');
+  lines.push('3. Industry/role/company questions: use your professional profile exactly.');
+  lines.push('4. Income/spend questions: stay consistent with your income and company size.');
+  lines.push('5. Brand/preference questions: refer to your character brief.');
+  lines.push('6. Screener/qualification questions: answer as this person honestly — you may qualify or not.');
+  lines.push('7. Attention checks: answer the question exactly as asked (not what seems "right").');
+  lines.push('8. Keep answers consistent with previous answers in this session.');
+ 
   return lines.join('\n');
 };
 
@@ -2011,7 +2091,7 @@ const processSession = async (job) => {
   await updateSessionStatus(sessionId, 'initialising');
   await logSessionEvent(sessionId, 'worker_started', { jobId: job.id, responseId });
 
-  const persona = await getPersona(personaId);
+  const persona = await getPersona(personaId, projectId);
   const readingSpeed = persona?.behavioural_attrs?.readingSpeed || 'normal';
   const deviceOs = persona?.behavioural_attrs?.deviceOs || 'windows';
 
