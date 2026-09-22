@@ -43,8 +43,7 @@ import {
   Hash,
   ChevronDown,
   Pencil,
-  Copy,
-  CheckCircle
+  Copy
 } from "lucide-react";
 
 const FONT =
