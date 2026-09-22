@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Bell,
   Bot,
+  Brain
 } from "lucide-react";
 
 const NAV = [
@@ -20,6 +21,7 @@ const NAV = [
   { path: "/personas", label: "Personas", icon: Users },
   { path: "/sessions", label: "Sessions", icon: Activity },
   { path: "/ai_providers", label: "AI Providers", icon: Bot },
+  { path: '/ai-models', label: 'AI Models', icon: Brain },
 ];
 
 export default function Layout({ children, title }) {

@@ -568,7 +568,7 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
           <input
             type="number"
             min="1"
-            max="20"
+            max="1000"
             style={{
               width: "100%",
               padding: "10px 12px",
@@ -590,7 +590,7 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
               marginTop: 4,
             }}
           >
-            Max 20 per trigger. Concurrent limit: {project.concurrent_sessions}
+            Max 1000 per trigger. Concurrent limit: {project.concurrent_sessions}
           </div>
         </div>
 
@@ -5193,13 +5193,23 @@ function SessionsTab({
   }, [load]);
 
   useEffect(() => {
+    // Always clear the previous interval first
+    clearInterval(intervalRef.current);
+    intervalRef.current = null;
+
     const hasActive =
       stats && (parseInt(stats.active) > 0 || parseInt(stats.queued) > 0);
+
     if (hasActive || autoRefresh) {
       intervalRef.current = setInterval(() => load(true), 8000);
     }
-    return () => clearInterval(intervalRef.current);
-  }, [stats, autoRefresh]);
+
+    // Cleanup on unmount OR when deps change
+    return () => {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    };
+  }, [stats?.active, stats?.queued, autoRefresh, projectId]);
 
   // Returns live elapsed time for active sessions, stored duration for completed ones
   const getLiveDuration = (session) => {
