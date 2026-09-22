@@ -2177,25 +2177,149 @@ const processSession = async (job) => {
       let questionsOnPage = [];
       try {
         pageTitle = await page.title();
+
         const rawTexts = await page.evaluate(() => {
-          const selectors = ['.qtext', '.question-text', '.qtitle', '[class*="qtext"]', '[class*="question-title"]', 'legend', 'h2', 'h3'];
           const found = new Set();
-          for (const sel of selectors) {
+
+          // ── Priority 1: Decipher-specific question text selectors ─────────
+          // These are always reliable — they are always question text in Decipher
+          const primarySelectors = [
+            '.qtext',
+            '.question-text',
+            '.qtitle',
+            '[class*="qtext"]',
+            '[class*="question-title"]',
+            '[class*="questionText"]',
+            'legend',
+            '.survey-question-text',
+            '[data-question-text]',
+          ];
+          for (const sel of primarySelectors) {
             document.querySelectorAll(sel).forEach(el => {
               const text = (el.innerText || el.textContent || '').trim();
-              if (text) found.add(text);
+              if (text && text.length >= 8 && text.length <= 500) found.add(text);
             });
             if (found.size >= 8) break;
           }
+
+          // ── Priority 2: h2/h3/h4 ONLY inside a known question container ───
+          // NEVER grab bare h2/h3 from the full page — they are section headers,
+          // page titles, navigation labels — NOT survey questions
+          if (found.size === 0) {
+            const questionContainers = document.querySelectorAll(
+              '.qblock, .question, [class*="qblock"], [class*="question-block"], ' +
+              '[class*="questionContainer"], [class*="question-container"], fieldset'
+            );
+            questionContainers.forEach(block => {
+              const heading = block.querySelector('h2, h3, h4');
+              if (heading) {
+                const text = (heading.innerText || heading.textContent || '').trim();
+                if (text && text.length >= 8 && text.length <= 500) found.add(text);
+              }
+            });
+          }
+
+          // ── Priority 3: Proximity-based extraction ────────────────────────
+          // Last resort: walk up the DOM from each input to find nearby question text.
+          // Only accept text that looks like a genuine question.
+          if (found.size === 0) {
+            const inputSelectors = [
+              'input[type="radio"]:not([disabled])',
+              'input[type="checkbox"]:not([disabled])',
+              'select:not([disabled])',
+              'textarea:not([disabled])',
+            ];
+            const seen = new Set();
+
+            for (const selector of inputSelectors) {
+              const inputs = document.querySelectorAll(selector);
+              for (const inp of inputs) {
+                let node = inp.parentElement;
+                for (let depth = 0; depth < 10; depth++) {
+                  if (!node || node === document.body) break;
+
+                  // Get own text by cloning and stripping child inputs/labels/tables
+                  const clone = node.cloneNode(true);
+                  clone.querySelectorAll(
+                    'input, select, textarea, button, label, ul, ol, table'
+                  ).forEach(n => n.remove());
+                  const ownText = (clone.innerText || clone.textContent || '')
+                    .trim().replace(/\s+/g, ' ');
+
+                  if (
+                    ownText.length >= 10 &&
+                    ownText.length <= 400 &&
+                    !seen.has(ownText) &&
+                    (ownText.includes('?') || ownText.split(' ').length >= 6)
+                  ) {
+                    const words = ownText.split(' ').filter(w => w.length > 2);
+                    if (words.length >= 4) {
+                      found.add(ownText);
+                      seen.add(ownText);
+                      break;
+                    }
+                  }
+
+                  // Stop walking up when container holds too many inputs — left question scope
+                  if (node.querySelectorAll('input, select, textarea').length > 6) break;
+                  node = node.parentElement;
+                }
+                if (found.size >= 8) break;
+              }
+              if (found.size >= 8) break;
+            }
+          }
+
           return [...found];
         });
+
+        // ── Filter: remove non-question text that slipped through ─────────────
+        const NON_QUESTION_PATTERNS = [
+          // Instruction-style openers
+          /^please select/i, /^select all/i, /^choose all/i,
+          /^select one/i, /^choose one/i, /^check all/i,
+          /^please choose/i, /^please indicate/i, /^please rate/i,
+          /^please answer/i, /^please complete/i, /^please tick/i,
+          /^please check/i, /^required/i, /^optional/i, /^\*/,
+          /^e\.g\./i, /^example/i, /^hint/i, /^note:/i, /^tip:/i,
+          /^important:/i, /^instruction/i,
+          // Progress / navigation
+          /^section \d/i, /^\d+\s*of\s*\d+/, /^page \d/i, /^step \d/i,
+          /^part \d/i, /^question \d+\s*of\s*\d+/i, /^q\d+\s*of\s*\d+/i,
+          // Form helper text
+          /^all fields/i, /^fields marked/i, /^mandatory/i, /^\* denotes/i,
+          /^your (answers?|responses?) (are|will be|remain)/i,
+          // Survey meta-text
+          /^this survey/i, /^this questionnaire/i, /^this study/i,
+          /^the following/i, /^in this section/i,
+          /^on a scale/i, /^using the scale/i, /^where \d/i,
+          // Legal / privacy
+          /^privacy/i, /^terms/i, /^copyright/i,
+          /^by (clicking|continuing|proceeding)/i,
+          /^i agree/i, /^i confirm/i,
+          // Navigation labels
+          /^(next|back|continue|submit|cancel|close|skip)$/i,
+          // Pure numbers or symbols only
+          /^\s*[\d\W]+\s*$/,
+        ];
+
+        const isNonQuestion = (text) =>
+          !text ||
+          text.length < 8 ||
+          text.length > 500 ||
+          NON_QUESTION_PATTERNS.some(p => p.test(text.trim()));
+
         questionsOnPage = rawTexts
-          .map(t => t.replace(/[\u2018\u2019\u201A\u201B]/g, "'")
-                     .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
-                     .replace(/\s+/g, ' ').trim())
-          .filter(t => !isHintText(t))
+          .map(t => t
+            .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+            .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+            .replace(/\s+/g, ' ')
+            .trim()
+          )
+          .filter(t => !isNonQuestion(t))
           .slice(0, 5);
-        console.log(`[Worker] Questions detected: [${questionsOnPage.map(q => `"${q.slice(0,50)}"`).join(', ')}]`);
+
+        console.log(`[Worker] Questions detected (${questionsOnPage.length}): [${questionsOnPage.map(q => `"${q.slice(0, 50)}"`).join(', ')}]`);
       } catch (e) {
         console.warn(`[Worker] Question detection failed: ${e.message}`);
       }

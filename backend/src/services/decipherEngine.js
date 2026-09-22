@@ -1,11 +1,85 @@
 'use strict';
 
-// ─── Decipher / FocusVision Survey Engine ────────────────────────────────────
+// ─── Decipher / FocusVision Survey Engine ─────────────────────────────────────
+// Version 2.0 — improved question extraction, consent handling, dropdown fixes
 
 const COMPLETE_URLS  = ['thankyou', 'complete', 'thank-you', 'finished', 'done', 'survey-closed'];
 const TERMINATE_URLS = ['terminate', 'terminated', 'screenout', 'screen-out', 'disqualified', 'dq', 'noteligible'];
 const QUOTA_URLS     = ['quota', 'over-quota', 'overquota', 'quotafull', 'quota-full', 'full'];
 
+// ─── Non-question text patterns (used in question extractor) ──────────────────
+// These patterns identify text that looks like a question but is NOT a question:
+// instruction text, section headers, progress indicators, legal notices, etc.
+const NON_QUESTION_PATTERNS = [
+  // Instruction-style openers
+  /^please select/i,
+  /^select all/i,
+  /^choose all/i,
+  /^select one/i,
+  /^choose one/i,
+  /^check all/i,
+  /^please choose/i,
+  /^please indicate/i,
+  /^please rate/i,
+  /^please answer/i,
+  /^please complete/i,
+  /^please tick/i,
+  /^please check/i,
+  /^required/i,
+  /^optional/i,
+  /^\*/,
+  /^e\.g\./i,
+  /^example/i,
+  /^hint/i,
+  /^note:/i,
+  /^tip:/i,
+  /^important:/i,
+  /^instruction/i,
+  // Progress / navigation
+  /^section \d/i,
+  /^\d+\s*of\s*\d+/,
+  /^page \d/i,
+  /^step \d/i,
+  /^part \d/i,
+  /^question \d+\s*of\s*\d+/i,
+  /^q\d+\s*of\s*\d+/i,
+  // Form helper text
+  /^all fields/i,
+  /^fields marked/i,
+  /^mandatory/i,
+  /^\* denotes/i,
+  /^your (answers?|responses?) (are|will be|remain)/i,
+  // Survey meta-text
+  /^this survey/i,
+  /^this questionnaire/i,
+  /^this study/i,
+  /^the following/i,
+  /^in this section/i,
+  /^for each/i,
+  /^on a scale/i,            // scale instructions without the actual question
+  /^using the scale/i,
+  /^where 1/i,
+  /^where \d/i,
+  // Legal / privacy
+  /^privacy/i,
+  /^terms/i,
+  /^copyright/i,
+  /^by (clicking|continuing|proceeding)/i,
+  /^i agree/i,
+  /^i confirm/i,
+  // Pure numbers or symbols
+  /^\s*[\d\W]+\s*$/,
+  // Very short navigation-style text
+  /^(next|back|continue|submit|cancel|close|skip)$/i,
+];
+
+const isNonQuestion = (text) =>
+  !text ||
+  text.length < 8 ||
+  text.length > 500 ||
+  NON_QUESTION_PATTERNS.some(p => p.test(text.trim()));
+
+// Keep isHintText as a lighter version for other uses (option label filtering etc.)
 const HINT_PATTERNS = [
   /^please select/i, /^select all/i, /^choose all/i,
   /^select one/i,    /^choose one/i, /^check all/i,
@@ -18,6 +92,7 @@ const isHintText = (text) =>
   !text || text.length < 4 || text.length > 350 ||
   HINT_PATTERNS.some(p => p.test(text.trim()));
 
+// ─── Other option patterns ─────────────────────────────────────────────────────
 const OTHER_PATTERNS = [
   /^other/i, /^other \(please specify\)/i, /^other \(specify\)/i,
   /^specify/i, /^none of the above/i, /^prefer not to (say|answer)/i,
@@ -26,6 +101,29 @@ const OTHER_PATTERNS = [
 
 const isOtherOption = (text) =>
   OTHER_PATTERNS.some(p => p.test((text || '').trim()));
+
+// ─── Consent checkbox detection ───────────────────────────────────────────────
+// These are boxes that MUST be ticked to proceed — not survey answer choices
+const CONSENT_PATTERNS = [
+  /\bagree\b/i,
+  /\bterms\b/i,
+  /\bprivacy\b/i,
+  /\bconsent\b/i,
+  /\bconfirm\b/i,
+  /\bi am \d{2}/i,          // "I am 18 years old"
+  /\b18\s*(years|yr)/i,
+  /\bof age\b/i,
+  /\bi have read\b/i,
+  /\bi understand\b/i,
+  /\beligible\b/i,
+  /\bqualify\b/i,
+  /\bpolicy\b/i,
+  /\blegal\b/i,
+  /\bdisclaimer\b/i,
+];
+
+const isConsentCheckbox = (labelText) =>
+  CONSENT_PATTERNS.some(p => p.test((labelText || '')));
 
 // ─── Detect outcome from URL ──────────────────────────────────────────────────
 const detectOutcome = (url) => {
@@ -37,14 +135,13 @@ const detectOutcome = (url) => {
 };
 
 // ─── Detect outcome from page content (Decipher exit pages) ──────────────────
-// Decipher exit pages stay on the same URL — must read page body to know outcome
 const detectOutcomeFromPage = async (page) => {
   try {
     const text = await page.evaluate(() =>
       (document.body.innerText || document.body.textContent || '').toLowerCase()
     );
 
-    // Terminated / Screened out — check FIRST (more specific phrases)
+    // Terminated / Screened out — check FIRST (most specific)
     if (
       text.includes('looking for a specific type of participant') ||
       text.includes('unfortunately, we are looking') ||
@@ -69,7 +166,7 @@ const detectOutcomeFromPage = async (page) => {
       text.includes('unfortunately we are no longer')
     ) return 'over_quota';
 
-    // Qualified / Completed — check LAST (most generic)
+    // Completed — check LAST (most generic)
     if (
       text.includes('thank you for taking our survey') ||
       text.includes('your efforts are greatly appreciated') ||
@@ -116,7 +213,7 @@ const safeClick = async (el) => {
   }
 };
 
-// ─── Get label text for a radio/checkbox input ───────────────────────────────
+// ─── Get label text for a radio/checkbox input ────────────────────────────────
 const getLabelText = async (input) => {
   try {
     return await input.evaluate(el => {
@@ -204,29 +301,54 @@ const answerRadio = async (page, persona) => {
 };
 
 // ─── Answer checkboxes ────────────────────────────────────────────────────────
+// FIX: Consent checkboxes (terms/privacy/age verification) are always ticked.
+// Regular checkboxes use persona-driven random selection.
 const answerCheckbox = async (page) => {
   const allBoxes = await page.$$('input[type="checkbox"]:not([disabled])');
   if (allBoxes.length === 0) return null;
 
   const boxesWithLabels = await Promise.all(allBoxes.map(async box => ({
-    el: box,
+    el:    box,
     label: await getLabelText(box),
   })));
 
-  const mainBoxes  = boxesWithLabels.filter(b => !isOtherOption(b.label));
-  const pool       = mainBoxes.length > 0 ? mainBoxes : boxesWithLabels;
-
-  const count    = Math.min(pool.length, Math.floor(Math.random() * 3) + 1);
-  const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, count);
   const selectedLabels = [];
 
-  for (const box of shuffled) {
+  // ── Step 1: Always tick consent checkboxes ───────────────────────────────
+  const consentBoxes  = boxesWithLabels.filter(b => isConsentCheckbox(b.label));
+  const regularBoxes  = boxesWithLabels.filter(b =>
+    !isConsentCheckbox(b.label) && !isOtherOption(b.label)
+  );
+
+  for (const box of consentBoxes) {
     try {
-      await safeClick(box.el);
-      await page.waitForTimeout(Math.floor(Math.random() * 300) + 100);
-      selectedLabels.push(box.label || 'Option selected');
+      const isChecked = await box.el.isChecked().catch(() => false);
+      if (!isChecked) {
+        await safeClick(box.el);
+        await page.waitForTimeout(Math.floor(Math.random() * 200) + 100);
+      }
+      selectedLabels.push(box.label || 'Consent acknowledged');
+      console.log(`[Engine] ✓ Consent checkbox ticked: "${(box.label || '').slice(0, 60)}"`);
     } catch {}
   }
+
+  // ── Step 2: Random selection for regular answer checkboxes ───────────────
+  const pool = regularBoxes.length > 0 ? regularBoxes : [];
+
+  if (pool.length > 0) {
+    const count    = Math.min(pool.length, Math.floor(Math.random() * 3) + 1);
+    const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, count);
+
+    for (const box of shuffled) {
+      try {
+        await safeClick(box.el);
+        await page.waitForTimeout(Math.floor(Math.random() * 300) + 100);
+        selectedLabels.push(box.label || 'Option selected');
+      } catch {}
+    }
+  }
+
+  if (selectedLabels.length === 0) return null;
 
   return {
     type:          'checkbox',
@@ -237,6 +359,8 @@ const answerCheckbox = async (page) => {
 };
 
 // ─── Answer select dropdowns ──────────────────────────────────────────────────
+// FIX: Properly detect and skip placeholder options instead of blindly slice(1).
+// Handles: "--Select one--", "Please choose...", empty values, value="0" placeholders.
 const answerSelect = async (page) => {
   const selects = await page.$$('select:not([disabled])');
   if (selects.length === 0) return null;
@@ -245,19 +369,48 @@ const answerSelect = async (page) => {
 
   for (const select of selects) {
     try {
+      // Check if already answered (has a real selected value)
+      const currentValue = await select.evaluate(el => el.value);
+      const isAnswered = currentValue &&
+        currentValue !== '' &&
+        currentValue !== '0' &&
+        !/^(--|select|choose|please|pick|none)/i.test(currentValue);
+      if (isAnswered) continue;
+
       const options = await select.$$('option');
-      const allValid = options.slice(1);
-      if (allValid.length === 0) continue;
 
-      const idx   = Math.floor(Math.random() * Math.min(allValid.length, Math.ceil(allValid.length * 0.75)));
-      const value = await allValid[idx].getAttribute('value');
-      const label = await allValid[idx].evaluate(el => el.innerText?.trim() || el.value);
+      // FIX: Filter placeholder options properly rather than blindly skipping [0]
+      const validOptions = [];
+      for (const opt of options) {
+        const value = await opt.getAttribute('value');
+        const text  = await opt.evaluate(el => (el.innerText || el.textContent || '').trim());
 
-      if (value) {
-        await select.selectOption(value);
-        await page.waitForTimeout(Math.floor(Math.random() * 400) + 150);
-        selections.push({ selectedValue: value, selectedLabel: label, totalOptions: allValid.length });
+        // Skip if no value
+        if (!value || value === '' || value === '0') continue;
+
+        // Skip placeholder text patterns
+        if (/^(--|select|choose|please select|please choose|pick one|none selected)/i.test(text)) continue;
+
+        // Skip if text is empty
+        if (!text || text.length === 0) continue;
+
+        validOptions.push({ value, text });
       }
+
+      if (validOptions.length === 0) continue;
+
+      // Pick a random option from first 75% of valid options (avoids "prefer not to say" at end)
+      const pickFrom = Math.max(1, Math.ceil(validOptions.length * 0.75));
+      const idx      = Math.floor(Math.random() * pickFrom);
+      const chosen   = validOptions[idx];
+
+      await select.selectOption(chosen.value);
+      await page.waitForTimeout(Math.floor(Math.random() * 400) + 150);
+      selections.push({
+        selectedValue: chosen.value,
+        selectedLabel: chosen.text,
+        totalOptions:  validOptions.length,
+      });
     } catch {}
   }
 
@@ -272,9 +425,20 @@ const answerNumeric = async (page) => {
   const values = [];
   for (const input of numInputs) {
     try {
-      const min = parseFloat(await input.getAttribute('min') || '1');
-      const max = parseFloat(await input.getAttribute('max') || '100');
-      const val = Math.floor(min + Math.random() * (max - min));
+      // Skip already-filled inputs
+      const existing = await input.inputValue().catch(() => '');
+      if (existing && existing.trim() !== '') continue;
+
+      const minAttr = await input.getAttribute('min');
+      const maxAttr = await input.getAttribute('max');
+      const min     = parseFloat(minAttr ?? '1');
+      const max     = parseFloat(maxAttr ?? '100');
+
+      // Clamp to sensible defaults if attributes are missing or extreme
+      const safeMin = isNaN(min) ? 1   : Math.max(0, min);
+      const safeMax = isNaN(max) ? 100 : Math.min(9999, max);
+
+      const val = Math.floor(safeMin + Math.random() * (safeMax - safeMin));
       await input.fill(String(val));
       await page.waitForTimeout(200);
       values.push(val);
@@ -284,7 +448,8 @@ const answerNumeric = async (page) => {
   return values.length > 0 ? { type: 'numeric', values } : null;
 };
 
-// ─── Answer open-ended text fields ───────────────────────────────────────────
+// ─── Answer open-ended text fields ────────────────────────────────────────────
+// Skips spec boxes that belong to unselected "Other" options.
 const answerOpenEnd = async (page, persona) => {
   const textareas  = await page.$$('textarea:not([disabled]):not([readonly])');
   const textInputs = await page.$$('input[type="text"]:not([disabled]):not([readonly])');
@@ -323,29 +488,58 @@ const answerOpenEnd = async (page, persona) => {
       const box = await field.boundingBox();
       if (!box || box.width < 40 || box.height < 10) continue;
 
+      // Skip fields that already have a value
+      const existingValue = await field.inputValue().catch(() => '');
+      if (existingValue && existingValue.trim() !== '') continue;
+
+      // FIX: Detect spec boxes that belong to unselected "Other" radio options
       const isSpecifyField = await field.evaluate(el => {
-        const form   = el.closest('form') || el.closest('.survey-page') || document;
-        const radios = [...form.querySelectorAll('input[type="radio"]')];
-        const nearbyOtherRadio = radios.find(r => {
-          const id  = r.id;
-          const lbl = id ? document.querySelector(`label[for="${id}"]`) : r.closest('label');
-          const txt = (lbl?.innerText || '').toLowerCase();
-          return txt.includes('other') || txt.includes('specify');
-        });
+        // Strategy 1: Walk up to find a radio container and check if its radio is checked
+        let node = el.parentElement;
+        for (let i = 0; i < 8; i++) {
+          if (!node) break;
 
-        if (nearbyOtherRadio) return !nearbyOtherRadio.checked;
+          // If this container has a radio, check if "Other" radio is checked
+          const radios = node.querySelectorAll('input[type="radio"]');
+          if (radios.length === 1) {
+            const radio = radios[0];
+            const id    = radio.id;
+            const lbl   = id ? document.querySelector(`label[for="${id}"]`) : radio.closest('label');
+            const txt   = (lbl?.innerText || '').toLowerCase();
+            const isOther = txt.includes('other') || txt.includes('specify') || txt.includes('please state');
+            if (isOther && !radio.checked) return true;  // Other radio exists but not checked
+          }
 
-        const parent = el.closest('[class*="other"]') || el.closest('[id*="other"]');
+          // Stop walking up when we hit a container with multiple radios (left option scope)
+          if (node.querySelectorAll('input[type="radio"]').length > 1) break;
+          node = node.parentElement;
+        }
+
+        // Strategy 2: Class/ID-based detection
+        const parent = el.closest('[class*="other"]') ||
+                       el.closest('[id*="other"]') ||
+                       el.closest('[class*="specify"]') ||
+                       el.closest('[id*="specify"]');
         if (parent) {
           const radio = parent.querySelector('input[type="radio"]');
           if (radio && !radio.checked) return true;
+        }
+
+        // Strategy 3: Check placeholder text
+        const ph = (el.placeholder || '').toLowerCase();
+        if (ph.includes('specify') || ph.includes('please state') || ph.includes('please describe')) {
+          // If there's a radio nearby that's not checked, skip this field
+          const nearestForm = el.closest('form') || el.closest('.survey-page') || document;
+          const uncheckedRadios = [...nearestForm.querySelectorAll('input[type="radio"]')]
+            .filter(r => !r.checked);
+          if (uncheckedRadios.length > 0) return true;
         }
 
         return false;
       }).catch(() => false);
 
       if (isSpecifyField) {
-        console.log('[Engine] Skipping specify field — Other radio not selected');
+        console.log('[Engine] Skipping specify/other field — parent radio not selected');
         continue;
       }
 
@@ -458,7 +652,8 @@ const capturePageOptions = async (page) => {
     return await page.evaluate(() => {
       const result = [];
 
-const radioGroups = {};
+      // ── Radio groups ──────────────────────────────────────────────────────
+      const radioGroups = {};
       document.querySelectorAll('input[type="radio"]').forEach(radio => {
         const name = radio.name;
         if (!name) return;
@@ -479,7 +674,7 @@ const radioGroups = {};
         radioGroups[name].options.push(labelText);
         if (radio.checked) radioGroups[name].selected = labelText;
 
-        // ── Capture row label for grid/matrix questions ──
+        // Capture row label for grid/matrix questions
         if (!radioGroups[name].rowLabel) {
           const row = radio.closest('tr');
           if (row) {
@@ -489,7 +684,7 @@ const radioGroups = {};
               if (cellText && cellText.length > 1) radioGroups[name].rowLabel = cellText;
             }
           }
-          // Decipher also uses div-based grids — try parent container label
+          // Decipher div-based grids
           if (!radioGroups[name].rowLabel) {
             const rowDiv = radio.closest('[class*="row"],[class*="item"],[class*="grid-row"]');
             if (rowDiv) {
@@ -507,6 +702,7 @@ const radioGroups = {};
         result.push({ type: 'radio', name, options: group.options, selected: group.selected, rowLabel: group.rowLabel || null });
       });
 
+      // ── Checkboxes ────────────────────────────────────────────────────────
       const checkboxes = document.querySelectorAll('input[type="checkbox"]');
       if (checkboxes.length > 0) {
         const cbOptions  = [];
@@ -529,13 +725,25 @@ const radioGroups = {};
         result.push({ type: 'checkbox', options: cbOptions, selected: cbSelected });
       }
 
+      // ── Dropdowns ─────────────────────────────────────────────────────────
       document.querySelectorAll('select').forEach(select => {
-        const options    = [...select.options].slice(1).map(o => (o.innerText || o.value).trim());
+        // FIX: Filter placeholder options properly
+        const options = [...select.options]
+          .filter(o => {
+            const val  = o.value;
+            const text = (o.innerText || o.textContent || '').trim();
+            if (!val || val === '' || val === '0') return false;
+            if (/^(--|select|choose|please|pick one|none selected)/i.test(text)) return false;
+            return true;
+          })
+          .map(o => (o.innerText || o.value).trim());
+
         const selectedEl = select.options[select.selectedIndex];
         const selected   = selectedEl ? (selectedEl.innerText || selectedEl.value).trim() : null;
         if (options.length > 0) result.push({ type: 'select', options, selected });
       });
 
+      // ── Open-end fields ───────────────────────────────────────────────────
       const textareas  = [...document.querySelectorAll('textarea')];
       const textInputs = [...document.querySelectorAll('input[type="text"]')];
       [...textareas, ...textInputs].forEach(field => {
@@ -551,7 +759,7 @@ const radioGroups = {};
   }
 };
 
-// ─── Answer all questions on page ─────────────────────────────────────────────
+// ─── Answer all questions on page (fallback — used when AI unavailable) ───────
 const answerPage = async (page, persona, readingSpeed = 'normal') => {
   await page.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
   await page.waitForTimeout(500);
@@ -576,4 +784,5 @@ module.exports = {
   readingDelay,
   capturePageOptions,
   isHintText,
+  isNonQuestion,
 };
