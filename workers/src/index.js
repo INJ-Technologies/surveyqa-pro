@@ -62,20 +62,60 @@ const getPersona = async (personaId) => {
 const buildAnswerSummary = (pageOptions, answersGiven) => {
   const summary = [];
   for (const opt of pageOptions || []) {
-    if (opt.type === "radio" && opt.selected) {
+    if (opt.type === 'radio' && opt.selected) {
       const totalOpts = opt.options?.length || 0;
-      const selIdx = opt.options?.indexOf(opt.selected);
-      const selNum = selIdx >= 0 ? selIdx + 1 : "?";
-      summary.push({ type: "radio", label: `Selected: ${opt.selected}`, detail: `Option ${selNum} of ${totalOpts}`, options: opt.options || [], selected: opt.selected });
-    } else if (opt.type === "checkbox" && opt.selected?.length > 0) {
-      summary.push({ type: "checkbox", label: `Selected ${opt.selected.length} of ${opt.options?.length || "?"}`, detail: opt.selected.join(", "), options: opt.options || [], selected: opt.selected });
-    } else if (opt.type === "select" && opt.selected) {
-      summary.push({ type: "select", label: `Selected: ${opt.selected}`, options: opt.options || [], selected: opt.selected });
+      const selIdx    = opt.options?.indexOf(opt.selected);
+      const selNum    = selIdx >= 0 ? selIdx + 1 : '?';
+      // FIX: include spec text in the label when present
+      const label = opt.specText
+        ? `Selected: ${opt.selected} — "${opt.specText}"`
+        : `Selected: ${opt.selected}`;
+      summary.push({
+        type:     'radio',
+        label,
+        detail:   `Option ${selNum} of ${totalOpts}`,
+        options:  opt.options || [],
+        selected: opt.selected,
+        specText: opt.specText || null,
+      });
+    } else if (opt.type === 'checkbox' && opt.selected?.length > 0) {
+      // FIX: append spec texts to the detail string for checkbox
+      let detail = opt.selected.join(', ');
+      if (opt.specTexts?.length > 0) {
+        const specParts = opt.specTexts.map(s => `${s.option}: "${s.text}"`).join(', ');
+        detail += ` (${specParts})`;
+      }
+      summary.push({
+        type:      'checkbox',
+        label:     `Selected ${opt.selected.length} of ${opt.options?.length || '?'}`,
+        detail,
+        options:   opt.options || [],
+        selected:  opt.selected,
+        specTexts: opt.specTexts || null,
+      });
+    } else if (opt.type === 'select' && opt.selected) {
+      summary.push({
+        type:     'select',
+        label:    `Selected: ${opt.selected}`,
+        options:  opt.options || [],
+        selected: opt.selected,
+      });
+    } else if (opt.type === 'open-end' && opt.selected) {
+      // Standalone open-end (not a spec box — those are attached to radio/checkbox above)
+      summary.push({
+        type:  'open-end',
+        label: 'Open-end response',
+        detail: opt.selected,
+      });
     }
   }
   for (const ans of answersGiven || []) {
-    if (ans?.type === "open-end" && ans.text) summary.push({ type: "open-end", label: "Typed response", detail: ans.text });
-    if (ans?.type === "numeric" && ans.values?.length > 0) summary.push({ type: "numeric", label: "Entered value", detail: ans.values.join(", ") });
+    if (ans?.type === 'open-end' && ans.text) {
+      summary.push({ type: 'open-end', label: 'Typed response', detail: ans.text });
+    }
+    if (ans?.type === 'numeric' && ans.values?.length > 0) {
+      summary.push({ type: 'numeric', label: 'Entered value', detail: ans.values.join(', ') });
+    }
   }
   return summary;
 };

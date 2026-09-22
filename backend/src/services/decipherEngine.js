@@ -647,17 +647,48 @@ const clickNext = async (page) => {
 };
 
 // ─── Capture all page options for structured report ───────────────────────────
+// FIX: Spec box text (Other/specify fields) is now captured and attached
+// directly to the radio or checkbox entry that triggered it, not as a
+// separate disconnected open-end entry.
 const capturePageOptions = async (page) => {
   try {
     return await page.evaluate(() => {
       const result = [];
 
+      // ── Helper: find spec box text near a checked input ─────────────────────
+      // Walks up the DOM from the checked input to find a text/textarea
+      // that belongs to the same option container and has a value filled in.
+      const getSpecText = (checkedInput) => {
+        if (!checkedInput) return null;
+        let node = checkedInput.parentElement;
+        for (let i = 0; i < 8; i++) {
+          if (!node) break;
+          // Look for text input or textarea within this container
+          const specInput = node.querySelector(
+            'input[type="text"], input[type="search"], textarea'
+          );
+          if (specInput) {
+            const val = (specInput.value || '').trim();
+            if (val.length > 0) return val;
+          }
+          // Stop walking up when the container holds multiple radio/checkboxes
+          // — we have left the option scope
+          if (node.querySelectorAll('input[type="radio"], input[type="checkbox"]').length > 1) break;
+          node = node.parentElement;
+        }
+        return null;
+      };
+
       // ── Radio groups ──────────────────────────────────────────────────────
       const radioGroups = {};
+      const radioElements = {}; // store the actual element for spec box lookup
       document.querySelectorAll('input[type="radio"]').forEach(radio => {
         const name = radio.name;
         if (!name) return;
-        if (!radioGroups[name]) radioGroups[name] = { options: [], selected: null, rowLabel: null };
+        if (!radioGroups[name]) {
+          radioGroups[name] = { options: [], selected: null, specText: null, rowLabel: null };
+          radioElements[name] = {};
+        }
 
         const id = radio.id;
         let labelText = '';
@@ -672,7 +703,13 @@ const capturePageOptions = async (page) => {
         if (!labelText) labelText = radio.value;
 
         radioGroups[name].options.push(labelText);
-        if (radio.checked) radioGroups[name].selected = labelText;
+
+        if (radio.checked) {
+          radioGroups[name].selected = labelText;
+          // FIX: Capture spec box text for the checked option
+          const specText = getSpecText(radio);
+          if (specText) radioGroups[name].specText = specText;
+        }
 
         // Capture row label for grid/matrix questions
         if (!radioGroups[name].rowLabel) {
@@ -684,7 +721,6 @@ const capturePageOptions = async (page) => {
               if (cellText && cellText.length > 1) radioGroups[name].rowLabel = cellText;
             }
           }
-          // Decipher div-based grids
           if (!radioGroups[name].rowLabel) {
             const rowDiv = radio.closest('[class*="row"],[class*="item"],[class*="grid-row"]');
             if (rowDiv) {
@@ -699,14 +735,23 @@ const capturePageOptions = async (page) => {
       });
 
       Object.entries(radioGroups).forEach(([name, group]) => {
-        result.push({ type: 'radio', name, options: group.options, selected: group.selected, rowLabel: group.rowLabel || null });
+        result.push({
+          type:      'radio',
+          name,
+          options:   group.options,
+          selected:  group.selected,
+          specText:  group.specText || null,   // ← NEW: spec box text attached here
+          rowLabel:  group.rowLabel || null,
+        });
       });
 
       // ── Checkboxes ────────────────────────────────────────────────────────
       const checkboxes = document.querySelectorAll('input[type="checkbox"]');
       if (checkboxes.length > 0) {
-        const cbOptions  = [];
-        const cbSelected = [];
+        const cbOptions    = [];
+        const cbSelected   = [];
+        const cbSpecTexts  = []; // FIX: track spec text per selected checkbox
+
         checkboxes.forEach(cb => {
           const id = cb.id;
           let labelText = '';
@@ -719,21 +764,34 @@ const capturePageOptions = async (page) => {
             if (parentLabel) labelText = (parentLabel.innerText || parentLabel.textContent || '').trim();
           }
           if (!labelText) labelText = cb.value;
+
           cbOptions.push(labelText);
-          if (cb.checked) cbSelected.push(labelText);
+
+          if (cb.checked) {
+            cbSelected.push(labelText);
+            // FIX: capture spec text for checked checkboxes too
+            const specText = getSpecText(cb);
+            if (specText) cbSpecTexts.push({ option: labelText, text: specText });
+          }
         });
-        result.push({ type: 'checkbox', options: cbOptions, selected: cbSelected });
+
+        result.push({
+          type:      'checkbox',
+          options:   cbOptions,
+          selected:  cbSelected,
+          specTexts: cbSpecTexts.length > 0 ? cbSpecTexts : null, // ← NEW
+        });
       }
 
       // ── Dropdowns ─────────────────────────────────────────────────────────
       document.querySelectorAll('select').forEach(select => {
-        // FIX: Filter placeholder options properly
+        // Filter placeholder options properly
         const options = [...select.options]
           .filter(o => {
             const val  = o.value;
             const text = (o.innerText || o.textContent || '').trim();
             if (!val || val === '' || val === '0') return false;
-            if (/^(--|select|choose|please|pick one|none selected)/i.test(text)) return false;
+            if (/^(--|select|choose|please select|please choose|pick one|none selected)/i.test(text)) return false;
             return true;
           })
           .map(o => (o.innerText || o.value).trim());
@@ -743,12 +801,36 @@ const capturePageOptions = async (page) => {
         if (options.length > 0) result.push({ type: 'select', options, selected });
       });
 
-      // ── Open-end fields ───────────────────────────────────────────────────
+      // ── Standalone open-end fields ────────────────────────────────────────
+      // Only captures fields that are NOT spec boxes already captured above.
+      // A field is a standalone open-end if it has no nearby radio/checkbox.
       const textareas  = [...document.querySelectorAll('textarea')];
       const textInputs = [...document.querySelectorAll('input[type="text"]')];
+
       [...textareas, ...textInputs].forEach(field => {
-        if (field.value && field.offsetWidth > 40) {
-          result.push({ type: 'open-end', options: [], selected: field.value });
+        const val = (field.value || '').trim();
+        if (!val) return;
+
+        // Skip invisible fields (spec boxes that are hidden but have stale values)
+        // Use offsetParent instead of offsetWidth for more reliable visibility check
+        if (!field.offsetParent && field.offsetWidth === 0 && field.offsetHeight === 0) return;
+
+        // Check if this field is a spec box that belongs to a radio/checkbox
+        // If so, skip it — it's already captured inside the radio/checkbox entry above
+        const isSpecBox = (() => {
+          let node = field.parentElement;
+          for (let i = 0; i < 8; i++) {
+            if (!node) break;
+            const inputs = node.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+            if (inputs.length === 1 && inputs[0].checked) return true; // attached to a checked option
+            if (inputs.length > 1) break; // left option scope
+            node = node.parentElement;
+          }
+          return false;
+        })();
+
+        if (!isSpecBox) {
+          result.push({ type: 'open-end', options: [], selected: val });
         }
       });
 
