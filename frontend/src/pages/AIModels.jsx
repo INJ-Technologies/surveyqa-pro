@@ -61,9 +61,11 @@ export default function AIModels() {
     try {
       const res = await api.get('/openrouter/estimate?questionCount=20&avgInputTokens=1200&avgOutputTokens=150');
       setEstimate(res.data);
-    } catch {}
+    } catch {
+      // No active model yet — estimate stays null, banner stays hidden
+      setEstimate(null);
+    }
   };
-  useEffect(() => { loadEstimate(); }, [activeModels]);
 
   // ── Browse live models from OpenRouter ───────────────────────────────────
   const loadBrowse = async () => {
