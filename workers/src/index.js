@@ -348,8 +348,8 @@ const fillFollowupInput = async (page) => {
 const rescanForRevealedContent = async (page, providerConfig, persona, factSheet, questionsOnPage) => {
   try {
     // Wait for any CSS animations / JS DOM mutations to settle
-    await page.waitForTimeout(1500);
-    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(600);
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
 
     // Snapshot all currently visible interactive elements
     const revealed = await page.evaluate(() => {
@@ -846,10 +846,6 @@ const captureAllPageFields = async (page) => {
         radioGroups[r.name].push({ label, checked: r.checked });
       });
       radioOrder.forEach((name, gi) => {
-        // Skip radio groups that are already answered (e.g. by Country Logic pre-execution)
-        // This prevents the AI from re-answering a country question that was already clicked
-        const alreadyChecked = radioGroups[name].some(r => r.checked);
-        if (alreadyChecked) return;
         const firstRadio = document.querySelectorAll(`input[type="radio"][name="${name}"]`)[0];
         let questionLabel = '';
         const qblock = firstRadio?.closest('.qblock, .question, [class*="qblock"]');
@@ -1172,8 +1168,6 @@ Every field above MUST appear in answers. newFacts may be {}.`;
             const idx = ans.selectedIndex ?? 0;
             if (idx < radios.length) {
               await clickRadioOption(page, radios[idx]);
-              // Post-click: wait and re-scan for revealed content (custom survey code handling)
-              await rescanForRevealedContent(page, providerConfig, persona, factSheet, questionsOnPage);
               await fillFollowupInput(page);
               const label = field.options?.[idx] || `option ${idx}`;
               answersGiven.push({ type: 'radio', selected: label, aiControlled: true, flags });
@@ -1205,7 +1199,6 @@ Every field above MUST appear in answers. newFacts may be {}.`;
               const targetOpt = field.options?.[ans.selectedIndex];
               if (targetOpt?.value) {
                 await sel.selectOption(targetOpt.value).catch(() => {});
-                await rescanForRevealedContent(page, providerConfig, persona, factSheet, questionsOnPage);
                 answersGiven.push({ type: 'select', selected: targetOpt.label, aiControlled: true, flags });
                 console.log(`[AI] ✓ Select [${field.selectIndex}] → "${targetOpt.label}"`);
               }
@@ -1237,6 +1230,7 @@ Every field above MUST appear in answers. newFacts may be {}.`;
     }
 
     if (answersGiven.length === 0) { console.log('[AI] No answers executed'); return null; }
+
     return answersGiven;
   } catch (e) { console.warn(`[AI] answerPageWithAI crashed: ${e.message}`); return null; }
 };
@@ -1641,6 +1635,74 @@ const processSession = async (job) => {
         console.log(`[Worker] Questions detected (${questionsOnPage.length}): [${questionsOnPage.map(q => `"${q.slice(0,50)}"`).join(', ')}]`);
       } catch (e) { console.warn(`[Worker] Question detection failed: ${e.message}`); }
 
+      // ── Reading speed delay ─────────────────────────────────────────────────────
+      // Simulates realistic human time on a survey — reading the question,
+      // processing options, thinking, and registering a response.
+      // Modelled on CATI interview pacing (interviewer reads, respondent answers).
+      //
+      // BASE TIME per page (single question):
+      //   Express  :  5–10s   (stress test / speed run only)
+      //   Fast     : 12–25s   (quick self-completion)
+      //   Normal   : 25–50s   (average respondent, self-completion)
+      //   Slow     : 45–90s   (deliberate reader, complex questions)
+      //
+      // QUESTION MULTIPLIER: each additional question adds 60–80% of base time
+      // OPTIONS MULTIPLIER:  captured page options inflate time (more to read)
+      {
+        const speedStr = (persona?.behavioural_attrs?.readingSpeed || '').toLowerCase();
+
+        // Base range in milliseconds [min, max] for a single question page
+        let baseMin, baseMax;
+        if (speedStr.includes('slow')) {
+          baseMin = 45_000; baseMax = 90_000;            // 45–90s
+        } else if (speedStr.includes('fast') || speedStr.includes('skim')) {
+          baseMin = 12_000; baseMax = 25_000;            // 12–25s
+        } else if (speedStr.includes('express') || speedStr.includes('terse')) {
+          baseMin =  5_000; baseMax = 10_000;            // 5–10s
+        } else {
+          // Normal / no persona — default average human
+          baseMin = 25_000; baseMax = 50_000;            // 25–50s
+        }
+
+        // Each additional question on the page adds 60–80% of base time
+        // e.g. 3 questions at normal pace = 1.0 + 0.7 + 0.7 = 2.4× base
+        const qCount = Math.max(1, questionsOnPage.length);
+        const questionMultiplier = 1 + (qCount - 1) * (0.60 + Math.random() * 0.20);
+
+        // Random variation within range, then scaled by question count
+        const baseMs = baseMin + Math.random() * (baseMax - baseMin);
+        let readMs   = Math.round(baseMs * questionMultiplier);
+
+        // Hard cap: no page should take more than 4 minutes
+        // Hard floor: always at least 5 seconds (page load + screenshot time)
+        readMs = Math.min(readMs, 240_000);
+        readMs = Math.max(readMs,   5_000);
+
+        const readSec = Math.round(readMs / 1000);
+        console.log(
+          `[Worker] Reading delay: ${readSec}s ` +
+          `(speed: ${speedStr || 'normal/average'}, ` +
+          `questions: ${qCount}, ` +
+          `multiplier: ${questionMultiplier.toFixed(2)}×)`
+        );
+
+        // Break the wait into chunks so the session stop-check still works
+        // Check every 10s if the session was manually stopped
+        let remaining = readMs;
+        while (remaining > 0) {
+          const chunk = Math.min(remaining, 10_000);
+          await page.waitForTimeout(chunk);
+          remaining -= chunk;
+
+          // Early exit if page already navigated away (survey auto-advanced)
+          const stillOnPage = await page.url().catch(() => '');
+          if (stillOnPage !== currentUrl) {
+            console.log(`[Worker] Page auto-advanced during reading delay — stopping wait`);
+            break;
+          }
+        }
+      }
+
       // Screenshot before answering
       const screenshotFilename = `page_${pageCount}.png`;
       const screenshotPath = path.join(sessionScreenshotsDir, screenshotFilename);
@@ -1723,6 +1785,21 @@ const processSession = async (job) => {
           if (answerText) agentSetup.factSheet.pageHistory.push({ page: pageCount, question: questionText.slice(0,200), answer: answerText.slice(0,200), type: ans.type });
         }
       }
+
+      // ── Post-answer hesitation delay ─────────────────────────────────────────────
+      // After selecting an answer, a real person pauses before clicking Next.
+      // Expressive/detailed personas take longer (reviewing their answer).
+      {
+        const styleStr = (persona?.behavioural_attrs?.responseStyle || '').toLowerCase();
+        let hesMs;
+        if      (styleStr.includes('expressive') || styleStr.includes('detail')) hesMs = 3000 + Math.random() * 4000;
+        else if (styleStr.includes('terse') || styleStr.includes('minimal'))     hesMs =  800 + Math.random() * 1200;
+        else                                                                      hesMs = 1500 + Math.random() * 2500;
+        await page.waitForTimeout(Math.round(hesMs));
+      }
+
+      // Last-resort fill for anything AI missed
+      await fillRemainingInputs(page);
 
       // Last-resort fill for anything AI missed
       await fillRemainingInputs(page);
