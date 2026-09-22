@@ -321,6 +321,45 @@ const migrate = async () => {
       )
     `);
 
+    // ─── AI MODELS ─────────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_models (
+        id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        workspace_id        UUID         NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        display_name        VARCHAR(255) NOT NULL,
+        model_id            VARCHAR(200) NOT NULL,
+        provider            VARCHAR(100),
+        input_price_per_1m  NUMERIC(12,6) DEFAULT 0,
+        output_price_per_1m NUMERIC(12,6) DEFAULT 0,
+        context_length      INTEGER       DEFAULT 0,
+        supports_reasoning  BOOLEAN       DEFAULT false,
+        reasoning_level     VARCHAR(20)   DEFAULT 'off'
+                              CHECK (reasoning_level IN ('off','low','medium','high')),
+        notes               TEXT,
+        is_default          BOOLEAN       DEFAULT false,
+        is_active           BOOLEAN       DEFAULT true,
+        created_at          TIMESTAMPTZ   DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ   DEFAULT NOW(),
+        UNIQUE(workspace_id, model_id)
+      )
+    `);
+
+    // ─── ADD COST COLUMNS TO SESSIONS (safe — uses IF NOT EXISTS pattern) ────────
+    const costColumns = [
+      `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS model_used           VARCHAR(200)`,
+      `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS input_tokens_total   INTEGER DEFAULT 0`,
+      `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS output_tokens_total  INTEGER DEFAULT 0`,
+      `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ai_calls_count       INTEGER DEFAULT 0`,
+      `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ai_cost_usd          NUMERIC(10,6) DEFAULT 0`,
+    ];
+    for (const col of costColumns) {
+      await client.query(col);
+    }
+
+    // ─── INDEXES FOR COST QUERIES ────────────────────────────────────────────────
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_models_workspace ON ai_models(workspace_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_sessions_cost ON sessions(project_id, ai_cost_usd)`);
+
     // â”€â”€â”€ Column backfills for older DBs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     await client.query(
       `ALTER TABLE proxy_used_ips

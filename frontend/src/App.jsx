@@ -10,6 +10,7 @@ import ProjectDetail from "./pages/ProjectDetail";
 import Personas      from "./pages/Personas";
 import Sessions      from "./pages/Sessions";
 import AIProviders   from './pages/AIProviders';
+import AIModels from './pages/AIModels';
 
 // ─── Auth Context ─────────────────────────────────────────────────────────────
 export const AuthContext = createContext(null);
@@ -95,6 +96,8 @@ export default function App() {
 
         {/* Wildcard — ALWAYS last */}
         <Route path="*" element={<Navigate to="/" replace />} />
+
+        <Route path="/ai-models" element={<AIModels />} />
 
       </Routes>
     </AuthProvider>
