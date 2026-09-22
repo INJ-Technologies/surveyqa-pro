@@ -44,6 +44,7 @@ import {
   ChevronDown,
   Pencil,
   Copy,
+  CheckCircle
 } from "lucide-react";
 
 const FONT =
@@ -4670,9 +4671,10 @@ function SurveyCardReadOnly({ survey, index }) {
 }
 
 // ─── Survey Card (editable) ───────────────────────────────────────────────────
-function SurveyCardEdit({ survey, index, onChange, onRemove }) {
-  const { asOptions: countryOptions, loading: countriesLoading } =
-    useCountries();
+function SurveyCardEdit({ survey, index, onChange, onRemove, onCopyUrlToAll, totalSurveys }) {
+  const { asOptions: countryOptions, loading: countriesLoading } = useCountries();
+  const [copied, setCopied] = useState(false);
+
   const languageOptions = [
     { value: "en", label: "English" },
     { value: "hi", label: "Hindi" },
@@ -4687,17 +4689,21 @@ function SurveyCardEdit({ survey, index, onChange, onRemove }) {
     { value: "id", label: "Indonesian" },
     { value: "ms", label: "Malay" },
   ];
+
   const norm = (v) =>
-    Array.isArray(v)
-      ? v
-      : v
-        ? v
-            .split(",")
-            .map((x) => x.trim())
-            .filter(Boolean)
-        : [];
+    Array.isArray(v) ? v : v ? v.split(",").map((x) => x.trim()).filter(Boolean) : [];
+
   const setVal = (k) => (e) => onChange(index, k, e.target.value);
-  const set = (k) => (v) => onChange(index, k, v);
+  const set    = (k) => (v) => onChange(index, k, v);
+
+  const handleCopyToAll = () => {
+    if (!survey.url) return;
+    if (!window.confirm(`Copy this URL to all ${totalSurveys} segments?\n\n${survey.url}`)) return;
+    onCopyUrlToAll(index);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
     <div style={s.surveyCard}>
       <div style={s.surveyCardHeader}>
@@ -4722,20 +4728,58 @@ function SurveyCardEdit({ survey, index, onChange, onRemove }) {
           onChange={setVal("allocation")}
         />
         <FullCol>
-          <Input
-            label="Survey URL"
-            required
-            placeholder="https://survey.example.com/start?token=..."
-            value={survey.url}
-            onChange={setVal("url")}
-          />
+          {/* URL field with Copy to All button */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#374151", fontFamily: FONT }}>
+                Survey URL <span style={{ color: "#ef4444" }}>*</span>
+              </label>
+              {totalSurveys > 1 && (
+                <button
+                  type="button"
+                  onClick={handleCopyToAll}
+                  disabled={!survey.url}
+                  title={survey.url ? `Copy this URL to all ${totalSurveys} segments` : "Enter a URL first"}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 5,
+                    background: copied ? "#f0fdf4" : survey.url ? "#f0f7ff" : "#f8fafc",
+                    color:      copied ? "#059669"  : survey.url ? "#1e3a5f"  : "#cbd5e1",
+                    border: `1px solid ${copied ? "#bbf7d0" : survey.url ? "#dbeafe" : "#e2e8f0"}`,
+                    borderRadius: 6, padding: "4px 10px",
+                    fontSize: "0.75rem", fontWeight: 600,
+                    cursor: survey.url ? "pointer" : "not-allowed",
+                    fontFamily: FONT, transition: "all 0.2s",
+                  }}
+                >
+                  {copied ? (
+                    <><CheckCircle size={12} /> Copied to all!</>
+                  ) : (
+                    <><Copy size={12} /> Copy URL to all segments</>
+                  )}
+                </button>
+              )}
+            </div>
+            <input
+              style={{
+                width: "100%", padding: "10px 12px",
+                border: "1.5px solid #e2e8f0", borderRadius: 8,
+                fontSize: "0.88rem", outline: "none",
+                color: "#1e293b", background: "white",
+                fontFamily: FONT, boxSizing: "border-box",
+              }}
+              placeholder="https://survey.example.com/start?token=..."
+              value={survey.url}
+              onChange={setVal("url")}
+            />
+            {survey.url && (
+              <div style={{ fontSize: "0.72rem", color: "#64748b", fontFamily: FONT, wordBreak: "break-all" }}>
+                🔗 {survey.url}
+              </div>
+            )}
+          </div>
         </FullCol>
         <Select
-          label={
-            countriesLoading
-              ? "Target Countries (loading...)"
-              : `Target Countries (${countryOptions.length})`
-          }
+          label={countriesLoading ? "Target Countries (loading...)" : `Target Countries (${countryOptions.length})`}
           isMulti
           options={countryOptions}
           value={norm(survey.countries)}
@@ -6389,6 +6433,13 @@ export default function ProjectDetail() {
       editForm.surveys.filter((_, idx) => idx !== i),
     );
 
+  const copyUrlToAll = (sourceIndex) => {
+    const sourceUrl = editForm.surveys[sourceIndex]?.url;
+    if (!sourceUrl) return;
+    const updated = editForm.surveys.map((sv) => ({ ...sv, url: sourceUrl }));
+    setF('surveys', updated);
+  };
+
   const doSave = async () => {
     setSaving(true);
     setShowSaveConfirm(false);
@@ -6850,6 +6901,8 @@ export default function ProjectDetail() {
               index={i}
               onChange={handleSurveyChange}
               onRemove={removeSurvey}
+              onCopyUrlToAll={copyUrlToAll}
+              totalSurveys={editForm.surveys.length}
             />
           ))}
           <div style={s.editDivider} />
