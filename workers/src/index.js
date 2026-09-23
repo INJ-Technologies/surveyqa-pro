@@ -3992,7 +3992,7 @@ const processSession = async (job) => {
         break;
       }
     }
-
+  }
     if (!outcome) outcome = pageCount >= MAX_PAGES ? "error" : "completed";
   } catch (err) {
     outcome = "error";
