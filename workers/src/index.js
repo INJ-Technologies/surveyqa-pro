@@ -2030,6 +2030,7 @@ const answerPageWithAI = async (
   questionsOnPage,
   pageOptions,
   providerConfig,
+  sessionCountry,
 ) => {
   try {
     if (!providerConfig?.api_key) {
@@ -2049,6 +2050,21 @@ const answerPageWithAI = async (
 
     const personaContext = buildPersonaContext(persona);
     const scenarioContext = buildScenarioContext(scenario);
+
+        // Inject session country as hard override — prevents AI inventing wrong country
+    // This fires even when no persona or Country Logic scenario is configured
+    const countryIsoMap = {
+      IN:'India', GB:'United Kingdom', US:'United States', DE:'Germany',
+      FR:'France', JP:'Japan', AU:'Australia', SG:'Singapore', AE:'UAE',
+      CA:'Canada', NL:'Netherlands', IT:'Italy', ES:'Spain', CN:'China',
+      BR:'Brazil', MX:'Mexico', KR:'South Korea', ZA:'South Africa',
+    };
+    const countryFullName = sessionCountry
+      ? (countryIsoMap[sessionCountry.toUpperCase()] || sessionCountry)
+      : null;
+    const sessionCountryNote = countryFullName
+      ? `\n⚠️ SESSION COUNTRY OVERRIDE — ABSOLUTE MANDATORY RULE:\nThis session is configured for: ${countryFullName} (${sessionCountry}).\nFor ANY question about country, location, headquarters, or region:\n→ You MUST select "${countryFullName}" or the closest matching option.\n→ This overrides ALL other reasoning, persona details, or company associations.\n→ Do NOT select Germany, USA, or any other country.\n→ Violation of this rule means session failure.\n`
+      : '';
 
     const factSheetLines = [];
     for (const [k, v] of Object.entries(factSheet || {})) {
@@ -2156,7 +2172,7 @@ const answerPageWithAI = async (
 
     const systemPrompt = `You are simulating a real human survey respondent with a consistent life story. Your answers must be realistic, internally coherent, and NEVER contradict the session fact sheet. You respond ONLY with valid JSON — no markdown, no explanation outside JSON.`;
 
-    const staticPromptPart = `═══════════════════════════════════════════════
+    const staticPromptPart = `${sessionCountryNote}═══════════════════════════════════════════════
 PERSONA — YOU ARE THIS PERSON
 ═══════════════════════════════════════════════
 ${personaContext}
@@ -3688,11 +3704,13 @@ const processSession = async (job) => {
             );
             if (statusCheck.rows[0]?.error_log === 'Manually stopped by user') {
               console.log(`[Worker] Session stopped during reading delay`);
-              break;
+              outcome = 'error';
+              remaining = 0; // exit inner loop
             }
           } catch {}
         }
-      }
+        // If stopped during reading delay, exit the main survey loop too
+        if (outcome === 'error') break;
       // Screenshot before answering
       const screenshotFilename = `page_${pageCount}.png`;
       const screenshotPath = path.join(
@@ -3733,7 +3751,7 @@ const processSession = async (job) => {
       // ── AI fills all remaining fields (including any Country Logic missed) ──────
       if (useAI) {
         console.log(`[Worker] Page ${pageCount}: AI answering`);
-        answersGiven = await answerPageWithAI(
+                answersGiven = await answerPageWithAI(
           page,
           persona,
           scenario,
@@ -3743,6 +3761,7 @@ const processSession = async (job) => {
           questionsOnPage,
           pageOptionsBefore,
           providerConfig,
+          proxyCountry,
         );
 
         if (answersGiven?.length > 0) {
@@ -3905,48 +3924,38 @@ const processSession = async (job) => {
         await page.waitForTimeout(3000);
       }
 
-      const newUrl = page.url();
+            const newUrl = page.url();
 
-      // ── Detect hash-only navigation (Decipher validation error) ────────────
-      // When Decipher shows a validation error it changes only the URL hash
-      // (#?, #$, #&, etc.) but stays on the same page. Detect this and handle.
-      const prevBase = currentUrl.split('#')[0];
-      const newBase  = newUrl.split('#')[0];
-      const isHashOnly = prevBase === newBase && newUrl !== currentUrl;
+      // ── Decipher validation error detection ────────────────────────────────
+      // Decipher uses hash-based routing for ALL navigation — #$, #&, #' etc.
+      // are legitimate page advances showing DIFFERENT questions.
+      // A TRUE validation error is when the SAME question reappears with a
+      // red error banner — NOT simply because the hash changed.
+      const newQuestionsAfterNav = await extractQuestionsFromPage(page).catch(() => []);
+      const sameQuestionReappeared =
+        questionsOnPage.length > 0 &&
+        newQuestionsAfterNav.length > 0 &&
+        newQuestionsAfterNav[0].slice(0, 60) === questionsOnPage[0]?.slice(0, 60);
 
-      if (isHashOnly) {
-        console.log(`[Worker] Hash-only navigation detected — likely validation error`);
-
-        // Check if there's actually a validation error on the page
-        const hasValidationError = await page.evaluate(() => {
-          const errorSelectors = [
-            '.error', '.validation-error', '[class*="error"]',
-            '.alert', '[class*="alert"]', '.warning',
-          ];
-          for (const sel of errorSelectors) {
-            const el = document.querySelector(sel);
-            if (el && el.offsetParent) return true;
-          }
+      if (sameQuestionReappeared) {
+        const hasRedError = await page.evaluate(() => {
+          // Only match the specific Decipher validation error banner
           const bodyText = (document.body?.innerText || '').toLowerCase();
-          return bodyText.includes('there were problems') ||
-                 bodyText.includes('please select') ||
-                 bodyText.includes('required');
+          return bodyText.includes('there were problems with some of the data') ||
+                 !!document.querySelector('.errMsg, [class*="errMsg"], .survey-error-message');
         }).catch(() => false);
 
-        if (hasValidationError) {
-          console.warn(`[Worker] Validation error on page ${pageCount} — answer may not have been accepted`);
+        if (hasRedError) {
+          console.warn(`[Worker] TRUE validation error — same question reappeared with error banner`);
           await logSessionEvent(sessionId, 'flag_warning', {
             flag: 'VALIDATION_ERROR',
             message: `Decipher validation error on page ${pageCount} — answer not accepted`,
-            page: pageCount,
-            url: newUrl,
+            page: pageCount, url: newUrl,
           });
-          // Don't increment pageCount — treat as same page, continue loop
-          // This prevents infinite loop by eventually hitting MAX_PAGES
-          pageCount--; // subtract so the outer loop increment keeps it the same
+          pageCount--; // retry same page
+          outcome = null;
+          continue;
         }
-        outcome = null; // not an exit outcome
-        continue;
       }
 
       outcome = detectOutcome(newUrl);
