@@ -166,6 +166,29 @@ const getLiveSessions = async (projectId) => {
   return result.rows;
 };
 
+// ─── Get ALL sessions for a project (for the sessions tab display) ────────────
+const getProjectSessions = async (projectId, { limit = 100, offset = 0, status, outcome, country } = {}) => {
+  const conditions = [`s.project_id = $1`];
+  const values     = [projectId];
+  let   idx        = 2;
+
+  if (status)  { conditions.push(`s.status = $${idx++}`);        values.push(status); }
+  if (outcome) { conditions.push(`s.outcome = $${idx++}`);       values.push(outcome); }
+  if (country) { conditions.push(`s.proxy_country = $${idx++}`); values.push(country); }
+
+  const { rows } = await pool.query(
+    `SELECT s.*,
+            p.name as persona_name
+     FROM sessions s
+     LEFT JOIN personas p ON p.id = s.persona_id
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY s.created_at DESC
+     LIMIT $${idx++} OFFSET $${idx}`,
+    [...values, parseInt(limit), parseInt(offset)]
+  );
+  return rows;
+};
+
 // ─── Get full session detail ──────────────────────────────────────────────────
 const getSessionDetail = async (sessionId) => {
   const sessionResult = await pool.query(
@@ -203,5 +226,5 @@ const getSessionDetail = async (sessionId) => {
 module.exports = {
   createSession, updateSessionStatus, logSessionEvent,
   logSessionAnswer, isIPUsedInProject, recordUsedIP,
-  saveTracePath, getLiveSessions, getSessionDetail,
+  saveTracePath, getProjectSessions, getLiveSessions, getSessionDetail,
 };

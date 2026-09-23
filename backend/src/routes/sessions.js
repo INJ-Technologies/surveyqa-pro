@@ -4,7 +4,7 @@ const path    = require("path");
 const fs      = require("fs");
 const { pool } = require('../db');
 const { requireAuth, requireRole } = require("../middleware/auth");
-const { createSession, getLiveSessions, getSessionDetail } = require("../db/sessions");
+const { createSession, getLiveSessions, getProjectSessions, getSessionDetail } = require("../db/sessions");
 const { sessionQueue }   = require("../queues/index");
 const { getProjectById, getProjectSurveys } = require("../db/projects");
 const { getScenariosByIds } = require('../db/scenarios');
@@ -368,6 +368,20 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error('[Sessions] Global fetch error:', err.message);
     res.status(500).json({ error: 'Failed to fetch sessions', detail: err.message });
+  }
+});
+
+// ─── GET /api/sessions/project/:projectId — all sessions for project tab ──────
+router.get('/project/:projectId', requireAuth, async (req, res) => {
+  try {
+    const { limit, offset, status, outcome, country } = req.query;
+    const sessions = await getProjectSessions(req.params.projectId, {
+      limit, offset, status, outcome, country,
+    });
+    res.json({ sessions });
+  } catch (err) {
+    console.error('Get project sessions error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch sessions' });
   }
 });
 

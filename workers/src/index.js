@@ -3205,6 +3205,7 @@ const processSession = async (job) => {
   const deviceOs = persona?.behavioural_attrs?.deviceOs || "windows";
 
   const countryLogic = await loadCountryLogic(projectId);
+  let countryLogicApplied = false; // track if already applied this session
   const scenario = await loadSessionScenario(projectId, sessionId, scenarioIds);
 
   if (countryLogic) console.log(`[Worker] Country Logic active`);
@@ -3667,12 +3668,13 @@ const processSession = async (job) => {
       const scenarioStepUsed = "ai";
 
       // ── COUNTRY LOGIC: runs AFTER AI so it always has final say ──────────
-      if (countryLogic && questionsOnPage.length > 0) {
+      if (countryLogic && !countryLogicApplied && questionsOnPage.length > 0) {
         try {
           const applied = await applyCountryMapping(
             page, countryLogic, proxyCountry, questionsOnPage,
           );
           if (applied) {
+            countryLogicApplied = true; // prevent re-application on subsequent pages
             console.log(`[CountryLogic] ✓ Hard-clicked: ${proxyCountry} answer on page ${pageCount}`);
             await logSessionEvent(sessionId, 'country_logic_applied', {
               page: pageCount,
