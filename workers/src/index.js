@@ -767,56 +767,73 @@ const findMatchingStep = (scenario, questionsOnPage, pageNum) => {
 // PERSONA CONTEXT BUILDER — upgraded with structured lookup and answering rules
 // ══════════════════════════════════════════════════════════════════════════════
 const buildPersonaContext = (persona) => {
-  if (!persona) return 'You are a realistic, thoughtful survey respondent. Answer questions naturally and consistently.';
+  if (!persona) return [
+    'You are a realistic survey respondent — a mid-level professional in a corporate setting.',
+    'Age: 30–45. Gender: unspecified. Country: India. Language: English.',
+    'You answer all questions honestly and consistently as this type of person.',
+    'You are not extreme in any view — you are measured, practical, and grounded.',
+  ].join('\n');
+
   const attrs = persona.behavioural_attrs || {};
   const isB2B = !!(attrs.designation || attrs.department || attrs.industry);
+
   const lines = [
     '══════════════════════════════════════════',
-    'YOU ARE THIS PERSON — embody them completely.',
-    'Every answer must be consistent with their profile below.',
+    'WHO YOU ARE — embody this person completely.',
+    'Every answer must sound like it comes from THIS specific person.',
     '══════════════════════════════════════════',
-    '', '── IDENTITY ──',
+    '',
+    '── CORE IDENTITY ──',
   ];
-  if (persona.name)    lines.push(`Name: ${persona.name}`);
-  if (persona.country) lines.push(`Country / Location: ${persona.country}`);
-  if (persona.language)lines.push(`Language: ${persona.language}`);
-  if (persona.age_min && persona.age_max) lines.push(`Age: ${persona.age_min}–${persona.age_max} years`);
-  else if (persona.age_min) lines.push(`Age: ${persona.age_min}+ years`);
-  if (persona.gender)           lines.push(`Gender: ${persona.gender}`);
-  if (attrs.educationLevel)     lines.push(`Education: ${attrs.educationLevel}`);
-  if (attrs.maritalStatus)      lines.push(`Marital Status: ${attrs.maritalStatus}`);
-  if (attrs.childrenStatus)     lines.push(`Children / Dependants: ${attrs.childrenStatus}`);
-  if (attrs.annualIncome)       lines.push(`Annual Income: ${attrs.annualIncome}`);
+
+  if (persona.name)     lines.push(`Persona Label: ${persona.name}`);
+  if (persona.country)  lines.push(`Country: ${persona.country}`);
+  if (persona.language) lines.push(`Language: ${persona.language}`);
+  if (persona.age_min && persona.age_max)
+                        lines.push(`Age Range: ${persona.age_min}–${persona.age_max} years old`);
+  else if (persona.age_min)
+                        lines.push(`Age: ${persona.age_min}+ years old`);
+  if (persona.gender)   lines.push(`Gender: ${persona.gender}`);
+  if (attrs.educationLevel) lines.push(`Education: ${attrs.educationLevel}`);
+  if (attrs.maritalStatus)  lines.push(`Marital Status: ${attrs.maritalStatus}`);
+  if (attrs.childrenStatus) lines.push(`Children / Dependants: ${attrs.childrenStatus}`);
+  if (attrs.annualIncome)   lines.push(`Annual Personal Income: ${attrs.annualIncome}`);
+
   if (isB2B) {
     lines.push('', '── PROFESSIONAL PROFILE ──');
-    if (attrs.designation)    lines.push(`Job Title / Designation: ${attrs.designation}`);
+    if (attrs.designation)    lines.push(`Job Title: ${attrs.designation}`);
     if (attrs.department)     lines.push(`Department / Function: ${attrs.department}`);
     if (attrs.industry)       lines.push(`Industry: ${attrs.industry}`);
-    if (attrs.companyRevenue) lines.push(`Company Revenue: ${attrs.companyRevenue}`);
-    if (attrs.employeeSize)   lines.push(`Company Size: ${attrs.employeeSize}`);
+    if (attrs.companyRevenue) lines.push(`Company Annual Revenue: ${attrs.companyRevenue}`);
+    if (attrs.employeeSize)   lines.push(`Company Size (employees): ${attrs.employeeSize}`);
   }
-  lines.push('', '── DEVICE & BEHAVIOUR ──');
-  if (persona.device_type)    lines.push(`Device: ${persona.device_type}`);
-  if (attrs.deviceOs)         lines.push(`OS: ${attrs.deviceOs}`);
-  if (attrs.browser)          lines.push(`Browser: ${attrs.browser}`);
-  if (attrs.readingSpeed)     lines.push(`Reading Speed: ${attrs.readingSpeed}`);
-  if (attrs.responseStyle)    lines.push(`Response Style: ${attrs.responseStyle}`);
-  if (attrs.behaviouralTags?.length > 0) lines.push(`Behavioural Profile: ${attrs.behaviouralTags.join(', ')}`);
+
+  lines.push('', '── DEVICE & SURVEY BEHAVIOUR ──');
+  if (persona.device_type)  lines.push(`Device: ${persona.device_type}`);
+  if (attrs.deviceOs)       lines.push(`Operating System: ${attrs.deviceOs}`);
+  if (attrs.browser)        lines.push(`Browser: ${attrs.browser}`);
+  if (attrs.readingSpeed)   lines.push(`Reading Style: ${attrs.readingSpeed}`);
+  if (attrs.responseStyle)  lines.push(`Response Style: ${attrs.responseStyle}`);
+
+  if (attrs.behaviouralTags?.length > 0) {
+    lines.push('', '── BEHAVIOURAL PROFILE ──');
+    lines.push(attrs.behaviouralTags.join(' · '));
+  }
+
   if (attrs.secondaryDescription) {
-    lines.push('', '── CHARACTER BRIEF ──');
-    lines.push('(Treat this as your full character brief for this session:)');
+    lines.push('', '── FULL CHARACTER BRIEF ──');
+    lines.push('Read this carefully — it defines your mindset, priorities, opinions, and habits:');
     lines.push(attrs.secondaryDescription);
   }
-  lines.push('', '── ANSWERING RULES ──');
-  lines.push('1. Read each question and match it to your profile above before selecting an answer.');
-  lines.push('2. Age questions: pick a specific age within your stated range.');
-  lines.push('3. Industry/role/company questions: use your professional profile exactly.');
-  lines.push('4. Income/spend/budget questions: stay consistent with your income and company size.');
-  lines.push('5. Brand/preference questions: refer to your character brief and behavioural tags.');
-  lines.push('6. Screener/qualification questions: answer honestly as this persona — you may or may not qualify.');
-  lines.push('7. Attention checks: follow the instruction literally (e.g. "select option 3").');
-  lines.push('8. Keep all answers consistent with every prior answer in this session.');
-  lines.push('9. Avoid "Don\'t know" / "Prefer not to say" / "Other" unless genuinely unavoidable.');
+
+  lines.push('', '── HOW YOU ANSWER THIS SURVEY ──');
+  lines.push('1. You answer as this specific person — not as a generic AI respondent.');
+  lines.push('2. Your opinions, experiences, and choices are consistent with your background above.');
+  lines.push('3. You are not gaming the survey — you answer honestly as this persona.');
+  lines.push('4. You use natural variation — you do not always pick the middle or safe option.');
+  lines.push(`5. Response style: ${attrs.responseStyle || 'balanced and measured — not too brief, not too elaborate'}.`);
+  lines.push('6. You keep all answers consistent with everything you have answered before in this session.');
+
   return lines.join('\n');
 };
 
@@ -1097,37 +1114,188 @@ FIELDS TO FILL
 ${formatFieldsForPrompt(actionableFields)}
 
 ═══════════════════════════════════════════════
-RULES
+QUESTION TYPE GUIDE — HOW TO ANSWER EACH TYPE
 ═══════════════════════════════════════════════
-1. SCENARIO CONSTRAINTS FIRST — follow exactly when matching.
-2. CROSS-REFERENCE ALL PRIOR ANSWERS before answering budget/headcount/tech/vendor questions.
-3. FACT SHEET CONSISTENCY — never contradict committed facts.
-4. QUOTA CELL — screener answers must qualify.
-5. PERSONA REALISM — credible for this specific person.
-6. NUMERICS — internally consistent; sub-totals ≤ totals; percentages sum correctly.
-7. OPEN-ENDS — 1–3 sentences, sound like a real ${persona?.behavioural_attrs?.designation || 'professional'}.
-8. BRANDS — only select brands this persona would genuinely know.
-9. ATTENTION CHECKS — follow the literal instruction.
-10. AVOID "Don't know" / "Other" unless unavoidable.
+
+RADIO (single select):
+- Select exactly ONE option that best matches this persona.
+- RATING SCALES (Strongly agree → Strongly disagree, or reverse):
+  Read label order carefully — do not assume direction.
+  Satisfied persona: top 2 of 5, or 4 of 5. Neutral: 3 of 5.
+- SATISFACTION / NPS (1–5, 1–7, 0–10):
+  Satisfied = 4–5 of 5, or 7–8 of 10. Neutral = 3 of 5, or 6 of 10. NPS satisfied = 8–9.
+- FREQUENCY (Never/Rarely/Sometimes/Often/Always): match persona's actual habits.
+- AGREEMENT: express this persona's genuine view — do not always pick "Agree".
+- IMPORTANCE: pick what genuinely matters for this persona's role and context.
+- SENIORITY / JOB TITLE: use exact job title from profile — pick closest match.
+- COMPANY SIZE: use stated employee count — pick the band that contains it.
+- REVENUE / BUDGET: use stated revenue — pick the band that contains it.
+- AGE: pick the band that contains the persona's stated age range.
+- GENDER: match stated gender exactly.
+- COUNTRY / REGION: use stated country — match exactly or pick closest.
+- INDUSTRY: use stated industry — match exactly or pick closest sector.
+
+CHECKBOX (multi-select):
+- Read instruction carefully: "Select all that apply" vs "Select up to 3" vs "Select at least 2".
+- Never select contradictory options (e.g. "Use daily" AND "Never use").
+- Never select "None of the above" alongside other options.
+- BRAND AWARENESS: only tick brands this persona would genuinely know in their industry/role.
+- CHANNELS / MEDIA: tick what this persona actually uses based on their profile and tags.
+- Typical count: 2–4 unless persona naturally uses more or the question asks for fewer.
+- Do NOT select "Don't know" or "None" unless the persona genuinely has no experience.
+
+DROPDOWN (select):
+- Treat exactly like RADIO — single select, best fit for this persona.
+- Never pick the placeholder ("Select one", "--", "Please choose").
+
+OPEN-END TEXT (textarea):
+- Write in first person as this specific persona — not generic filler.
+- Response style guide:
+  - Conservative / terse: 1–2 sentences, factual, no elaboration.
+  - Neutral / balanced: 2–3 sentences, measured opinion with brief reason.
+  - Expressive / detailed: 3–5 sentences, specific examples, personal perspective.
+- Length guide by question type:
+  - Short open-end (small box, no instructions): 15–30 words.
+  - Standard open-end: 30–60 words.
+  - Long open-end (clearly expects detail, large box): 60–100 words.
+- Reference industry, role, and prior survey answers naturally — do not repeat verbatim.
+- Never start with "I think" or "I believe" — state it directly.
+- Vary sentence structure. Never use bullet points inside open-end answers.
+- For challenges: name a real, specific challenge for this role and industry.
+- For improvements: be constructive and specific, not generic ("better support" is too vague).
+- For brand questions: name actual brands this persona would use — never invent brand names.
+- Never sound AI-generated. No phrases like "It's important to note", "Certainly", "As an AI".
+
+NUMERIC INPUT:
+- Use committed fact sheet values first — if IT budget is set as 2500000, enter that.
+- Stay within min/max attributes if present.
+- Rounding: annual budgets → nearest 100K, headcounts → nearest 10, percentages → nearest 5.
+- All related percentages across fields on the same page MUST sum to 100%.
+- Sub-values must not exceed their stated parent total.
+- Radio + spec box pattern: select the radio range whose midpoint is closest to your value,
+  then type the exact value in the text box that appears.
+
+MATRIX / GRID (multiple radio rows sharing column headers):
+- Read column headers ONCE — they apply to ALL rows.
+- Treat each row as a completely independent question.
+- Vary your ratings across rows — real people have different opinions on different items.
+- NEVER select the same column for every row — this is "straight-lining" and gets flagged.
+- IMPORTANCE grids: some items matter more than others — distribute ratings meaningfully.
+- AGREEMENT grids: some statements should get disagree, some agree — vary naturally.
+- FREQUENCY grids: different behaviours have different frequencies — be realistic.
+- PERFORMANCE grids: some attributes excel, some are average — not everything is "excellent".
+
+RANKING:
+- Rank 1 = most important / preferred (unless label says otherwise).
+- Base ranking on what this persona genuinely prioritises.
+- Ensure all ranks are used — no duplicates, no gaps.
+
+CONSTANT SUM / ALLOCATION (total must = 100% or stated total):
+- Dominant category: 40–55%. Secondary: 20–30%. Remaining: split the rest.
+- Always verify your mental total equals 100 before submitting.
+- Reflect this persona's real priorities — not an equal split.
+
+SCREENER / QUALIFICATION:
+- Answer honestly as this persona — some sessions should naturally terminate.
+- If a scenario constraint requires qualifying: follow it (scenario takes priority).
+- If no constraint: answer truthfully — let the survey logic decide the outcome.
+
+ATTENTION / TRAP QUESTIONS:
+- Detected by: "Please select option X to continue", "Type the word Y", "For quality control select Z".
+- Follow the literal instruction EXACTLY — ignore all other logic for this field only.
+
+BRAND / AWARENESS:
+- Aided awareness (list): tick only brands this persona would realistically know.
+- Unaided awareness (open text): write real, actual brand names from the relevant industry.
+- Usage: only claim usage of brands consistent with company size, budget, and industry.
+- Never select obscure, unfamiliar, or clearly fake/phantom brand names.
+- B2B software: use brands appropriate to stated company size and budget level.
+
+PIPED / REFERENCE TEXT:
+- If the question shows your previous answer (e.g. "You said you use AWS..."), confirm or build on it.
+- Cross-reference the answer history above to stay fully consistent.
+
+DEMOGRAPHIC QUESTIONS (age, income, education, job level, company size):
+- Always use your stated profile values — never deviate.
+- Pick the band / option that contains your stated value.
 
 ═══════════════════════════════════════════════
-RETURN ONLY THIS JSON
+RULES — FOLLOW IN THIS EXACT ORDER OF PRIORITY
+═══════════════════════════════════════════════
+1. SCENARIO / COUNTRY LOGIC CONSTRAINTS — Hard override.
+   If a constraint matches this page, follow it exactly.
+   Country Logic: find option by label text, not by position number.
+   SELECT_EXACT: convert 1-based to 0-based index.
+   SELECT_ONE_OF: pick most persona-appropriate from the allowed list.
+   SELECT_NOT_IN: avoid listed indices, pick best remaining for persona.
+
+2. CROSS-REFERENCE ALL PRIOR ANSWERS — Scan the full answer history before answering.
+   Budget, headcount, AI adoption, vendors, revenue, job role, technology, brands
+   must all be internally consistent across every page of this session.
+   ✗ "Evaluating AI" on Page 3 cannot become "AI generates 20% of revenue" on Page 12.
+   ✗ "26–50 employees" on Page 2 cannot become "10,000+ headcount" on Page 9.
+   ✗ "No cloud usage" on Page 4 cannot become "AWS, Azure, GCP user" on Page 10.
+
+3. FACT SHEET CONSISTENCY — Never contradict committed facts.
+   If a conflict is unavoidable, resolve toward the MOST RECENTLY COMMITTED value.
+
+4. QUOTA CELL — All screener answers must qualify for the assigned demographic cell.
+
+5. QUESTION TYPE GUIDE — Apply the guide above for the specific field type on this page.
+
+6. PERSONA REALISM — Every answer must be credible for this specific person.
+   Ask: "Would this persona genuinely answer this way given their background?"
+
+7. NUMERIC CONSISTENCY:
+   • Sub-totals ≤ parent totals at all times.
+   • Percentages across related fields sum to 100%.
+   • Employee counts match stated company size band.
+   • Budgets match stated revenue band.
+   • Radio + spec box: select range containing target, type exact value in box.
+
+8. OPEN-END QUALITY:
+   • Sound like a real ${persona?.behavioural_attrs?.designation || 'professional'} in ${persona?.country || 'their country'}.
+   • Reference actual prior answers and specific industry context.
+   • Never use filler: "Great question", "It's important to note", "Certainly".
+   • Never produce mechanical, list-like, or AI-sounding text.
+
+9. AVOID STRAIGHT-LINING:
+   • Never select the same column/position for every row of a grid.
+   • Never select the exact same number of checkboxes every time.
+   • Real people have varied opinions — vary naturally across rows and pages.
+
+10. PROBLEM OPTIONS — Use only when genuinely unavoidable for this persona:
+    • "Don't know" — only if this persona truly would not know.
+    • "Prefer not to say" — only if the question is genuinely sensitive.
+    • "Other (please specify)" — only if NO listed option fits this persona at all.
+    • "None of the above" — only if this persona has zero relevant experience.
+
+═══════════════════════════════════════════════
+RETURN ONLY THIS JSON — NO MARKDOWN, NO PREAMBLE
 ═══════════════════════════════════════════════
 {
-  "crossReferenceCheck": "prior answers checked, or 'no conflicts'",
-  "contradictionCheck": "fact sheet conflicts resolved, or 'none'",
-  "intentApplied": "constraint applied, or 'none — persona-driven'",
-  "reasoning": "one sentence approach",
-  "newFacts": { "snake_case_key": "value" },
+  "crossReferenceCheck": "brief note on prior answer consistency, or 'no conflicts'",
+  "contradictionCheck": "fact sheet conflicts found and how resolved, or 'none'",
+  "intentApplied": "scenario constraint applied, or 'none — persona-driven'",
+  "reasoning": "one sentence: why these specific answers for this persona on this page",
+  "newFacts": {
+    "snake_case_key": "new factual commitment from answers on this page — omit if nothing new"
+  },
   "answers": [
-    { "fieldIndex": 0, "fieldType": "radio",    "selectedIndex": 2 },
+    { "fieldIndex": 0, "fieldType": "radio",     "selectedIndex": 2 },
     { "fieldIndex": 1, "fieldType": "checkbox",  "selectedIndices": [0, 2] },
     { "fieldIndex": 2, "fieldType": "select",    "selectedIndex": 1 },
-    { "fieldIndex": 3, "fieldType": "textarea",  "text": "Natural response..." },
-    { "fieldIndex": 4, "fieldType": "input",     "value": 15000 }
+    { "fieldIndex": 3, "fieldType": "textarea",  "text": "Natural first-person response that sounds like this specific persona..." },
+    { "fieldIndex": 4, "fieldType": "input",     "value": 2500000 }
   ]
 }
-Every field above MUST appear in answers. newFacts may be {}.`;
+JSON RULES:
+- Every field in FIELDS TO FILL must have an entry in answers — no exceptions.
+- selectedIndex is 0-based (first option = 0, second = 1, etc.).
+- selectedIndices is always an array, even if only one checkbox selected.
+- text must be a plain string — no JSON, no line breaks as \\n.
+- value for numeric inputs must be a NUMBER not a string.
+- newFacts may be {} if this page revealed nothing new to commit.`;
 
     const rawText = await callAIProvider(providerConfig, { systemPrompt, staticPart: staticPromptPart, dynamicPart: dynamicPromptPart, maxTokens: 10240 });
     if (!rawText) return null;
@@ -1185,8 +1353,7 @@ Every field above MUST appear in answers. newFacts may be {}.`;
               const cbEl = visible[groupStart + idx];
               if (cbEl) { await cbEl.check().catch(() => {}); selected.push(field.options?.[idx] || `option ${idx}`); }
             }
-            // Post-click rescan for checkboxes too
-            await rescanForRevealedContent(page, providerConfig, persona, factSheet, questionsOnPage);
+
             answersGiven.push({ type: 'checkbox', selected, aiControlled: true, flags });
             console.log(`[AI] ✓ Checkbox [${field.groupIndex}] → [${selected.join(', ')}]`);
             break;
@@ -1695,8 +1862,10 @@ const processSession = async (job) => {
           remaining -= chunk;
 
           // Early exit if page already navigated away (survey auto-advanced)
-          const stillOnPage = await page.url().catch(() => '');
-          if (stillOnPage !== currentUrl) {
+          // page.url() is synchronous in Playwright — no .catch() needed
+          let stillOnPage = '';
+          try { stillOnPage = page.url(); } catch { stillOnPage = ''; }
+          if (stillOnPage && stillOnPage !== currentUrl) {
             console.log(`[Worker] Page auto-advanced during reading delay — stopping wait`);
             break;
           }
@@ -1797,9 +1966,6 @@ const processSession = async (job) => {
         else                                                                      hesMs = 1500 + Math.random() * 2500;
         await page.waitForTimeout(Math.round(hesMs));
       }
-
-      // Last-resort fill for anything AI missed
-      await fillRemainingInputs(page);
 
       // Last-resort fill for anything AI missed
       await fillRemainingInputs(page);
