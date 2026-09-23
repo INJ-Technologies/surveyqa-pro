@@ -43,7 +43,7 @@ import {
   Hash,
   ChevronDown,
   Pencil,
-  Copy
+  Copy,
 } from "lucide-react";
 
 const FONT =
@@ -329,15 +329,16 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
   const [selectedScenarios, setSelectedScenarios] = useState([]);
   const [scenariosLoading, setScenariosLoading] = useState(true);
   const [testingMode, setTestingMode] = useState("internal"); // 'internal' | 'live'
-  const [aiModels, setAiModels]       = useState([]);
-  const [selectedModel, setSelectedModel] = useState('');
+  const [aiModels, setAiModels] = useState([]);
+  const [selectedModel, setSelectedModel] = useState("");
 
   useEffect(() => {
-    api.get('/openrouter/active')
-      .then(res => {
+    api
+      .get("/openrouter/active")
+      .then((res) => {
         const list = res.data.models || [];
         setAiModels(list);
-        const def = list.find(m => m.is_default);
+        const def = list.find((m) => m.is_default);
         if (def) setSelectedModel(def.model_id);
       })
       .catch(() => {});
@@ -590,7 +591,8 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
               marginTop: 4,
             }}
           >
-            Max 1000 per trigger. Concurrent limit: {project.concurrent_sessions}
+            Max 1000 per trigger. Concurrent limit:{" "}
+            {project.concurrent_sessions}
           </div>
         </div>
 
@@ -1084,48 +1086,70 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
 
         {/* AI Provider selector */}
         {aiModels.length > 0 && (
-        <div style={{ marginBottom: 18 }}>
-          <label style={{
-            fontSize: '0.8rem', fontWeight: 600, color: '#374151',
-            fontFamily: FONT, display: 'block', marginBottom: 6,
-          }}>
-            AI Model
-          </label>
-          <select
-            style={{
-              width: '100%', padding: '9px 12px', border: '1.5px solid #e2e8f0',
-              borderRadius: 8, fontSize: '0.88rem', fontFamily: FONT,
-              outline: 'none', background: 'white',
-            }}
-            value={selectedModel}
-            onChange={e => setSelectedModel(e.target.value)}
-          >
-            <option value="">Use default model</option>
-            {aiModels.map(m => (
-              <option key={m.id} value={m.model_id}>
-                {m.display_name} {m.is_default ? '(default)' : ''}
-                {m.reasoning_level && m.reasoning_level !== 'off' ? ` · reasoning: ${m.reasoning_level}` : ''}
-              </option>
-            ))}
-          </select>
-          {selectedModel && (() => {
-            const m = aiModels.find(x => x.model_id === selectedModel);
-            if (!m) return null;
-            const inP  = parseFloat(m.input_price_per_1m  || 0);
-            const outP = parseFloat(m.output_price_per_1m || 0);
-            const est  = ((1200 / 1e6) * inP + (150 / 1e6) * outP) * 20;
-            return (
-              <div style={{
-                fontSize: '0.72rem', color: '#64748b', fontFamily: FONT,
-                marginTop: 4,
-              }}>
-                ${inP.toFixed(4)}/1M input · ${outP.toFixed(4)}/1M output
-                {' · '}est. <strong style={{ color: '#059669' }}>${est.toFixed(6)}</strong>/session
-              </div>
-            );
-          })()}
-        </div>
-      )}
+          <div style={{ marginBottom: 18 }}>
+            <label
+              style={{
+                fontSize: "0.8rem",
+                fontWeight: 600,
+                color: "#374151",
+                fontFamily: FONT,
+                display: "block",
+                marginBottom: 6,
+              }}
+            >
+              AI Model
+            </label>
+            <select
+              style={{
+                width: "100%",
+                padding: "9px 12px",
+                border: "1.5px solid #e2e8f0",
+                borderRadius: 8,
+                fontSize: "0.88rem",
+                fontFamily: FONT,
+                outline: "none",
+                background: "white",
+              }}
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+            >
+              <option value="">Use default model</option>
+              {aiModels.map((m) => (
+                <option key={m.id} value={m.model_id}>
+                  {m.display_name} {m.is_default ? "(default)" : ""}
+                  {m.reasoning_level && m.reasoning_level !== "off"
+                    ? ` · reasoning: ${m.reasoning_level}`
+                    : ""}
+                </option>
+              ))}
+            </select>
+            {selectedModel &&
+              (() => {
+                const m = aiModels.find((x) => x.model_id === selectedModel);
+                if (!m) return null;
+                const inP = parseFloat(m.input_price_per_1m || 0);
+                const outP = parseFloat(m.output_price_per_1m || 0);
+                const est = ((1200 / 1e6) * inP + (150 / 1e6) * outP) * 20;
+                return (
+                  <div
+                    style={{
+                      fontSize: "0.72rem",
+                      color: "#64748b",
+                      fontFamily: FONT,
+                      marginTop: 4,
+                    }}
+                  >
+                    ${inP.toFixed(4)}/1M input · ${outP.toFixed(4)}/1M output
+                    {" · "}est.{" "}
+                    <strong style={{ color: "#059669" }}>
+                      ${est.toFixed(6)}
+                    </strong>
+                    /session
+                  </div>
+                );
+              })()}
+          </div>
+        )}
 
         <div
           style={{
@@ -1747,11 +1771,19 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
   const [countryMapping, setCountryMapping] = useState(
     scenario?.country_mapping || null,
   );
-  const [cmQuestionContains, setCmQuestionContains] = useState(scenario?.country_mapping?.questionContains || '');
-  const [cmMappings, setCmMappings] = useState(scenario?.country_mapping?.mappings || []);
+  const [cmQuestionContains, setCmQuestionContains] = useState(
+    scenario?.country_mapping?.questionContains || "",
+  );
+  const [cmMappings, setCmMappings] = useState(
+    scenario?.country_mapping?.mappings || [],
+  );
   const [cmOptions, setCmOptions] = useState([]);
-  const [cmWaitMin, setCmWaitMin] = useState(scenario?.country_mapping?.waitMinS ?? null);
-  const [cmWaitMax, setCmWaitMax] = useState(scenario?.country_mapping?.waitMaxS ?? null);
+  const [cmWaitMin, setCmWaitMin] = useState(
+    scenario?.country_mapping?.waitMinS ?? null,
+  );
+  const [cmWaitMax, setCmWaitMax] = useState(
+    scenario?.country_mapping?.waitMaxS ?? null,
+  );
 
   // Load full country_mapping when editing Country Logic
   useEffect(() => {
@@ -2116,52 +2148,135 @@ function ScenarioModal({ scenario, projectId, onClose, onSaved, showToast }) {
                   </div>
                 ))}
                 {cmMappings.length === 0 && (
-                <div style={{ padding: "12px 14px", fontFamily: FONT, fontSize: "0.82rem", color: "#94a3b8" }}>No country mappings found.</div>
-              )}
-            </div>
-
-            {/* Wait time after answering country question */}
-            <div style={{ marginTop: 18, borderTop: "1px solid #dbeafe", paddingTop: 16 }}>
-              <label style={{ ...scenLabel, color: "#64748b" }}>
-                Wait after answering{" "}
-                <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional — simulates reading time)</span>
-              </label>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ fontSize: "0.78rem", color: "#94a3b8", fontFamily: FONT }}>Min</span>
-                  <input
-                    type="number"
-                    min="0"
-                    style={{ ...scenInput, width: 70, padding: "6px 8px" }}
-                    value={cmWaitMin ?? ""}
-                    placeholder="e.g. 5"
-                    onChange={(e) => setCmWaitMin(e.target.value === "" ? null : parseInt(e.target.value))}
-                  />
-                </div>
-                <span style={{ fontSize: "0.78rem", color: "#94a3b8", fontFamily: FONT }}>—</span>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ fontSize: "0.78rem", color: "#94a3b8", fontFamily: FONT }}>Max</span>
-                  <input
-                    type="number"
-                    min="0"
-                    style={{ ...scenInput, width: 70, padding: "6px 8px" }}
-                    value={cmWaitMax ?? ""}
-                    placeholder="e.g. 15"
-                    onChange={(e) => setCmWaitMax(e.target.value === "" ? null : parseInt(e.target.value))}
-                  />
-                </div>
-                <span style={{ fontSize: "0.75rem", color: "#94a3b8", fontFamily: FONT }}>seconds</span>
-                {(cmWaitMin || cmWaitMax) && (
-                  <span style={{ fontSize: "0.72rem", color: "#2563eb", fontFamily: FONT, background: "#eff6ff", padding: "2px 8px", borderRadius: 6 }}>
-                    Will wait {cmWaitMin || 0}–{cmWaitMax || cmWaitMin || 0}s after answering
-                  </span>
+                  <div
+                    style={{
+                      padding: "12px 14px",
+                      fontFamily: FONT,
+                      fontSize: "0.82rem",
+                      color: "#94a3b8",
+                    }}
+                  >
+                    No country mappings found.
+                  </div>
                 )}
               </div>
-              <div style={{ fontSize: "0.7rem", color: "#94a3b8", fontFamily: FONT, marginTop: 4 }}>
-                Bot waits a random duration in this range after selecting the country answer.
+
+              {/* Wait time after answering country question */}
+              <div
+                style={{
+                  marginTop: 18,
+                  borderTop: "1px solid #dbeafe",
+                  paddingTop: 16,
+                }}
+              >
+                <label style={{ ...scenLabel, color: "#64748b" }}>
+                  Wait after answering{" "}
+                  <span style={{ fontWeight: 400, color: "#94a3b8" }}>
+                    (optional — simulates reading time)
+                  </span>
+                </label>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 6 }}
+                  >
+                    <span
+                      style={{
+                        fontSize: "0.78rem",
+                        color: "#94a3b8",
+                        fontFamily: FONT,
+                      }}
+                    >
+                      Min
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      style={{ ...scenInput, width: 70, padding: "6px 8px" }}
+                      value={cmWaitMin ?? ""}
+                      placeholder="e.g. 5"
+                      onChange={(e) =>
+                        setCmWaitMin(
+                          e.target.value === ""
+                            ? null
+                            : parseInt(e.target.value),
+                        )
+                      }
+                    />
+                  </div>
+                  <span
+                    style={{
+                      fontSize: "0.78rem",
+                      color: "#94a3b8",
+                      fontFamily: FONT,
+                    }}
+                  >
+                    —
+                  </span>
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 6 }}
+                  >
+                    <span
+                      style={{
+                        fontSize: "0.78rem",
+                        color: "#94a3b8",
+                        fontFamily: FONT,
+                      }}
+                    >
+                      Max
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      style={{ ...scenInput, width: 70, padding: "6px 8px" }}
+                      value={cmWaitMax ?? ""}
+                      placeholder="e.g. 15"
+                      onChange={(e) =>
+                        setCmWaitMax(
+                          e.target.value === ""
+                            ? null
+                            : parseInt(e.target.value),
+                        )
+                      }
+                    />
+                  </div>
+                  <span
+                    style={{
+                      fontSize: "0.75rem",
+                      color: "#94a3b8",
+                      fontFamily: FONT,
+                    }}
+                  >
+                    seconds
+                  </span>
+                  {(cmWaitMin || cmWaitMax) && (
+                    <span
+                      style={{
+                        fontSize: "0.72rem",
+                        color: "#2563eb",
+                        fontFamily: FONT,
+                        background: "#eff6ff",
+                        padding: "2px 8px",
+                        borderRadius: 6,
+                      }}
+                    >
+                      Will wait {cmWaitMin || 0}–{cmWaitMax || cmWaitMin || 0}s
+                      after answering
+                    </span>
+                  )}
+                </div>
+                <div
+                  style={{
+                    fontSize: "0.7rem",
+                    color: "#94a3b8",
+                    fontFamily: FONT,
+                    marginTop: 4,
+                  }}
+                >
+                  Bot waits a random duration in this range after selecting the
+                  country answer.
+                </div>
               </div>
             </div>
-          </div>
           )}
           {loadingSteps ? (
             <div
@@ -3227,7 +3342,9 @@ function ScenariosTab({ projectId, showToast }) {
                           </button>
                           <button
                             title="Delete"
-                            onClick={() => setDeleteConfirm({ id: sc.id, name: sc.name })}
+                            onClick={() =>
+                              setDeleteConfirm({ id: sc.id, name: sc.name })
+                            }
                             style={{
                               background: "#fef2f2",
                               border: "1px solid #fecaca",
@@ -3303,17 +3420,18 @@ function SessionReportModal({
   const [imgError, setImgError] = useState({});
   const printRef = useRef(null);
 
-    useEffect(() => {
+  useEffect(() => {
     let pollInterval = null;
 
     const load = () => {
-      api.get(`/sessions/${sessionId}`)
-        .then(r => {
+      api
+        .get(`/sessions/${sessionId}`)
+        .then((r) => {
           setDetail(r.data);
           setLoading(false);
           // Stop polling once session is no longer active
           const status = r.data?.session?.status;
-          if (!['queued','initialising','in_progress'].includes(status)) {
+          if (!["queued", "initialising", "in_progress"].includes(status)) {
             clearInterval(pollInterval);
           }
         })
@@ -3328,7 +3446,12 @@ function SessionReportModal({
 
     // Poll every 5 seconds if session is active
     pollInterval = setInterval(() => {
-      if (detail?.session?.status && !['queued','initialising','in_progress'].includes(detail.session.status)) {
+      if (
+        detail?.session?.status &&
+        !["queued", "initialising", "in_progress"].includes(
+          detail.session.status,
+        )
+      ) {
         clearInterval(pollInterval);
         return;
       }
@@ -3833,7 +3956,11 @@ function SessionReportModal({
                       }}
                     >
                       <img
-                        src={`${API_BASE}/sessions/${session.id}/screenshot/page_${i + 1}.png`}
+                        src={
+                          ev.payload?.screenshot
+                            ? `${API_BASE}/sessions/${session.id}/screenshot/${ev.payload.screenshot.split("/").pop()}`
+                            : `${API_BASE}/sessions/${session.id}/screenshot/page_${i + 1}.png`
+                        }
                         style={{
                           width: "100%",
                           height: "100%",
@@ -4035,7 +4162,11 @@ function SessionReportModal({
                   </div>
                   {!imgError[activePageIdx] ? (
                     <img
-                      src={`${API_BASE}/sessions/${session.id}/screenshot/page_${activePageIdx + 1}.png`}
+                      src={
+                        activePage.payload?.screenshot
+                          ? `${API_BASE}/sessions/${session.id}/screenshot/${activePage.payload.screenshot.split("/").pop()}`
+                          : `${API_BASE}/sessions/${session.id}/screenshot/page_${activePageIdx + 1}.png`
+                      }
                       style={{ width: "100%", display: "block" }}
                       onError={() =>
                         setImgError((p) => ({ ...p, [activePageIdx]: true }))
@@ -4710,8 +4841,16 @@ function SurveyCardReadOnly({ survey, index }) {
 }
 
 // ─── Survey Card (editable) ───────────────────────────────────────────────────
-function SurveyCardEdit({ survey, index, onChange, onRemove, onCopyUrlToAll, totalSurveys }) {
-  const { asOptions: countryOptions, loading: countriesLoading } = useCountries();
+function SurveyCardEdit({
+  survey,
+  index,
+  onChange,
+  onRemove,
+  onCopyUrlToAll,
+  totalSurveys,
+}) {
+  const { asOptions: countryOptions, loading: countriesLoading } =
+    useCountries();
   const [copied, setCopied] = useState(false);
   const [showCopyConfirm, setShowCopyConfirm] = useState(false);
 
@@ -4731,10 +4870,17 @@ function SurveyCardEdit({ survey, index, onChange, onRemove, onCopyUrlToAll, tot
   ];
 
   const norm = (v) =>
-    Array.isArray(v) ? v : v ? v.split(",").map((x) => x.trim()).filter(Boolean) : [];
+    Array.isArray(v)
+      ? v
+      : v
+        ? v
+            .split(",")
+            .map((x) => x.trim())
+            .filter(Boolean)
+        : [];
 
   const setVal = (k) => (e) => onChange(index, k, e.target.value);
-  const set    = (k) => (v) => onChange(index, k, v);
+  const set = (k) => (v) => onChange(index, k, v);
 
   const handleCopyToAll = () => {
     if (!survey.url) return;
@@ -4774,8 +4920,21 @@ function SurveyCardEdit({ survey, index, onChange, onRemove, onCopyUrlToAll, tot
         <FullCol>
           {/* URL field with Copy to All button */}
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#374151", fontFamily: FONT }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <label
+                style={{
+                  fontSize: "0.8rem",
+                  fontWeight: 600,
+                  color: "#374151",
+                  fontFamily: FONT,
+                }}
+              >
                 Survey URL <span style={{ color: "#ef4444" }}>*</span>
               </label>
               {totalSurveys > 1 && (
@@ -4783,47 +4942,84 @@ function SurveyCardEdit({ survey, index, onChange, onRemove, onCopyUrlToAll, tot
                   type="button"
                   onClick={handleCopyToAll}
                   disabled={!survey.url}
-                  title={survey.url ? `Copy this URL to all ${totalSurveys} segments` : "Enter a URL first"}
+                  title={
+                    survey.url
+                      ? `Copy this URL to all ${totalSurveys} segments`
+                      : "Enter a URL first"
+                  }
                   style={{
-                    display: "flex", alignItems: "center", gap: 5,
-                    background: copied ? "#f0fdf4" : survey.url ? "#f0f7ff" : "#f8fafc",
-                    color:      copied ? "#059669"  : survey.url ? "#1e3a5f"  : "#cbd5e1",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                    background: copied
+                      ? "#f0fdf4"
+                      : survey.url
+                        ? "#f0f7ff"
+                        : "#f8fafc",
+                    color: copied
+                      ? "#059669"
+                      : survey.url
+                        ? "#1e3a5f"
+                        : "#cbd5e1",
                     border: `1px solid ${copied ? "#bbf7d0" : survey.url ? "#dbeafe" : "#e2e8f0"}`,
-                    borderRadius: 6, padding: "4px 10px",
-                    fontSize: "0.75rem", fontWeight: 600,
+                    borderRadius: 6,
+                    padding: "4px 10px",
+                    fontSize: "0.75rem",
+                    fontWeight: 600,
                     cursor: survey.url ? "pointer" : "not-allowed",
-                    fontFamily: FONT, transition: "all 0.2s",
+                    fontFamily: FONT,
+                    transition: "all 0.2s",
                   }}
                 >
                   {copied ? (
-                    <><CheckCircle size={12} /> Copied to all!</>
+                    <>
+                      <CheckCircle size={12} /> Copied to all!
+                    </>
                   ) : (
-                    <><Copy size={12} /> Copy URL to all segments</>
+                    <>
+                      <Copy size={12} /> Copy URL to all segments
+                    </>
                   )}
                 </button>
               )}
             </div>
             <input
               style={{
-                width: "100%", padding: "10px 12px",
-                border: "1.5px solid #e2e8f0", borderRadius: 8,
-                fontSize: "0.88rem", outline: "none",
-                color: "#1e293b", background: "white",
-                fontFamily: FONT, boxSizing: "border-box",
+                width: "100%",
+                padding: "10px 12px",
+                border: "1.5px solid #e2e8f0",
+                borderRadius: 8,
+                fontSize: "0.88rem",
+                outline: "none",
+                color: "#1e293b",
+                background: "white",
+                fontFamily: FONT,
+                boxSizing: "border-box",
               }}
               placeholder="https://survey.example.com/start?token=..."
               value={survey.url}
               onChange={setVal("url")}
             />
             {survey.url && (
-              <div style={{ fontSize: "0.72rem", color: "#64748b", fontFamily: FONT, wordBreak: "break-all" }}>
+              <div
+                style={{
+                  fontSize: "0.72rem",
+                  color: "#64748b",
+                  fontFamily: FONT,
+                  wordBreak: "break-all",
+                }}
+              >
                 🔗 {survey.url}
               </div>
             )}
           </div>
         </FullCol>
         <Select
-          label={countriesLoading ? "Target Countries (loading...)" : `Target Countries (${countryOptions.length})`}
+          label={
+            countriesLoading
+              ? "Target Countries (loading...)"
+              : `Target Countries (${countryOptions.length})`
+          }
           isMulti
           options={countryOptions}
           value={norm(survey.countries)}
@@ -5337,11 +5533,14 @@ function SessionsTab({
 
   // Returns live elapsed time for active sessions, stored duration for completed ones
   const getLiveDuration = (session) => {
-    if (["queued", "initialising"].includes(session.status)) return "Waiting...";
+    if (["queued", "initialising"].includes(session.status))
+      return "Waiting...";
     if (session.status === "in_progress") {
       const start = session.started_at;
       if (!start) return "—";
-      const elapsed = Math.round((Date.now() - new Date(start).getTime()) / 1000);
+      const elapsed = Math.round(
+        (Date.now() - new Date(start).getTime()) / 1000,
+      );
       return fmtDuration(elapsed) + " ⏳";
     }
     return fmtDuration(session.total_duration_s);
@@ -5400,7 +5599,10 @@ function SessionsTab({
       showToast("Session deleted ✓");
       load(true);
     } catch (err) {
-      showToast(err.response?.data?.error || "Failed to delete session", "error");
+      showToast(
+        err.response?.data?.error || "Failed to delete session",
+        "error",
+      );
     } finally {
       setDeleteOneConfirm(null);
     }
@@ -5463,10 +5665,13 @@ function SessionsTab({
             {
               label: "Total AI Cost",
               val: (() => {
-                const total = sessions.reduce((a, s) => a + (parseFloat(s.ai_cost_usd) || 0), 0);
+                const total = sessions.reduce(
+                  (a, s) => a + (parseFloat(s.ai_cost_usd) || 0),
+                  0,
+                );
                 return total > 0
-                  ? `$${total.toLocaleString('en-IN', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`
-                  : '—';
+                  ? `$${total.toLocaleString("en-IN", { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`
+                  : "—";
               })(),
               color: "#1e3a5f",
             },
@@ -5971,25 +6176,45 @@ function SessionsTab({
                     </td>
                     {/* AI Cost */}
                     <td style={s.td}>
-                      {session.ai_cost_usd && parseFloat(session.ai_cost_usd) > 0 ? (
-                        <div style={{ textAlign: 'right' }}>
-                          <div style={{
-                            fontSize: '0.82rem', fontWeight: 700,
-                            color: '#1e3a5f', fontFamily: FONT,
-                          }}>
-                            ${parseFloat(session.ai_cost_usd).toLocaleString('en-IN', {
-                              minimumFractionDigits: 6,
-                              maximumFractionDigits: 6,
-                            })}
+                      {session.ai_cost_usd &&
+                      parseFloat(session.ai_cost_usd) > 0 ? (
+                        <div style={{ textAlign: "right" }}>
+                          <div
+                            style={{
+                              fontSize: "0.82rem",
+                              fontWeight: 700,
+                              color: "#1e3a5f",
+                              fontFamily: FONT,
+                            }}
+                          >
+                            $
+                            {parseFloat(session.ai_cost_usd).toLocaleString(
+                              "en-IN",
+                              {
+                                minimumFractionDigits: 6,
+                                maximumFractionDigits: 6,
+                              },
+                            )}
                           </div>
                           {session.ai_calls_count > 0 && (
-                            <div style={{ fontSize: '0.68rem', color: '#94a3b8', fontFamily: FONT }}>
-                              {new Intl.NumberFormat('en-IN').format(session.ai_calls_count)} calls
+                            <div
+                              style={{
+                                fontSize: "0.68rem",
+                                color: "#94a3b8",
+                                fontFamily: FONT,
+                              }}
+                            >
+                              {new Intl.NumberFormat("en-IN").format(
+                                session.ai_calls_count,
+                              )}{" "}
+                              calls
                             </div>
                           )}
                         </div>
                       ) : (
-                        <span style={{ color: '#94a3b8', fontSize: '0.75rem' }}>—</span>
+                        <span style={{ color: "#94a3b8", fontSize: "0.75rem" }}>
+                          —
+                        </span>
                       )}
                     </td>
                     {/* 15. Actions */}
@@ -6226,22 +6451,22 @@ const paginationBtn = (disabled) => ({
 function CostsTab({ projectId, showToast }) {
   const [summary, setSummary] = useState(null);
   const [costData, setCostData] = useState(null);
-  const [loading, setLoading]   = useState(true);
+  const [loading, setLoading] = useState(true);
 
   // Indian number formatting
   const fmtIN = (num, dec = 6) => {
-    if (!num || isNaN(num)) return '0';
-    return new Intl.NumberFormat('en-IN', {
+    if (!num || isNaN(num)) return "0";
+    return new Intl.NumberFormat("en-IN", {
       minimumFractionDigits: dec,
       maximumFractionDigits: dec,
     }).format(num);
   };
   const fmtCost = (num) => {
-    if (!num || isNaN(parseFloat(num))) return '$0.00';
+    if (!num || isNaN(parseFloat(num))) return "$0.00";
     const n = parseFloat(num);
     if (n < 0.000001) return `$${fmtIN(n, 8)}`;
-    if (n < 0.001)    return `$${fmtIN(n, 6)}`;
-    if (n < 1)        return `$${fmtIN(n, 4)}`;
+    if (n < 0.001) return `$${fmtIN(n, 6)}`;
+    if (n < 1) return `$${fmtIN(n, 4)}`;
     return `$${fmtIN(n, 2)}`;
   };
 
@@ -6254,62 +6479,144 @@ function CostsTab({ projectId, showToast }) {
         setSummary(costRes.data.summary);
         // Calculate real AI cost from session data
         const sessions = sessRes.data.sessions || [];
-        const completed = sessions.filter(s =>
-          ['completed', 'terminated', 'over_quota'].includes(s.status)
+        const completed = sessions.filter((s) =>
+          ["completed", "terminated", "over_quota"].includes(s.status),
         );
-        const totalInput    = completed.reduce((a, s) => a + (parseInt(s.input_tokens_total)  || 0), 0);
-        const totalOutput   = completed.reduce((a, s) => a + (parseInt(s.output_tokens_total) || 0), 0);
-        const totalCalls    = completed.reduce((a, s) => a + (parseInt(s.ai_calls_count)      || 0), 0);
-        const totalAiCost   = completed.reduce((a, s) => a + (parseFloat(s.ai_cost_usd)       || 0), 0);
-        const modelsUsed    = [...new Set(completed.map(s => s.model_used).filter(Boolean))];
-        const avgCost       = completed.length > 0 ? totalAiCost / completed.length : 0;
-        const compSessions  = completed.filter(s => s.status === 'completed');
-        const costPerComplete = compSessions.length > 0 ? totalAiCost / compSessions.length : 0;
+        const totalInput = completed.reduce(
+          (a, s) => a + (parseInt(s.input_tokens_total) || 0),
+          0,
+        );
+        const totalOutput = completed.reduce(
+          (a, s) => a + (parseInt(s.output_tokens_total) || 0),
+          0,
+        );
+        const totalCalls = completed.reduce(
+          (a, s) => a + (parseInt(s.ai_calls_count) || 0),
+          0,
+        );
+        const totalAiCost = completed.reduce(
+          (a, s) => a + (parseFloat(s.ai_cost_usd) || 0),
+          0,
+        );
+        const modelsUsed = [
+          ...new Set(completed.map((s) => s.model_used).filter(Boolean)),
+        ];
+        const avgCost =
+          completed.length > 0 ? totalAiCost / completed.length : 0;
+        const compSessions = completed.filter((s) => s.status === "completed");
+        const costPerComplete =
+          compSessions.length > 0 ? totalAiCost / compSessions.length : 0;
         setCostData({
-          totalInput, totalOutput, totalCalls, totalAiCost,
-          modelsUsed, avgCost, costPerComplete,
+          totalInput,
+          totalOutput,
+          totalCalls,
+          totalAiCost,
+          modelsUsed,
+          avgCost,
+          costPerComplete,
           sessionCount: completed.length,
         });
       })
-      .catch(() => showToast('Failed to load cost data', 'error'))
+      .catch(() => showToast("Failed to load cost data", "error"))
       .finally(() => setLoading(false));
   }, [projectId]);
 
   if (loading) return <div style={s.tabCenter}>Loading cost data...</div>;
 
-  const completed  = parseInt(summary?.completed_sessions)  || 0;
+  const completed = parseInt(summary?.completed_sessions) || 0;
   const terminated = parseInt(summary?.terminated_sessions) || 0;
-  const errors     = parseInt(summary?.error_sessions)      || 0;
-  const active     = parseInt(summary?.active_sessions)     || 0;
-  const total      = parseInt(summary?.total_sessions)      || 0;
-  const target     = parseInt(summary?.target_completes)    || 0;
-  const completionPct = target > 0 ? Math.min(Math.round((completed / target) * 100), 100) : 0;
+  const errors = parseInt(summary?.error_sessions) || 0;
+  const active = parseInt(summary?.active_sessions) || 0;
+  const total = parseInt(summary?.total_sessions) || 0;
+  const target = parseInt(summary?.target_completes) || 0;
+  const completionPct =
+    target > 0 ? Math.min(Math.round((completed / target) * 100), 100) : 0;
 
   return (
     <div>
       {/* Stat cards */}
       <div style={s.statsGrid}>
-        <StatCard label="URL Hits"    value={total}     icon={Activity}    color="#f59e0b" />
-        <StatCard label="Completes"   value={completed} sub={`${completionPct}% of target`} icon={CheckCircle} color="#059669" />
-        <StatCard label="Incompletes" value={active}    sub="In progress or errored" icon={TrendingDown} color="#f97316" />
-        <StatCard label="Terminates"  value={terminated} sub="Screener fails + OQ" icon={StopCircle} color="#ef4444" />
+        <StatCard
+          label="URL Hits"
+          value={total}
+          icon={Activity}
+          color="#f59e0b"
+        />
+        <StatCard
+          label="Completes"
+          value={completed}
+          sub={`${completionPct}% of target`}
+          icon={CheckCircle}
+          color="#059669"
+        />
+        <StatCard
+          label="Incompletes"
+          value={active}
+          sub="In progress or errored"
+          icon={TrendingDown}
+          color="#f97316"
+        />
+        <StatCard
+          label="Terminates"
+          value={terminated}
+          sub="Screener fails + OQ"
+          icon={StopCircle}
+          color="#ef4444"
+        />
       </div>
 
       {/* Completion progress */}
       {target > 0 && (
         <div style={s.progressCard}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#1e293b', fontFamily: FONT }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              marginBottom: 8,
+            }}
+          >
+            <span
+              style={{
+                fontSize: "0.85rem",
+                fontWeight: 600,
+                color: "#1e293b",
+                fontFamily: FONT,
+              }}
+            >
               Completion Progress
             </span>
-            <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#2563eb', fontFamily: FONT }}>
+            <span
+              style={{
+                fontSize: "0.85rem",
+                fontWeight: 700,
+                color: "#2563eb",
+                fontFamily: FONT,
+              }}
+            >
               {completionPct}%
             </span>
           </div>
-          <div style={{ height: 8, background: '#f1f5f9', borderRadius: 4, overflow: 'hidden', marginBottom: 6 }}>
-            <div style={{ height: '100%', width: `${completionPct}%`, background: 'linear-gradient(90deg, #1e3a5f, #2563eb)', borderRadius: 4 }} />
+          <div
+            style={{
+              height: 8,
+              background: "#f1f5f9",
+              borderRadius: 4,
+              overflow: "hidden",
+              marginBottom: 6,
+            }}
+          >
+            <div
+              style={{
+                height: "100%",
+                width: `${completionPct}%`,
+                background: "linear-gradient(90deg, #1e3a5f, #2563eb)",
+                borderRadius: 4,
+              }}
+            />
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontFamily: FONT }}>
+          <div
+            style={{ fontSize: "0.75rem", color: "#94a3b8", fontFamily: FONT }}
+          >
             {completed} of {target} target completes
           </div>
         </div>
@@ -6319,13 +6626,16 @@ function CostsTab({ projectId, showToast }) {
       <div style={{ ...s.detailCard, marginBottom: 16 }}>
         <div style={s.detailCardTitle}>Session Breakdown</div>
         {[
-          ['Total Sessions',    total],
-          ['Completed',         completed],
-          ['Terminated',        terminated],
-          ['Errors / Flagged',  errors],
-          ['Active / Running',  active],
-          ['Avg Duration',      fmtDuration(summary?.avg_duration_s)],
-          ['Avg Quality Score', summary?.avg_quality ? `${summary.avg_quality} / 100` : '—'],
+          ["Total Sessions", total],
+          ["Completed", completed],
+          ["Terminated", terminated],
+          ["Errors / Flagged", errors],
+          ["Active / Running", active],
+          ["Avg Duration", fmtDuration(summary?.avg_duration_s)],
+          [
+            "Avg Quality Score",
+            summary?.avg_quality ? `${summary.avg_quality} / 100` : "—",
+          ],
         ].map(([k, v]) => (
           <div key={k} style={s.detailRow}>
             <span style={s.detailKey}>{k}</span>
@@ -6339,24 +6649,65 @@ function CostsTab({ projectId, showToast }) {
         <div style={s.detailCardTitle}>AI Cost Breakdown</div>
 
         {/* Cost summary cards */}
-        <div style={{
-          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-          gap: 12, marginBottom: 16,
-        }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+            gap: 12,
+            marginBottom: 16,
+          }}
+        >
           {[
-            { label: 'Total AI Cost',      value: fmtCost(costData?.totalAiCost),    color: '#1e3a5f' },
-            { label: 'Avg Cost / Session', value: fmtCost(costData?.avgCost),         color: '#2563eb' },
-            { label: 'Cost / Complete',    value: fmtCost(costData?.costPerComplete),  color: '#059669' },
-            { label: 'Total AI Calls',     value: new Intl.NumberFormat('en-IN').format(costData?.totalCalls || 0), color: '#7c3aed' },
+            {
+              label: "Total AI Cost",
+              value: fmtCost(costData?.totalAiCost),
+              color: "#1e3a5f",
+            },
+            {
+              label: "Avg Cost / Session",
+              value: fmtCost(costData?.avgCost),
+              color: "#2563eb",
+            },
+            {
+              label: "Cost / Complete",
+              value: fmtCost(costData?.costPerComplete),
+              color: "#059669",
+            },
+            {
+              label: "Total AI Calls",
+              value: new Intl.NumberFormat("en-IN").format(
+                costData?.totalCalls || 0,
+              ),
+              color: "#7c3aed",
+            },
           ].map(({ label, value, color }) => (
-            <div key={label} style={{
-              background: '#f8fafc', borderRadius: 8,
-              padding: '12px 14px', textAlign: 'center',
-            }}>
-              <div style={{ fontSize: '1.1rem', fontWeight: 800, color, fontFamily: FONT }}>
+            <div
+              key={label}
+              style={{
+                background: "#f8fafc",
+                borderRadius: 8,
+                padding: "12px 14px",
+                textAlign: "center",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "1.1rem",
+                  fontWeight: 800,
+                  color,
+                  fontFamily: FONT,
+                }}
+              >
                 {value}
               </div>
-              <div style={{ fontSize: '0.72rem', color: '#94a3b8', fontFamily: FONT, marginTop: 2 }}>
+              <div
+                style={{
+                  fontSize: "0.72rem",
+                  color: "#94a3b8",
+                  fontFamily: FONT,
+                  marginTop: 2,
+                }}
+              >
                 {label}
               </div>
             </div>
@@ -6365,27 +6716,52 @@ function CostsTab({ projectId, showToast }) {
 
         {/* Token detail rows */}
         {[
-          ['Sessions Analysed',    `${new Intl.NumberFormat('en-IN').format(costData?.sessionCount || 0)} sessions`],
-          ['Total Input Tokens',   new Intl.NumberFormat('en-IN').format(costData?.totalInput  || 0)],
-          ['Total Output Tokens',  new Intl.NumberFormat('en-IN').format(costData?.totalOutput || 0)],
-          ['Total Token Cost',     fmtCost(costData?.totalAiCost)],
-          ['Model(s) Used',        costData?.modelsUsed?.length > 0 ? costData.modelsUsed.join(', ') : '—'],
+          [
+            "Sessions Analysed",
+            `${new Intl.NumberFormat("en-IN").format(costData?.sessionCount || 0)} sessions`,
+          ],
+          [
+            "Total Input Tokens",
+            new Intl.NumberFormat("en-IN").format(costData?.totalInput || 0),
+          ],
+          [
+            "Total Output Tokens",
+            new Intl.NumberFormat("en-IN").format(costData?.totalOutput || 0),
+          ],
+          ["Total Token Cost", fmtCost(costData?.totalAiCost)],
+          [
+            "Model(s) Used",
+            costData?.modelsUsed?.length > 0
+              ? costData.modelsUsed.join(", ")
+              : "—",
+          ],
         ].map(([k, v]) => (
           <div key={k} style={s.detailRow}>
             <span style={s.detailKey}>{k}</span>
-            <span style={{ ...s.detailVal, maxWidth: 280, wordBreak: 'break-word' }}>{v}</span>
+            <span
+              style={{ ...s.detailVal, maxWidth: 280, wordBreak: "break-word" }}
+            >
+              {v}
+            </span>
           </div>
         ))}
 
         {/* Note if no cost data yet */}
         {(!costData?.totalAiCost || costData.totalAiCost === 0) && (
-          <div style={{
-            background: '#f0f7ff', border: '1px solid #dbeafe',
-            borderRadius: 8, padding: '12px 14px', marginTop: 12,
-            fontSize: '0.82rem', color: '#1e3a5f', fontFamily: FONT,
-          }}>
-            💡 Cost data populates automatically as sessions complete.
-            Token counts are recorded per AI call during each session.
+          <div
+            style={{
+              background: "#f0f7ff",
+              border: "1px solid #dbeafe",
+              borderRadius: 8,
+              padding: "12px 14px",
+              marginTop: 12,
+              fontSize: "0.82rem",
+              color: "#1e3a5f",
+              fontFamily: FONT,
+            }}
+          >
+            💡 Cost data populates automatically as sessions complete. Token
+            counts are recorded per AI call during each session.
           </div>
         )}
       </div>
@@ -6395,9 +6771,15 @@ function CostsTab({ projectId, showToast }) {
         <div style={s.detailCardTitle}>Proxy Cost</div>
         <div style={{ ...s.detailRow }}>
           <span style={s.detailKey}>Proxy Spend</span>
-          <div style={{ textAlign: 'right' }}>
+          <div style={{ textAlign: "right" }}>
             <span style={s.detailVal}>—</span>
-            <div style={{ fontSize: '0.72rem', color: '#94a3b8', fontFamily: FONT }}>
+            <div
+              style={{
+                fontSize: "0.72rem",
+                color: "#94a3b8",
+                fontFamily: FONT,
+              }}
+            >
               Configure proxy pricing in Settings → Billing
             </div>
           </div>
@@ -6503,7 +6885,7 @@ export default function ProjectDetail() {
     const sourceUrl = editForm.surveys[sourceIndex]?.url;
     if (!sourceUrl) return;
     const updated = editForm.surveys.map((sv) => ({ ...sv, url: sourceUrl }));
-    setF('surveys', updated);
+    setF("surveys", updated);
   };
 
   const doSave = async () => {

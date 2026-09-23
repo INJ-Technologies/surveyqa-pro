@@ -2663,7 +2663,7 @@ JSON RULES:
             }
             break;
           }
-          case "checkbox": {
+                    case "checkbox": {
             const allCbs = await page.locator('input[type="checkbox"]').all();
             const visible = [];
             for (const cb of allCbs) {
@@ -2679,8 +2679,48 @@ JSON RULES:
             const selected = [];
             for (const idx of ans.selectedIndices || []) {
               const cbEl = visible[groupStart + idx];
-              if (cbEl) {
-                await cbEl.check().catch(() => {});
+              if (!cbEl) continue;
+
+              // Use click via label first — Decipher needs click events not .check()
+              let clicked = false;
+              try {
+                const id = await cbEl.getAttribute('id').catch(() => null);
+                if (id) {
+                  const lbl = page.locator(`label[for="${id}"]`);
+                  if (await lbl.isVisible().catch(() => false)) {
+                    await lbl.click();
+                    await page.waitForTimeout(150);
+                    clicked = true;
+                  }
+                }
+              } catch {}
+
+              // Try parent label
+              if (!clicked) {
+                try {
+                  const parentLbl = cbEl.locator('xpath=ancestor::label').first();
+                  if (await parentLbl.isVisible().catch(() => false)) {
+                    await parentLbl.click();
+                    await page.waitForTimeout(150);
+                    clicked = true;
+                  }
+                } catch {}
+              }
+
+              // Direct click with JS dispatch as final fallback
+              if (!clicked) {
+                try {
+                  await cbEl.evaluate(el => {
+                    el.scrollIntoView({ block: 'center' });
+                    el.click();
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                  });
+                  await page.waitForTimeout(150);
+                  clicked = true;
+                } catch {}
+              }
+
+              if (clicked) {
                 selected.push(field.options?.[idx] || `option ${idx}`);
               }
             }
