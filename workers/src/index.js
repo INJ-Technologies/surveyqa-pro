@@ -50,50 +50,85 @@ console.log(`[Worker] Traces:      ${TRACES_DIR}`);
 // ══════════════════════════════════════════════════════════════════════════════
 // PERSONA LOADER — random assignment from project pool if no persona assigned
 // ══════════════════════════════════════════════════════════════════════════════
-const getPersona = async (personaId, projectId) => {
-  // Explicit persona assigned to this session
+const getPersona = async (personaId, projectId, proxyCountry = null) => {
+  // Explicit persona assigned — load it directly
   if (personaId) {
     try {
-      const r = await pool.query(`SELECT * FROM personas WHERE id = $1`, [
-        personaId,
-      ]);
+      const r = await pool.query(`SELECT * FROM personas WHERE id = $1`, [personaId]);
       if (r.rows[0]) {
-        console.log(`[Persona] Loaded: "${r.rows[0].name}"`);
+        console.log(`[Persona] Loaded explicit: "${r.rows[0].name}"`);
         return r.rows[0];
       }
     } catch {}
   }
-  // No persona — check if project has a persona pool, pick one randomly
+
+  // No explicit persona — pick from project pool, filtered by country first
   if (projectId) {
     try {
+      // Resolve ISO code → full country name via proxy_countries table
+      let countryName = null;
+      if (proxyCountry) {
+        const cr = await pool.query(
+          `SELECT country FROM proxy_countries WHERE UPPER(code) = UPPER($1) LIMIT 1`,
+          [proxyCountry]
+        );
+        countryName = cr.rows[0]?.country || null;
+        if (countryName) {
+          console.log(`[Persona] Country resolved: ${proxyCountry} → "${countryName}"`);
+        }
+      }
+
+      // Step 1: try country-matched persona
+      if (countryName) {
+        const r = await pool.query(
+          `SELECT p.* FROM project_personas pp
+           JOIN personas p ON p.id = pp.persona_id
+           WHERE pp.project_id = $1
+             AND pp.is_active = true
+             AND p.is_active = true
+             AND p.country ILIKE $2
+           ORDER BY RANDOM() LIMIT 1`,
+          [projectId, countryName]
+        );
+        if (r.rows[0]) {
+          const picked = r.rows[0];
+          console.log(`[Persona] Country-matched (${countryName}): "${picked.name}"`);
+          await pool.query(
+            `UPDATE sessions SET persona_id = $1, persona_name = $2
+             WHERE project_id = $3 AND persona_id IS NULL
+             ORDER BY created_at DESC LIMIT 1`,
+            [picked.id, picked.name, projectId]
+          ).catch(() => {});
+          return picked;
+        }
+        console.log(`[Persona] No country-matched persona for "${countryName}" — falling back to full pool`);
+      }
+
+      // Step 2: fallback — any active persona in the project pool
       const r = await pool.query(
         `SELECT p.* FROM project_personas pp
          JOIN personas p ON p.id = pp.persona_id
-         WHERE pp.project_id = $1 AND pp.is_active = true
+         WHERE pp.project_id = $1 AND pp.is_active = true AND p.is_active = true
          ORDER BY RANDOM() LIMIT 1`,
-        [projectId],
+        [projectId]
       );
       if (r.rows[0]) {
         const picked = r.rows[0];
-        console.log(
-          `[Persona] Auto-assigned from project pool (random): "${picked.name}"`,
-        );
-        await pool
-          .query(
-            `UPDATE sessions SET persona_id = $1, persona_name = $2 WHERE id = (
-             SELECT id FROM sessions WHERE project_id = $3 AND persona_id IS NULL
-             ORDER BY created_at DESC LIMIT 1
-           )`,
-            [picked.id, picked.name, projectId],
-          )
-          .catch(() => {});
+        console.log(`[Persona] Pool fallback (random): "${picked.name}"`);
+        await pool.query(
+          `UPDATE sessions SET persona_id = $1, persona_name = $2
+           WHERE project_id = $3 AND persona_id IS NULL
+           ORDER BY created_at DESC LIMIT 1`,
+          [picked.id, picked.name, projectId]
+        ).catch(() => {});
         return picked;
       }
     } catch (e) {
-      console.warn("[Persona] Pool lookup failed:", e.message);
+      console.warn('[Persona] Pool lookup failed:', e.message);
     }
   }
-  console.log("[Persona] None assigned — using default AI respondent");
+
+  console.log('[Persona] None assigned — AI will use common sense');
   return null;
 };
 
@@ -1469,6 +1504,30 @@ const buildPersonaContext = (persona) => {
   lines.push(
     "6. You keep all answers consistent with everything you have answered before in this session.",
   );
+
+  // ── HARD CONSTRAINTS — non-negotiable persona facts ──────────────────────
+  // These are injected separately so the AI treats them as deterministic,
+  // not as background colour. AI must find the closest matching survey option.
+  const constraints = [];
+  if (persona.country)             constraints.push(`• Respondent country / location → ${persona.country}`);
+  const a = persona.behavioural_attrs || {};
+  if (a.industry)                  constraints.push(`• Industry / sector → ${a.industry}`);
+  if (a.designation)               constraints.push(`• Job title / role → ${a.designation}`);
+  if (a.department)                constraints.push(`• Department / function → ${a.department}`);
+  if (a.companyRevenue)            constraints.push(`• Company annual revenue → ${a.companyRevenue}`);
+  if (a.employeeSize)              constraints.push(`• Company size (employees) → ${a.employeeSize}`);
+  if (persona.age_min && persona.age_max)
+                                   constraints.push(`• Age → ${persona.age_min}–${persona.age_max} years old`);
+  if (persona.gender)              constraints.push(`• Gender → ${persona.gender}`);
+
+  if (constraints.length > 0) {
+    lines.push('');
+    lines.push('── HARD CONSTRAINTS (non-negotiable) ──');
+    lines.push('When a survey question relates to any item below, you MUST select');
+    lines.push('the closest matching option available — even if the wording differs.');
+    lines.push('Do NOT deviate from these facts under any circumstances:');
+    constraints.forEach(c => lines.push(c));
+  }
 
   return lines.join("\n");
 };
@@ -3050,7 +3109,7 @@ const processSession = async (job) => {
   });
 
   // Persona — auto-assigned from project pool if not explicitly set
-  const persona = await getPersona(personaId, projectId);
+  const persona = await getPersona(personaId, projectId, proxyCountry);
   const readingSpeed = persona?.behavioural_attrs?.readingSpeed || "normal";
   const deviceOs = persona?.behavioural_attrs?.deviceOs || "windows";
 
@@ -3507,36 +3566,6 @@ const processSession = async (job) => {
       let answersGiven = null;
       const scenarioStepUsed = "ai";
 
-      // ── COUNTRY LOGIC: Hard deterministic click BEFORE AI runs ─────────────
-      // Country Logic must be a hard DOM action — NOT left to AI interpretation.
-      // This is why India sessions were selecting Japan: the AI was ignoring the
-      // injected instruction. Now Country Logic clicks the answer directly first,
-      // the radio becomes checked, and AI's captureAllPageFields skips it.
-      if (countryLogic && questionsOnPage.length > 0) {
-        try {
-          const applied = await applyCountryMapping(
-            page,
-            countryLogic,
-            proxyCountry,
-            questionsOnPage,
-          );
-          if (applied) {
-            console.log(
-              `[CountryLogic] ✓ Hard-clicked: ${proxyCountry} answer on page ${pageCount}`,
-            );
-            await logSessionEvent(sessionId, "country_logic_applied", {
-              page: pageCount,
-              country: proxyCountry,
-              question: questionsOnPage[0]?.slice(0, 100),
-            });
-            // Wait for any JS to react to the selection before AI scans the page
-            await page.waitForTimeout(800);
-          }
-        } catch (e) {
-          console.warn(`[CountryLogic] Hard-apply failed: ${e.message}`);
-        }
-      }
-
       // ── AI fills all remaining fields (including any Country Logic missed) ──────
       if (useAI) {
         console.log(`[Worker] Page ${pageCount}: AI answering`);
@@ -3636,6 +3665,30 @@ const processSession = async (job) => {
             });
         }
       }
+
+            // ── COUNTRY LOGIC: runs AFTER AI so it always has final say ──────────
+      if (countryLogic && questionsOnPage.length > 0) {
+        try {
+          const applied = await applyCountryMapping(
+            page, countryLogic, proxyCountry, questionsOnPage,
+          );
+          if (applied) {
+            console.log(`[CountryLogic] ✓ Hard-clicked: ${proxyCountry} answer on page ${pageCount}`);
+            await logSessionEvent(sessionId, 'country_logic_applied', {
+              page: pageCount,
+              country: proxyCountry,
+              question: questionsOnPage[0]?.slice(0, 100),
+            });
+            await page.waitForTimeout(500);
+            // Rescan in case CountryLogic click revealed a sub-question
+            await rescanForRevealedContent(page, providerConfig, persona, agentSetup.factSheet, questionsOnPage);
+          }
+        } catch (e) {
+          console.warn(`[CountryLogic] Hard-apply failed: ${e.message}`);
+        }
+      }
+
+      // ── Post-answer hesitation delay ──────────────────────────────────────
 
       // ── Post-answer hesitation delay ─────────────────────────────────────────────
       // After selecting an answer, a real person pauses before clicking Next.
