@@ -271,6 +271,107 @@ router.get("/live/:projectId", async (req, res) => {
   }
 });
 
+// ─── ADD THIS ROUTE TO backend/src/routes/sessions.js ────────────────────────
+// Place it BEFORE the "router.get('/:id'" route (line 277) to avoid conflict.
+// This is the global sessions listing endpoint used by the Sessions sidebar page.
+
+// ─── GET /api/sessions — All sessions across all projects (workspace-scoped) ──
+router.get('/', requireAuth, async (req, res) => {
+  try {
+    const {
+      projectId,
+      surveyUrl,
+      status,
+      outcome,
+      country,
+      internalTesting,
+      limit   = 50,
+      offset  = 0,
+    } = req.query;
+
+    const wsId = req.user.workspace_id;
+    const conditions = [`p.workspace_id = $1`];
+    const values = [wsId];
+    let idx = 2;
+
+    if (projectId)       { conditions.push(`s.project_id = $${idx++}`);        values.push(projectId); }
+    if (status)          { conditions.push(`s.status = $${idx++}`);             values.push(status); }
+    if (outcome)         { conditions.push(`s.outcome = $${idx++}`);            values.push(outcome); }
+    if (country)         { conditions.push(`s.proxy_country = $${idx++}`);      values.push(country); }
+    if (surveyUrl)       { conditions.push(`sv.url ILIKE $${idx++}`);           values.push(`%${surveyUrl}%`); }
+    if (internalTesting === 'true')  conditions.push(`s.internal_testing = true`);
+    if (internalTesting === 'false') conditions.push(`(s.internal_testing = false OR s.internal_testing IS NULL)`);
+
+    const where = conditions.join(' AND ');
+
+    // Total count for pagination
+    const countResult = await pool.query(
+      `SELECT COUNT(DISTINCT s.id) AS total
+       FROM sessions s
+       JOIN projects p ON p.id = s.project_id
+       LEFT JOIN project_surveys sv ON sv.project_id = s.project_id
+       WHERE ${where}`,
+      values
+    );
+    const total = parseInt(countResult.rows[0]?.total || 0);
+
+    // Sessions with project name, survey URL, and cost data
+    const result = await pool.query(
+      `SELECT
+         s.id, s.project_id, s.status, s.outcome,
+         s.response_id, s.proxy_country, s.ip_address,
+         s.device_type, s.internal_testing, s.persona_name,
+         s.scenario_name, s.quality_score, s.total_duration_s,
+         s.started_at, s.completed_at, s.created_at,
+         s.ai_cost_usd, s.ai_calls_count,
+         s.input_tokens_total, s.output_tokens_total,
+         p.name AS project_name,
+         p.reference_id AS project_reference_id,
+         (SELECT url FROM project_surveys ps
+          WHERE ps.project_id = s.project_id
+          LIMIT 1) AS survey_url
+       FROM sessions s
+       JOIN projects p ON p.id = s.project_id
+       WHERE p.workspace_id = $1
+         ${conditions.slice(1).length > 0
+            ? 'AND ' + conditions.slice(1).join(' AND ')
+            : ''
+          }
+       ORDER BY s.created_at DESC
+       LIMIT $${idx++} OFFSET $${idx}`,
+      [...values, parseInt(limit), parseInt(offset)]
+    );
+
+    // Aggregate stats across all returned sessions (for the stats bar)
+    const statsResult = await pool.query(
+      `SELECT
+         COUNT(*)                                           AS total,
+         COUNT(*) FILTER (WHERE s.status IN ('in_progress','initialising','queued')) AS active,
+         COUNT(*) FILTER (WHERE s.outcome = 'completed')   AS completed,
+         COUNT(*) FILTER (WHERE s.outcome = 'terminated')  AS terminated,
+         COUNT(*) FILTER (WHERE s.outcome = 'over_quota')  AS over_quota,
+         COUNT(*) FILTER (WHERE s.status  = 'error')       AS errors,
+         ROUND(AVG(s.total_duration_s))                    AS avg_duration,
+         SUM(COALESCE(s.ai_cost_usd, 0))                   AS total_ai_cost
+       FROM sessions s
+       JOIN projects p ON p.id = s.project_id
+       WHERE ${where}`,
+      values
+    );
+
+    res.json({
+      sessions: result.rows,
+      stats:    statsResult.rows[0],
+      total,
+      limit:  parseInt(limit),
+      offset: parseInt(offset),
+    });
+  } catch (err) {
+    console.error('Global sessions fetch error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch sessions' });
+  }
+});
+
 // ─── GET /api/sessions/:id — Full session detail ──────────────────────────────
 router.get("/:id", async (req, res) => {
   try {
