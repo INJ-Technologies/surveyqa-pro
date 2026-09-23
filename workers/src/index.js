@@ -879,7 +879,7 @@ const fillRemainingInputs = async (page) => {
       if (!(await input.isVisible().catch(() => false))) continue;
       const existing = await input.inputValue().catch(() => "");
       if (existing && existing.trim() !== "") continue;
-            const isOrphanSpecBox = await input
+      const isOrphanSpecBox = await input
         .evaluate((el) => {
           let node = el.parentElement;
           for (let i = 0; i < 8; i++) {
@@ -900,7 +900,9 @@ const fillRemainingInputs = async (page) => {
       // Also skip if the input's label text contains "other" and no adjacent checkbox is checked
       const isOtherSpecBox = await input
         .evaluate((el) => {
-          const ctx = (el.closest('td, tr, div, label')?.innerText || '').toLowerCase();
+          const ctx = (
+            el.closest("td, tr, div, label")?.innerText || ""
+          ).toLowerCase();
           return /other.*specify|specify.*other/i.test(ctx);
         })
         .catch(() => false);
@@ -1678,7 +1680,7 @@ const captureAllPageFields = async (page) => {
           cbGroups[name] = [];
           cbOrder.push(name);
         }
-                let label = "";
+        let label = "";
         if (cb.id) {
           const lbl = document.querySelector(`label[for="${cb.id}"]`);
           if (lbl) label = (lbl.innerText || "").trim();
@@ -1692,10 +1694,10 @@ const captureAllPageFields = async (page) => {
           const parent = cb.parentElement;
           if (parent) {
             const text = Array.from(parent.childNodes)
-              .filter(n => n.nodeType === 3)
-              .map(n => n.textContent.trim())
-              .filter(t => t.length > 0)
-              .join(' ');
+              .filter((n) => n.nodeType === 3)
+              .map((n) => n.textContent.trim())
+              .filter((t) => t.length > 0)
+              .join(" ");
             if (text) label = text;
           }
         }
@@ -1703,37 +1705,55 @@ const captureAllPageFields = async (page) => {
           // Try next sibling element
           let sib = cb.nextSibling;
           while (sib) {
-            const t = (sib.textContent || '').trim();
-            if (t.length > 2) { label = t; break; }
+            const t = (sib.textContent || "").trim();
+            if (t.length > 2) {
+              label = t;
+              break;
+            }
             sib = sib.nextSibling;
           }
         }
         cbGroups[name].push({ label, checked: cb.checked });
       });
-            // Detect multi-column checkbox grids (e.g. "12 months ago / Today")
+      // Detect multi-column checkbox grids (e.g. "12 months ago / Today")
       // These have checkboxes in table cells with shared column headers
-      const gridTables = document.querySelectorAll('table');
+      const gridTables = document.querySelectorAll("table");
       let hasGridCheckboxes = false;
-      gridTables.forEach(table => {
-        const headerCells = Array.from(table.querySelectorAll('thead th, tr:first-child th')).slice(1); // skip row label col
+      gridTables.forEach((table) => {
+        const headerCells = Array.from(
+          table.querySelectorAll("thead th, tr:first-child th"),
+        ).slice(1); // skip row label col
         if (headerCells.length < 2) return;
-        const checkboxRows = Array.from(table.querySelectorAll('tr')).filter(tr =>
-          tr.querySelectorAll('input[type="checkbox"]').length >= 2
+        const checkboxRows = Array.from(table.querySelectorAll("tr")).filter(
+          (tr) => tr.querySelectorAll('input[type="checkbox"]').length >= 2,
         );
         if (checkboxRows.length < 2) return;
         hasGridCheckboxes = true;
         // Add as a special grid field
-        const colHeaders = headerCells.map(th => (th.innerText || th.textContent || '').trim());
-        const rows = checkboxRows.map(tr => {
-          const cells = Array.from(tr.querySelectorAll('td'));
-          const rowLabel = cells[0] ? (cells[0].innerText || '').trim() : '';
+        const colHeaders = headerCells.map((th) =>
+          (th.innerText || th.textContent || "").trim(),
+        );
+        const rows = checkboxRows.map((tr) => {
+          const cells = Array.from(tr.querySelectorAll("td"));
+          const rowLabel = cells[0] ? (cells[0].innerText || "").trim() : "";
           const colCheckboxes = cells.slice(1).map((td, ci) => {
             const cb = td.querySelector('input[type="checkbox"]');
-            return { colIndex: ci, colHeader: colHeaders[ci] || `Col ${ci+1}`, checked: cb?.checked || false, name: cb?.name || '', id: cb?.id || '' };
+            return {
+              colIndex: ci,
+              colHeader: colHeaders[ci] || `Col ${ci + 1}`,
+              checked: cb?.checked || false,
+              name: cb?.name || "",
+              id: cb?.id || "",
+            };
           });
           return { rowLabel, colCheckboxes };
         });
-        fields.push({ fieldType: 'checkboxGrid', rows, colHeaders, questionLabel: '' });
+        fields.push({
+          fieldType: "checkboxGrid",
+          rows,
+          colHeaders,
+          questionLabel: "",
+        });
       });
       if (hasGridCheckboxes) return fields; // return early, skip flat checkbox processing for grid pages
       cbOrder.forEach((name, gi) => {
@@ -1910,56 +1930,70 @@ const captureAllPageFields = async (page) => {
 const formatFieldsForPrompt = (fields) => {
   if (!fields || fields.length === 0)
     return "None — this may be an intro or transition page.";
-  const header = `THERE ARE EXACTLY ${fields.length} FIELD(S) ON THIS PAGE. Return exactly ${fields.length} answer(s) — one per field. Do not invent extra fieldIndex entries.\n\n`;
-  return fields
-    .map((f, i) => {
-      switch (f.fieldType) {
-        case "radio": {
-          const opts = f.options
-            .map((o, idx) => `  [${idx}] ${o || "(unlabelled)"}`)
-            .join("\n");
-          return `[${i}] RADIO — "${f.questionLabel || "question"}"\n${opts}`;
-        }
-        case "checkbox": {
-          const opts = f.options
-            .map((o, idx) => `  [${idx}] ${o || "(unlabelled)"}`)
-            .join("\n");
-          return `[${i}] CHECKBOX (select 1–4 that make sense together) — "${f.questionLabel || "question"}"\n${opts}`;
-        }
-        case "select": {
-          const opts = f.options
-            .map((o, idx) => `  [${idx}] ${o.label}`)
-            .join("\n");
-          return `[${i}] DROPDOWN — "${f.questionLabel || "question"}"\n${opts}`;
-        }
-        case "textarea":
-          return `[${i}] OPEN-END TEXT — "${f.questionLabel || f.placeholder || "open response"}"`;
-                case "input": {
-          const parts = [];
-          if (f.rowLabel) parts.push(`row: "${f.rowLabel}"`);
-          if (f.columnHeader) parts.push(`column: "${f.columnHeader}"`);
-          if (f.unitLabel) parts.push(`unit: "${f.unitLabel}"`);
-          if (f.min || f.max)
-            parts.push(`range: ${f.min ?? "?"}–${f.max ?? "?"}`);
-          // Detect percentage context so AI doesn't enter revenue-scale numbers
-          const ctx = (f.contextText || f.placeholder || f.unitLabel || f.rowLabel || '').toLowerCase();
-          const isPct = /%|percent|proportion|share|allocation/.test(ctx) || f.unitLabel === '%';
-          if (isPct) parts.push('PERCENTAGE: enter 0–100 only');
-          const meta = parts.length > 0 ? ` [${parts.join(", ")}]` : "";
-          return `[${i}] NUMERIC INPUT${meta} — context: "${f.contextText?.slice(0, 100) || f.placeholder || "numeric field"}"`;
-        }
-        case "checkboxGrid": {
-          const colHdrs = f.colHeaders?.join(' | ') || 'columns';
-          const rowDesc = f.rows?.map((r, ri) =>
-            `  Row ${ri}: "${r.rowLabel}" → columns: [${r.colCheckboxes?.map((c, ci) => `${ci}="${c.colHeader}"`).join(', ')}]`
-          ).join('\n') || '(no rows)';
-          return `[${i}] CHECKBOX GRID — columns: ${colHdrs}\n${rowDesc}\nFor each row select which column(s) apply. Return selectedCells: [{row:0,col:0},{row:1,col:1}]`;
-        }
-        default:
-          return `[${i}] UNKNOWN FIELD`;
+
+  const inputCount = fields.filter(f => f.fieldType === 'input').length;
+
+  // Detect grid: multiple inputs sharing the same rowLabel = table matrix
+  const inputFields = fields.map((f, i) => ({ f, i })).filter(({ f }) => f.fieldType === 'input');
+  const rowGroups = {};
+  inputFields.forEach(({ f, i }) => {
+    const key = (f.rowLabel || '').slice(0, 60) || `row_${i}`;
+    if (!rowGroups[key]) rowGroups[key] = [];
+    rowGroups[key].push({ f, i });
+  });
+  const isGrid = inputFields.length > 1 && Object.values(rowGroups).some(g => g.length > 1);
+
+  let gridWarning = '';
+  if (isGrid) {
+    gridWarning = `\n⚠ GRID MATRIX DETECTED: This page has a table with ${inputCount} numeric inputs across multiple rows AND columns.\n` +
+      `Each fieldIndex below is a SEPARATE cell — same row label = same row, different column.\n` +
+      `You MUST answer EVERY fieldIndex. Do NOT skip any cell.\n` +
+      `All inputs marked ⚠ PERCENTAGE are 0–100 only.\n`;
+  } else if (inputCount > 1) {
+    gridWarning = `\n⚠ ${inputCount} NUMERIC INPUT FIELDS on this page — answer every single one.\n`;
+  }
+
+  const header = `THERE ARE EXACTLY ${fields.length} FIELD(S). Return exactly ${fields.length} answer(s) in the answers array.${gridWarning}\n`;
+
+  return header + fields.map((f, i) => {
+    switch (f.fieldType) {
+      case "radio": {
+        const opts = f.options.map((o, idx) => `  [${idx}] ${o || "(unlabelled)"}`).join("\n");
+        return `[${i}] RADIO — "${f.questionLabel || "question"}"\n${opts}`;
       }
-    })
-    .join("\n\n");
+      case "checkbox": {
+        const opts = f.options.map((o, idx) => `  [${idx}] ${o || "(unlabelled)"}`).join("\n");
+        return `[${i}] CHECKBOX (select 1–4 that apply) — "${f.questionLabel || "question"}"\n${opts}`;
+      }
+      case "select": {
+        const opts = f.options.map((o, idx) => `  [${idx}] ${o.label}`).join("\n");
+        return `[${i}] DROPDOWN — "${f.questionLabel || "question"}"\n${opts}`;
+      }
+      case "textarea":
+        return `[${i}] OPEN-END TEXT — "${f.questionLabel || f.placeholder || "open response"}"`;
+      case "input": {
+        const parts = [];
+        if (f.rowLabel)     parts.push(`row: "${f.rowLabel.slice(0, 70)}"`);
+        if (f.columnHeader) parts.push(`column: "${f.columnHeader}"`);
+        if (f.unitLabel)    parts.push(`unit: "${f.unitLabel}"`);
+        if (f.min || f.max) parts.push(`range: ${f.min ?? "?"}–${f.max ?? "?"}`);
+        const ctx = (f.contextText || f.placeholder || f.unitLabel || f.rowLabel || f.columnHeader || '').toLowerCase();
+        const isPct = /%|percent|proportion|share|allocation/.test(ctx) || f.unitLabel === '%';
+        if (isPct) parts.push('⚠ PERCENTAGE 0–100 ONLY');
+        const meta = parts.length > 0 ? ` [${parts.join(" | ")}]` : "";
+        return `[${i}] NUMERIC INPUT${meta}\n    ↳ REQUIRED — provide value for fieldIndex ${i}`;
+      }
+      case "checkboxGrid": {
+        const colHdrs = f.colHeaders?.join(' | ') || 'columns';
+        const rowDesc = f.rows?.map((r, ri) =>
+          `  Row ${ri}: "${r.rowLabel}" → columns: [${r.colCheckboxes?.map((c, ci) => `${ci}="${c.colHeader}"`).join(', ')}]`
+        ).join('\n') || '(no rows)';
+        return `[${i}] CHECKBOX GRID — columns: ${colHdrs}\n${rowDesc}\nReturn selectedCells: [{row:0,col:0},{row:1,col:1}]`;
+      }
+      default:
+        return `[${i}] UNKNOWN FIELD`;
+    }
+  }).join("\n\n");
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2735,7 +2769,7 @@ JSON RULES:
             }
             break;
           }
-                    case "checkbox": {
+          case "checkbox": {
             const allCbs = await page.locator('input[type="checkbox"]').all();
             const visible = [];
             for (const cb of allCbs) {
@@ -2756,7 +2790,7 @@ JSON RULES:
               // Use click via label first — Decipher needs click events not .check()
               let clicked = false;
               try {
-                const id = await cbEl.getAttribute('id').catch(() => null);
+                const id = await cbEl.getAttribute("id").catch(() => null);
                 if (id) {
                   const lbl = page.locator(`label[for="${id}"]`);
                   if (await lbl.isVisible().catch(() => false)) {
@@ -2770,7 +2804,9 @@ JSON RULES:
               // Try parent label
               if (!clicked) {
                 try {
-                  const parentLbl = cbEl.locator('xpath=ancestor::label').first();
+                  const parentLbl = cbEl
+                    .locator("xpath=ancestor::label")
+                    .first();
                   if (await parentLbl.isVisible().catch(() => false)) {
                     await parentLbl.click();
                     await page.waitForTimeout(150);
@@ -2782,10 +2818,10 @@ JSON RULES:
               // Direct click with JS dispatch as final fallback
               if (!clicked) {
                 try {
-                  await cbEl.evaluate(el => {
-                    el.scrollIntoView({ block: 'center' });
+                  await cbEl.evaluate((el) => {
+                    el.scrollIntoView({ block: "center" });
                     el.click();
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new Event("change", { bubbles: true }));
                   });
                   await page.waitForTimeout(150);
                   clicked = true;
@@ -2853,14 +2889,14 @@ JSON RULES:
             }
             break;
           }
-                    case "checkboxGrid": {
+          case "checkboxGrid": {
             // Multi-column checkbox grid — click specific row/column intersections
             const cellsToClick = ans.selectedCells || [];
             if (cellsToClick.length === 0) break;
 
-            const allTables = await page.locator('table').all();
+            const allTables = await page.locator("table").all();
             for (const table of allTables) {
-              const allRows = await table.locator('tr').all();
+              const allRows = await table.locator("tr").all();
               const dataRows = [];
               for (const row of allRows) {
                 const cbs = await row.locator('input[type="checkbox"]').all();
@@ -2876,7 +2912,7 @@ JSON RULES:
 
                 let clicked = false;
                 try {
-                  const id = await cb.getAttribute('id').catch(() => null);
+                  const id = await cb.getAttribute("id").catch(() => null);
                   if (id) {
                     const lbl = page.locator(`label[for="${id}"]`);
                     if (await lbl.isVisible().catch(() => false)) {
@@ -2888,20 +2924,26 @@ JSON RULES:
                 } catch {}
                 if (!clicked) {
                   try {
-                    await cb.evaluate(el => {
-                      el.scrollIntoView({ block: 'center' });
+                    await cb.evaluate((el) => {
+                      el.scrollIntoView({ block: "center" });
                       el.click();
-                      el.dispatchEvent(new Event('change', { bubbles: true }));
+                      el.dispatchEvent(new Event("change", { bubbles: true }));
                     });
                     await page.waitForTimeout(150);
                     clicked = true;
                   } catch {}
                 }
-                if (clicked) console.log(`[AI] ✓ CheckboxGrid row ${ri} col ${ci}`);
+                if (clicked)
+                  console.log(`[AI] ✓ CheckboxGrid row ${ri} col ${ci}`);
               }
               break; // handled first matching table
             }
-            answersGiven.push({ type: 'checkboxGrid', selected: cellsToClick, aiControlled: true, flags });
+            answersGiven.push({
+              type: "checkboxGrid",
+              selected: cellsToClick,
+              aiControlled: true,
+              flags,
+            });
             break;
           }
           case "input": {
@@ -3470,6 +3512,98 @@ const extractQuestionsFromPage = async (page) => {
     )
     .filter((t) => !isNonQuestion(t))
     .slice(0, 5);
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// QUALITY SCORE CALCULATOR — computed at session end, written to sessions table
+// Score: 0–100. Higher = more human-like, consistent, validated behaviour.
+// ══════════════════════════════════════════════════════════════════════════════
+const calculateQualityScore = (pages, sessionEvents, pageCount, outcome) => {
+  try {
+    const answeredPages = pages.filter(
+      (p) => !p.isExitPage && p.answers?.length > 0,
+    );
+    const totalPages = Math.max(pageCount, 1);
+
+    // ── Signal 1: Completion ratio (25 pts) ───────────────────────────────────
+    const completionRatio = Math.min(answeredPages.length / totalPages, 1);
+    const completionScore = Math.round(completionRatio * 25);
+
+    // ── Signal 2: Answer consistency — no contradictions (25 pts) ────────────
+    // Each page_answered event carries factSheet; we check answers for AI flags
+    const pageAnswerEvents = sessionEvents.filter(
+      (e) => e.event_type === "page_answered",
+    );
+    const contradictions = pageAnswerEvents.filter((e) => {
+      const p =
+        typeof e.payload === "string" ? JSON.parse(e.payload) : e.payload;
+      return p?.answers?.some((a) => a?.contradictionResolved === true);
+    }).length;
+    const consistencyScore = Math.max(
+      0,
+      25 -
+        Math.round(
+          (contradictions / Math.max(pageAnswerEvents.length, 1)) * 25,
+        ),
+    );
+
+    // ── Signal 3: No validation errors (20 pts) ───────────────────────────────
+    const validationErrors = sessionEvents.filter((e) => {
+      if (e.event_type !== "flag_warning") return false;
+      const p =
+        typeof e.payload === "string" ? JSON.parse(e.payload) : e.payload;
+      return p?.flag === "VALIDATION_ERROR";
+    }).length;
+    const validationScore = Math.max(0, 20 - validationErrors * 5);
+
+    // ── Signal 4: No AI fallbacks to random (15 pts) ─────────────────────────
+    const aiFallbacks = sessionEvents.filter((e) => {
+      if (e.event_type !== "flag_warning") return false;
+      const p =
+        typeof e.payload === "string" ? JSON.parse(e.payload) : e.payload;
+      return p?.flag === "AI_FALLBACK_RANDOM";
+    }).length;
+    const fallbackScore = Math.max(0, 15 - aiFallbacks * 5);
+
+    // ── Signal 5: Realistic page timing (15 pts) ──────────────────────────────
+    const pageTimes = answeredPages
+      .map((p) => p.timeTaken || 0)
+      .filter((t) => t > 0);
+    let timingScore = 15;
+    if (pageTimes.length > 0) {
+      const avgTime = pageTimes.reduce((a, b) => a + b, 0) / pageTimes.length;
+      if (avgTime < 5)
+        timingScore = 0; // suspiciously fast — bot-like
+      else if (avgTime < 10) timingScore = 5;
+      else if (avgTime < 20) timingScore = 10;
+      else if (avgTime > 300)
+        timingScore = 5; // suspiciously slow
+      else timingScore = 15; // 20–300s per page = realistic
+    }
+
+    // ── Bonus: Completed the survey (no deduction for terminated/OQ) ─────────
+    const outcomeBonus = outcome === "completed" ? 5 : 0;
+
+    const raw =
+      completionScore +
+      consistencyScore +
+      validationScore +
+      fallbackScore +
+      timingScore +
+      outcomeBonus;
+    const final = Math.min(100, Math.max(0, raw));
+
+    console.log(
+      `[Quality] Score: ${final}/100 ` +
+        `(completion:${completionScore} consistency:${consistencyScore} ` +
+        `validation:${validationScore} fallback:${fallbackScore} timing:${timingScore} bonus:${outcomeBonus})`,
+    );
+
+    return final;
+  } catch (e) {
+    console.warn("[Quality] Score calculation failed:", e.message);
+    return null;
+  }
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -4194,27 +4328,31 @@ const processSession = async (job) => {
         });
 
         // ── Write running cost to DB after each page ──────────────────────────
-      // This lets the sessions tab show live cost on each refresh
-      if (providerConfig?._usage?.calls > 0) {
-        const runningUsage = providerConfig._usage;
-        await pool.query(
-          `UPDATE sessions SET
+        // This lets the sessions tab show live cost on each refresh
+        if (providerConfig?._usage?.calls > 0) {
+          const runningUsage = providerConfig._usage;
+          await pool
+            .query(
+              `UPDATE sessions SET
              ai_calls_count      = $1,
              input_tokens_total  = $2,
              output_tokens_total = $3,
              ai_cost_usd         = $4,
              model_used          = $5
            WHERE id = $6`,
-          [
-            runningUsage.calls,
-            runningUsage.inputTokens,
-            runningUsage.outputTokens,
-            parseFloat(runningUsage.costUsd.toFixed(8)),
-            providerConfig.model || null,
-            sessionId,
-          ]
-        ).catch(e => console.warn('[Cost] Mid-session write failed:', e.message));
-      }
+              [
+                runningUsage.calls,
+                runningUsage.inputTokens,
+                runningUsage.outputTokens,
+                parseFloat(runningUsage.costUsd.toFixed(8)),
+                providerConfig.model || null,
+                sessionId,
+              ],
+            )
+            .catch((e) =>
+              console.warn("[Cost] Mid-session write failed:", e.message),
+            );
+        }
 
         // Click next
         const clicked = await clickNext(page);
@@ -4346,6 +4484,9 @@ const processSession = async (job) => {
     costUsd: 0,
   };
 
+  // Calculate quality score from all session signals
+  const qualityScore = calculateQualityScore(pages, [], pageCount, outcome);
+
   if (usage.calls > 0) {
     console.log(
       `[Cost] ✓ Session ${sessionId.slice(0, 8)}: ${usage.calls} AI calls | ` +
@@ -4364,6 +4505,7 @@ const processSession = async (job) => {
     aiCallsCount: usage.calls,
     aiCostUsd: parseFloat(usage.costUsd.toFixed(8)),
     modelUsed: providerConfig?.model || null,
+    qualityScore: qualityScore,
     ...(errorMessage ? { errorLog: errorMessage.slice(0, 2000) } : {}),
   });
   await logSessionEvent(sessionId, "session_complete", {
