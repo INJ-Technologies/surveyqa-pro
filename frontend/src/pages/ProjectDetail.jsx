@@ -6470,54 +6470,57 @@ function CostsTab({ projectId, showToast }) {
     return `$${fmtIN(n, 2)}`;
   };
 
-  useEffect(() => {
+    useEffect(() => {
     Promise.all([
       api.get(`/projects/${projectId}/costs`),
-      api.get(`/projects/${projectId}/sessions?limit=1000&offset=0`),
+      api.get(`/projects/${projectId}/sessions?limit=2000&offset=0`),
     ])
       .then(([costRes, sessRes]) => {
         setSummary(costRes.data.summary);
-        // Calculate real AI cost from session data
+
         const sessions = sessRes.data.sessions || [];
-        const completed = sessions.filter((s) =>
-          ["completed", "terminated", "over_quota"].includes(s.status),
+
+        // Include ALL sessions that have any AI cost — not just completed ones
+        // Error sessions, in-progress sessions etc. all accumulate real cost
+        const withCost = sessions.filter(s =>
+          parseFloat(s.ai_cost_usd || 0) > 0 || parseInt(s.ai_calls_count || 0) > 0
         );
-        const totalInput = completed.reduce(
-          (a, s) => a + (parseInt(s.input_tokens_total) || 0),
-          0,
-        );
-        const totalOutput = completed.reduce(
-          (a, s) => a + (parseInt(s.output_tokens_total) || 0),
-          0,
-        );
-        const totalCalls = completed.reduce(
-          (a, s) => a + (parseInt(s.ai_calls_count) || 0),
-          0,
-        );
-        const totalAiCost = completed.reduce(
-          (a, s) => a + (parseFloat(s.ai_cost_usd) || 0),
-          0,
-        );
-        const modelsUsed = [
-          ...new Set(completed.map((s) => s.model_used).filter(Boolean)),
-        ];
-        const avgCost =
-          completed.length > 0 ? totalAiCost / completed.length : 0;
-        const compSessions = completed.filter((s) => s.status === "completed");
-        const costPerComplete =
-          compSessions.length > 0 ? totalAiCost / compSessions.length : 0;
+        const allSessions = sessions; // for session breakdown stats
+
+        const totalInput    = withCost.reduce((a, s) => a + (parseInt(s.input_tokens_total)  || 0), 0);
+        const totalOutput   = withCost.reduce((a, s) => a + (parseInt(s.output_tokens_total) || 0), 0);
+        const totalCalls    = withCost.reduce((a, s) => a + (parseInt(s.ai_calls_count)      || 0), 0);
+        const totalAiCost   = withCost.reduce((a, s) => a + (parseFloat(s.ai_cost_usd)       || 0), 0);
+
+        const modelsUsed    = [...new Set(withCost.map(s => s.model_used).filter(Boolean))];
+
+        // Avg cost across all sessions that incurred any cost
+        const avgCost = withCost.length > 0 ? totalAiCost / withCost.length : 0;
+
+        // Cost per complete — only sessions that actually completed
+        const compSessions = allSessions.filter(s => s.status === 'completed');
+        const compWithCost = compSessions.filter(s => parseFloat(s.ai_cost_usd || 0) > 0);
+        const costPerComplete = compWithCost.length > 0
+          ? compWithCost.reduce((a, s) => a + (parseFloat(s.ai_cost_usd) || 0), 0) / compWithCost.length
+          : totalAiCost > 0 && compSessions.length > 0
+            ? totalAiCost / compSessions.length
+            : 0;
+
+        // Session breakdown by status
+        const byStatus = allSessions.reduce((acc, s) => {
+          acc[s.status] = (acc[s.status] || 0) + 1;
+          return acc;
+        }, {});
+
         setCostData({
-          totalInput,
-          totalOutput,
-          totalCalls,
-          totalAiCost,
-          modelsUsed,
-          avgCost,
-          costPerComplete,
-          sessionCount: completed.length,
+          totalInput, totalOutput, totalCalls, totalAiCost,
+          modelsUsed, avgCost, costPerComplete,
+          sessionCount: withCost.length,
+          totalSessions: allSessions.length,
+          byStatus,
         });
       })
-      .catch(() => showToast("Failed to load cost data", "error"))
+      .catch(() => showToast('Failed to load cost data', 'error'))
       .finally(() => setLoading(false));
   }, [projectId]);
 
@@ -6625,17 +6628,15 @@ function CostsTab({ projectId, showToast }) {
       {/* Session breakdown */}
       <div style={{ ...s.detailCard, marginBottom: 16 }}>
         <div style={s.detailCardTitle}>Session Breakdown</div>
-        {[
-          ["Total Sessions", total],
-          ["Completed", completed],
-          ["Terminated", terminated],
-          ["Errors / Flagged", errors],
-          ["Active / Running", active],
-          ["Avg Duration", fmtDuration(summary?.avg_duration_s)],
-          [
-            "Avg Quality Score",
-            summary?.avg_quality ? `${summary.avg_quality} / 100` : "—",
-          ],
+                {[
+          ['Total Sessions',    costData?.totalSessions ?? total],
+          ['Sessions with AI Cost', costData?.sessionCount ?? 0],
+          ['Completed',         costData?.byStatus?.completed  ?? completed],
+          ['Terminated',        costData?.byStatus?.terminated ?? terminated],
+          ['Errors',            (costData?.byStatus?.error ?? errors)],
+          ['Active / Running',  costData?.byStatus?.in_progress ?? active],
+          ['Avg Duration',      fmtDuration(summary?.avg_duration_s)],
+          ['Avg Quality Score', summary?.avg_quality ? `${summary.avg_quality} / 100` : '—'],
         ].map(([k, v]) => (
           <div key={k} style={s.detailRow}>
             <span style={s.detailKey}>{k}</span>
@@ -6658,28 +6659,10 @@ function CostsTab({ projectId, showToast }) {
           }}
         >
           {[
-            {
-              label: "Total AI Cost",
-              value: fmtCost(costData?.totalAiCost),
-              color: "#1e3a5f",
-            },
-            {
-              label: "Avg Cost / Session",
-              value: fmtCost(costData?.avgCost),
-              color: "#2563eb",
-            },
-            {
-              label: "Cost / Complete",
-              value: fmtCost(costData?.costPerComplete),
-              color: "#059669",
-            },
-            {
-              label: "Total AI Calls",
-              value: new Intl.NumberFormat("en-IN").format(
-                costData?.totalCalls || 0,
-              ),
-              color: "#7c3aed",
-            },
+            { label: 'Total AI Cost',      value: fmtCost(summary?.total_ai_cost      || costData?.totalAiCost),        color: '#1e3a5f' },
+            { label: 'Avg Cost / Session', value: fmtCost(summary?.avg_cost_per_session || costData?.avgCost),          color: '#2563eb' },
+            { label: 'Cost / Complete',    value: fmtCost(summary?.cost_per_complete   || costData?.costPerComplete),    color: '#059669' },
+            { label: 'Total AI Calls',     value: new Intl.NumberFormat('en-IN').format(summary?.total_ai_calls || costData?.totalCalls || 0), color: '#7c3aed' },
           ].map(({ label, value, color }) => (
             <div
               key={label}
@@ -6715,26 +6698,15 @@ function CostsTab({ projectId, showToast }) {
         </div>
 
         {/* Token detail rows */}
-        {[
-          [
-            "Sessions Analysed",
-            `${new Intl.NumberFormat("en-IN").format(costData?.sessionCount || 0)} sessions`,
-          ],
-          [
-            "Total Input Tokens",
-            new Intl.NumberFormat("en-IN").format(costData?.totalInput || 0),
-          ],
-          [
-            "Total Output Tokens",
-            new Intl.NumberFormat("en-IN").format(costData?.totalOutput || 0),
-          ],
-          ["Total Token Cost", fmtCost(costData?.totalAiCost)],
-          [
-            "Model(s) Used",
-            costData?.modelsUsed?.length > 0
-              ? costData.modelsUsed.join(", ")
-              : "—",
-          ],
+                {[
+          ['Sessions with AI Cost', `${new Intl.NumberFormat('en-IN').format(summary?.sessions_with_cost || costData?.sessionCount || 0)} sessions`],
+          ['Total Input Tokens',    new Intl.NumberFormat('en-IN').format(summary?.total_input_tokens  || costData?.totalInput  || 0)],
+          ['Total Output Tokens',   new Intl.NumberFormat('en-IN').format(summary?.total_output_tokens || costData?.totalOutput || 0)],
+          ['Total AI Calls',        new Intl.NumberFormat('en-IN').format(summary?.total_ai_calls      || costData?.totalCalls  || 0)],
+          ['Total AI Cost',         fmtCost(summary?.total_ai_cost      || costData?.totalAiCost)],
+          ['Avg Cost / Session',    fmtCost(summary?.avg_cost_per_session || costData?.avgCost)],
+          ['Cost / Complete',       fmtCost(summary?.cost_per_complete   || costData?.costPerComplete)],
+          ['Model(s) Used',         (summary?.models_used?.length > 0 ? summary.models_used : costData?.modelsUsed)?.join(', ') || '—'],
         ].map(([k, v]) => (
           <div key={k} style={s.detailRow}>
             <span style={s.detailKey}>{k}</span>

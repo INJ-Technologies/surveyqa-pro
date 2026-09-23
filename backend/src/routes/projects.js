@@ -74,8 +74,59 @@ router.get('/:id/sessions', async (req, res) => {
 // ─── GET /api/projects/:id/costs ─────────────────────────────────────────────
 router.get('/:id/costs', async (req, res) => {
   try {
-    const summary = await getProjectCostSummary(req.params.id);
-    res.json({ summary });
+    const projectId = req.params.id;
+    const [summaryResult, aiCostResult] = await Promise.all([
+      getProjectCostSummary(projectId),
+      pool.query(
+        `SELECT
+           COUNT(*)                                                                      AS total_sessions,
+           COUNT(*) FILTER (WHERE status = 'completed')                                 AS completed_sessions,
+           COUNT(*) FILTER (WHERE status = 'terminated')                                AS terminated_sessions,
+           COUNT(*) FILTER (WHERE status = 'error')                                     AS error_sessions,
+           COUNT(*) FILTER (WHERE status IN ('queued','initialising','in_progress'))     AS active_sessions,
+           COUNT(*) FILTER (WHERE ai_cost_usd > 0)                                      AS sessions_with_cost,
+           COALESCE(SUM(ai_cost_usd), 0)                                                AS total_ai_cost,
+           COALESCE(SUM(input_tokens_total), 0)                                         AS total_input_tokens,
+           COALESCE(SUM(output_tokens_total), 0)                                        AS total_output_tokens,
+           COALESCE(SUM(ai_calls_count), 0)                                             AS total_ai_calls,
+           ROUND(AVG(total_duration_s))                                                  AS avg_duration_s,
+           ROUND(AVG(quality_score))                                                     AS avg_quality,
+           CASE WHEN COUNT(*) FILTER (WHERE status = 'completed' AND ai_cost_usd > 0) > 0
+                THEN COALESCE(SUM(ai_cost_usd) FILTER (WHERE status = 'completed'), 0)
+                     / COUNT(*) FILTER (WHERE status = 'completed' AND ai_cost_usd > 0)
+                ELSE 0 END                                                               AS cost_per_complete,
+           CASE WHEN COUNT(*) FILTER (WHERE ai_cost_usd > 0) > 0
+                THEN COALESCE(SUM(ai_cost_usd), 0)
+                     / COUNT(*) FILTER (WHERE ai_cost_usd > 0)
+                ELSE 0 END                                                               AS avg_cost_per_session,
+           ARRAY_REMOVE(ARRAY_AGG(DISTINCT model_used), NULL)                           AS models_used
+         FROM sessions
+         WHERE project_id = $1`,
+        [projectId]
+      ),
+    ]);
+
+    const aiStats = aiCostResult.rows[0] || {};
+    const merged  = {
+      ...(summaryResult || {}),
+      total_sessions:       parseInt(aiStats.total_sessions       || 0),
+      completed_sessions:   parseInt(aiStats.completed_sessions   || 0),
+      terminated_sessions:  parseInt(aiStats.terminated_sessions  || 0),
+      error_sessions:       parseInt(aiStats.error_sessions       || 0),
+      active_sessions:      parseInt(aiStats.active_sessions      || 0),
+      sessions_with_cost:   parseInt(aiStats.sessions_with_cost   || 0),
+      total_ai_cost:        parseFloat(aiStats.total_ai_cost      || 0),
+      total_input_tokens:   parseInt(aiStats.total_input_tokens   || 0),
+      total_output_tokens:  parseInt(aiStats.total_output_tokens  || 0),
+      total_ai_calls:       parseInt(aiStats.total_ai_calls       || 0),
+      avg_duration_s:       parseInt(aiStats.avg_duration_s       || 0),
+      avg_quality:          parseInt(aiStats.avg_quality          || 0),
+      cost_per_complete:    parseFloat(aiStats.cost_per_complete  || 0),
+      avg_cost_per_session: parseFloat(aiStats.avg_cost_per_session || 0),
+      models_used:          aiStats.models_used || [],
+    };
+
+    res.json({ summary: merged });
   } catch (err) {
     console.error('Get costs error:', err.message);
     res.status(500).json({ error: 'Failed to fetch cost summary' });
