@@ -339,7 +339,7 @@ const getProjectSessions = async (projectId, { status, outcome, country, limit =
  
   values.push(limit, offset);
  
-  const result = await pool.query(
+    const result = await pool.query(
     `SELECT
       s.id, s.status, s.outcome, s.proxy_country, s.proxy_provider,
       s.device_type, s.browser_type, s.ai_strategy,
@@ -348,6 +348,9 @@ const getProjectSessions = async (projectId, { status, outcome, country, limit =
       s.response_id,
       s.internal_testing,
       s.started_at, s.completed_at, s.created_at,
+      s.ai_cost_usd, s.ai_calls_count,
+      s.input_tokens_total, s.output_tokens_total,
+      s.model_used,
       p.name as persona_name,
       (SELECT se.payload->>'scenarioName'
         FROM session_events se
