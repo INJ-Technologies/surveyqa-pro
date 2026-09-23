@@ -54,7 +54,9 @@ const getPersona = async (personaId, projectId, proxyCountry = null) => {
   // Explicit persona assigned — load it directly
   if (personaId) {
     try {
-      const r = await pool.query(`SELECT * FROM personas WHERE id = $1`, [personaId]);
+      const r = await pool.query(`SELECT * FROM personas WHERE id = $1`, [
+        personaId,
+      ]);
       if (r.rows[0]) {
         console.log(`[Persona] Loaded explicit: "${r.rows[0].name}"`);
         return r.rows[0];
@@ -70,11 +72,13 @@ const getPersona = async (personaId, projectId, proxyCountry = null) => {
       if (proxyCountry) {
         const cr = await pool.query(
           `SELECT country FROM proxy_countries WHERE UPPER(code) = UPPER($1) LIMIT 1`,
-          [proxyCountry]
+          [proxyCountry],
         );
         countryName = cr.rows[0]?.country || null;
         if (countryName) {
-          console.log(`[Persona] Country resolved: ${proxyCountry} → "${countryName}"`);
+          console.log(
+            `[Persona] Country resolved: ${proxyCountry} → "${countryName}"`,
+          );
         }
       }
 
@@ -88,20 +92,26 @@ const getPersona = async (personaId, projectId, proxyCountry = null) => {
              AND p.is_active = true
              AND p.country ILIKE $2
            ORDER BY RANDOM() LIMIT 1`,
-          [projectId, countryName]
+          [projectId, countryName],
         );
         if (r.rows[0]) {
           const picked = r.rows[0];
-          console.log(`[Persona] Country-matched (${countryName}): "${picked.name}"`);
-          await pool.query(
-            `UPDATE sessions SET persona_id = $1, persona_name = $2
+          console.log(
+            `[Persona] Country-matched (${countryName}): "${picked.name}"`,
+          );
+          await pool
+            .query(
+              `UPDATE sessions SET persona_id = $1, persona_name = $2
              WHERE project_id = $3 AND persona_id IS NULL
              ORDER BY created_at DESC LIMIT 1`,
-            [picked.id, picked.name, projectId]
-          ).catch(() => {});
+              [picked.id, picked.name, projectId],
+            )
+            .catch(() => {});
           return picked;
         }
-        console.log(`[Persona] No country-matched persona for "${countryName}" — falling back to full pool`);
+        console.log(
+          `[Persona] No country-matched persona for "${countryName}" — falling back to full pool`,
+        );
       }
 
       // Step 2: fallback — any active persona in the project pool
@@ -110,25 +120,27 @@ const getPersona = async (personaId, projectId, proxyCountry = null) => {
          JOIN personas p ON p.id = pp.persona_id
          WHERE pp.project_id = $1 AND pp.is_active = true AND p.is_active = true
          ORDER BY RANDOM() LIMIT 1`,
-        [projectId]
+        [projectId],
       );
       if (r.rows[0]) {
         const picked = r.rows[0];
         console.log(`[Persona] Pool fallback (random): "${picked.name}"`);
-        await pool.query(
-          `UPDATE sessions SET persona_id = $1, persona_name = $2
+        await pool
+          .query(
+            `UPDATE sessions SET persona_id = $1, persona_name = $2
            WHERE project_id = $3 AND persona_id IS NULL
            ORDER BY created_at DESC LIMIT 1`,
-          [picked.id, picked.name, projectId]
-        ).catch(() => {});
+            [picked.id, picked.name, projectId],
+          )
+          .catch(() => {});
         return picked;
       }
     } catch (e) {
-      console.warn('[Persona] Pool lookup failed:', e.message);
+      console.warn("[Persona] Pool lookup failed:", e.message);
     }
   }
 
-  console.log('[Persona] None assigned — AI will use common sense');
+  console.log("[Persona] None assigned — AI will use common sense");
   return null;
 };
 
@@ -744,8 +756,7 @@ const rescanForRevealedContent = async (
         .join("\n\n");
 
       const personaContext = buildPersonaContext(persona);
-      const prompt =
-`You are completing a survey as this persona:
+      const prompt = `You are completing a survey as this persona:
 ${personaContext}
 
 After selecting an option, these new fields have appeared on the page (they were hidden before):
@@ -768,15 +779,21 @@ You MUST respond with ONLY the JSON object below. Do not write any explanation, 
         // ADD THIS BLOCK:
         const trimmed = rawText.trim();
         if (/^(I'm sorry|I cannot|I can't|I apologize|Sorry,)/i.test(trimmed)) {
-          console.warn('[Rescan] AI returned a refusal — falling back to random selection');
+          console.warn(
+            "[Rescan] AI returned a refusal — falling back to random selection",
+          );
           for (const field of revealed) {
-            if (field.fieldType === 'radio') {
-              const allRadios = await page.locator(`input[type="radio"][name="${field.groupName}"]`).all();
+            if (field.fieldType === "radio") {
+              const allRadios = await page
+                .locator(`input[type="radio"][name="${field.groupName}"]`)
+                .all();
               if (allRadios.length > 0) {
                 const idx = Math.floor(Math.random() * allRadios.length);
                 await clickRadioOption(page, allRadios[idx]);
                 await fillFollowupInput(page);
-                console.log(`[Rescan] Fallback random: revealed radio "${field.groupName}" → option ${idx}`);
+                console.log(
+                  `[Rescan] Fallback random: revealed radio "${field.groupName}" → option ${idx}`,
+                );
               }
             }
           }
@@ -1055,22 +1072,28 @@ const applyCountryMapping = async (
   try {
     const cr = await pool.query(
       `SELECT country FROM proxy_countries WHERE UPPER(code) = UPPER($1) LIMIT 1`,
-      [proxyCountry]
+      [proxyCountry],
     );
     resolvedCountryName = cr.rows[0]?.country || null;
     if (resolvedCountryName) {
-      console.log(`[CountryLogic] Resolved: ${proxyCountry} → "${resolvedCountryName}"`);
+      console.log(
+        `[CountryLogic] Resolved: ${proxyCountry} → "${resolvedCountryName}"`,
+      );
     }
   } catch {}
 
   // Match by ISO code OR full country name (handles both storage formats)
-  const mapping = mappings.find((m) =>
-    m.country.toUpperCase() === (proxyCountry || '').toUpperCase() ||
-    (resolvedCountryName && m.country.toLowerCase() === resolvedCountryName.toLowerCase())
+  const mapping = mappings.find(
+    (m) =>
+      m.country.toUpperCase() === (proxyCountry || "").toUpperCase() ||
+      (resolvedCountryName &&
+        m.country.toLowerCase() === resolvedCountryName.toLowerCase()),
   );
 
   if (!mapping) {
-    console.log(`[CountryLogic] No mapping for "${proxyCountry}" / "${resolvedCountryName}" — skipping`);
+    console.log(
+      `[CountryLogic] No mapping for "${proxyCountry}" / "${resolvedCountryName}" — skipping`,
+    );
     return false;
   }
   const answer = mapping.answer;
@@ -1527,24 +1550,32 @@ const buildPersonaContext = (persona) => {
   // These are injected separately so the AI treats them as deterministic,
   // not as background colour. AI must find the closest matching survey option.
   const constraints = [];
-  if (persona.country)             constraints.push(`• Respondent country / location → ${persona.country}`);
+  if (persona.country)
+    constraints.push(`• Respondent country / location → ${persona.country}`);
   const a = persona.behavioural_attrs || {};
-  if (a.industry)                  constraints.push(`• Industry / sector → ${a.industry}`);
-  if (a.designation)               constraints.push(`• Job title / role → ${a.designation}`);
-  if (a.department)                constraints.push(`• Department / function → ${a.department}`);
-  if (a.companyRevenue)            constraints.push(`• Company annual revenue → ${a.companyRevenue}`);
-  if (a.employeeSize)              constraints.push(`• Company size (employees) → ${a.employeeSize}`);
+  if (a.industry) constraints.push(`• Industry / sector → ${a.industry}`);
+  if (a.designation) constraints.push(`• Job title / role → ${a.designation}`);
+  if (a.department)
+    constraints.push(`• Department / function → ${a.department}`);
+  if (a.companyRevenue)
+    constraints.push(`• Company annual revenue → ${a.companyRevenue}`);
+  if (a.employeeSize)
+    constraints.push(`• Company size (employees) → ${a.employeeSize}`);
   if (persona.age_min && persona.age_max)
-                                   constraints.push(`• Age → ${persona.age_min}–${persona.age_max} years old`);
-  if (persona.gender)              constraints.push(`• Gender → ${persona.gender}`);
+    constraints.push(`• Age → ${persona.age_min}–${persona.age_max} years old`);
+  if (persona.gender) constraints.push(`• Gender → ${persona.gender}`);
 
   if (constraints.length > 0) {
-    lines.push('');
-    lines.push('── HARD CONSTRAINTS (non-negotiable) ──');
-    lines.push('When a survey question relates to any item below, you MUST select');
-    lines.push('the closest matching option available — even if the wording differs.');
-    lines.push('Do NOT deviate from these facts under any circumstances:');
-    constraints.forEach(c => lines.push(c));
+    lines.push("");
+    lines.push("── HARD CONSTRAINTS (non-negotiable) ──");
+    lines.push(
+      "When a survey question relates to any item below, you MUST select",
+    );
+    lines.push(
+      "the closest matching option available — even if the wording differs.",
+    );
+    lines.push("Do NOT deviate from these facts under any circumstances:");
+    constraints.forEach((c) => lines.push(c));
   }
 
   return lines.join("\n");
@@ -1617,7 +1648,7 @@ const captureAllPageFields = async (page) => {
           cbGroups[name] = [];
           cbOrder.push(name);
         }
-        let label = "";
+                let label = "";
         if (cb.id) {
           const lbl = document.querySelector(`label[for="${cb.id}"]`);
           if (lbl) label = (lbl.innerText || "").trim();
@@ -1625,6 +1656,27 @@ const captureAllPageFields = async (page) => {
         if (!label) {
           const pl = cb.closest("label");
           if (pl) label = (pl.innerText || "").trim();
+        }
+        if (!label) {
+          // Try sibling text node
+          const parent = cb.parentElement;
+          if (parent) {
+            const text = Array.from(parent.childNodes)
+              .filter(n => n.nodeType === 3)
+              .map(n => n.textContent.trim())
+              .filter(t => t.length > 0)
+              .join(' ');
+            if (text) label = text;
+          }
+        }
+        if (!label) {
+          // Try next sibling element
+          let sib = cb.nextSibling;
+          while (sib) {
+            const t = (sib.textContent || '').trim();
+            if (t.length > 2) { label = t; break; }
+            sib = sib.nextSibling;
+          }
         }
         cbGroups[name].push({ label, checked: cb.checked });
       });
@@ -1802,6 +1854,7 @@ const captureAllPageFields = async (page) => {
 const formatFieldsForPrompt = (fields) => {
   if (!fields || fields.length === 0)
     return "None — this may be an intro or transition page.";
+  const header = `THERE ARE EXACTLY ${fields.length} FIELD(S) ON THIS PAGE. Return exactly ${fields.length} answer(s) — one per field. Do not invent extra fieldIndex entries.\n\n`;
   return fields
     .map((f, i) => {
       switch (f.fieldType) {
@@ -1902,11 +1955,14 @@ const callAIProvider = async (
         tools: [{ type: "web_search_20250305", name: "web_search" }],
         messages: [{ role: "user", content: searchPrompt }],
       });
-    if (!res?.ok) return null;
+      if (!res?.ok) return null;
       const data = await res.json();
       return {
-        text: (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n"),
-        inputTokens:  data.usage?.input_tokens  || 0,
+        text: (data.content || [])
+          .filter((b) => b.type === "text")
+          .map((b) => b.text)
+          .join("\n"),
+        inputTokens: data.usage?.input_tokens || 0,
         outputTokens: data.usage?.output_tokens || 0,
       };
     }
@@ -1934,11 +1990,11 @@ const callAIProvider = async (
         },
       ],
     });
-  if (!res?.ok) return null;
+    if (!res?.ok) return null;
     const data = await res.json();
     return {
-      text:         data.content?.[0]?.text || "",
-      inputTokens:  data.usage?.input_tokens  || 0,
+      text: data.content?.[0]?.text || "",
+      inputTokens: data.usage?.input_tokens || 0,
       outputTokens: data.usage?.output_tokens || 0,
     };
   }
@@ -1990,11 +2046,11 @@ const callAIProvider = async (
         { role: "user", content: searchPrompt },
       ],
     });
-  if (!res?.ok) return null;
+    if (!res?.ok) return null;
     const data = await res.json();
     return {
-      text:         data.choices?.[0]?.message?.content || '',
-      inputTokens:  data.usage?.prompt_tokens     || 0,
+      text: data.choices?.[0]?.message?.content || "",
+      inputTokens: data.usage?.prompt_tokens || 0,
       outputTokens: data.usage?.completion_tokens || 0,
     };
   }
@@ -2008,11 +2064,11 @@ const callAIProvider = async (
       { role: "user", content: fullUserContent },
     ],
   });
-if (!res?.ok) return null;
+  if (!res?.ok) return null;
   const data = await res.json();
   return {
-    text:         data.choices?.[0]?.message?.content || '',
-    inputTokens:  data.usage?.prompt_tokens     || 0,
+    text: data.choices?.[0]?.message?.content || "",
+    inputTokens: data.usage?.prompt_tokens || 0,
     outputTokens: data.usage?.completion_tokens || 0,
   };
 };
@@ -2051,20 +2107,34 @@ const answerPageWithAI = async (
     const personaContext = buildPersonaContext(persona);
     const scenarioContext = buildScenarioContext(scenario);
 
-        // Inject session country as hard override — prevents AI inventing wrong country
+    // Inject session country as hard override — prevents AI inventing wrong country
     // This fires even when no persona or Country Logic scenario is configured
     const countryIsoMap = {
-      IN:'India', GB:'United Kingdom', US:'United States', DE:'Germany',
-      FR:'France', JP:'Japan', AU:'Australia', SG:'Singapore', AE:'UAE',
-      CA:'Canada', NL:'Netherlands', IT:'Italy', ES:'Spain', CN:'China',
-      BR:'Brazil', MX:'Mexico', KR:'South Korea', ZA:'South Africa',
+      IN: "India",
+      GB: "United Kingdom",
+      US: "United States",
+      DE: "Germany",
+      FR: "France",
+      JP: "Japan",
+      AU: "Australia",
+      SG: "Singapore",
+      AE: "UAE",
+      CA: "Canada",
+      NL: "Netherlands",
+      IT: "Italy",
+      ES: "Spain",
+      CN: "China",
+      BR: "Brazil",
+      MX: "Mexico",
+      KR: "South Korea",
+      ZA: "South Africa",
     };
     const countryFullName = sessionCountry
-      ? (countryIsoMap[sessionCountry.toUpperCase()] || sessionCountry)
+      ? countryIsoMap[sessionCountry.toUpperCase()] || sessionCountry
       : null;
     const sessionCountryNote = countryFullName
       ? `\n⚠️ SESSION COUNTRY OVERRIDE — ABSOLUTE MANDATORY RULE:\nThis session is configured for: ${countryFullName} (${sessionCountry}).\nFor ANY question about country, location, headquarters, or region:\n→ You MUST select "${countryFullName}" or the closest matching option.\n→ This overrides ALL other reasoning, persona details, or company associations.\n→ Do NOT select Germany, USA, or any other country.\n→ Violation of this rule means session failure.\n`
-      : '';
+      : "";
 
     const factSheetLines = [];
     for (const [k, v] of Object.entries(factSheet || {})) {
@@ -2161,7 +2231,10 @@ const answerPageWithAI = async (
           isSearch: true,
           searchPrompt,
         });
-        const searchText = typeof searchResult === 'object' ? (searchResult?.text || '') : (searchResult || '');
+        const searchText =
+          typeof searchResult === "object"
+            ? searchResult?.text || ""
+            : searchResult || "";
         webSearchContext = searchText.slice(0, 600);
         if (webSearchContext)
           console.log(`[AI] Web search: ${webSearchContext.length} chars`);
@@ -2397,36 +2470,43 @@ JSON RULES:
 
     const aiResult = await callAIProvider(providerConfig, {
       systemPrompt,
-      staticPart:  staticPromptPart,
+      staticPart: staticPromptPart,
       dynamicPart: dynamicPromptPart,
-      maxTokens:   10240,
+      maxTokens: 10240,
     });
 
     if (!aiResult) return null;
-    const rawText = typeof aiResult === 'string' ? aiResult : aiResult.text;
+    const rawText = typeof aiResult === "string" ? aiResult : aiResult.text;
 
     // ── Accumulate token usage on providerConfig._usage ──────────────────────
     if (!providerConfig._usage) {
-      providerConfig._usage = { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 };
+      providerConfig._usage = {
+        inputTokens: 0,
+        outputTokens: 0,
+        calls: 0,
+        costUsd: 0,
+      };
     }
-    const inTok  = typeof aiResult === 'object' ? (aiResult.inputTokens  || 0) : 0;
-    const outTok = typeof aiResult === 'object' ? (aiResult.outputTokens || 0) : 0;
-    providerConfig._usage.inputTokens  += inTok;
+    const inTok = typeof aiResult === "object" ? aiResult.inputTokens || 0 : 0;
+    const outTok =
+      typeof aiResult === "object" ? aiResult.outputTokens || 0 : 0;
+    providerConfig._usage.inputTokens += inTok;
     providerConfig._usage.outputTokens += outTok;
-    providerConfig._usage.calls        += 1;
-    const inPrice  = parseFloat(providerConfig.inputPricePer1m  || 0);
+    providerConfig._usage.calls += 1;
+    const inPrice = parseFloat(providerConfig.inputPricePer1m || 0);
     const outPrice = parseFloat(providerConfig.outputPricePer1m || 0);
     providerConfig._usage.costUsd +=
-      (inTok  / 1_000_000) * inPrice +
-      (outTok / 1_000_000) * outPrice;
+      (inTok / 1_000_000) * inPrice + (outTok / 1_000_000) * outPrice;
     if (inTok > 0 || outTok > 0) {
-      console.log(`[AI] Tokens: ${inTok} in + ${outTok} out | call cost: $${((inTok/1e6)*inPrice+(outTok/1e6)*outPrice).toFixed(6)}`);
+      console.log(
+        `[AI] Tokens: ${inTok} in + ${outTok} out | call cost: $${((inTok / 1e6) * inPrice + (outTok / 1e6) * outPrice).toFixed(6)}`,
+      );
     }
 
     if (!rawText) return null;
     let decisions;
     try {
-      decisions = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+      decisions = JSON.parse(rawText.replace(/```json|```/g, "").trim());
     } catch {
       console.warn(`[AI] JSON parse failed — raw: ${rawText.slice(0, 300)}`);
       return null;
@@ -2491,11 +2571,13 @@ JSON RULES:
             const idx = ans.selectedIndex ?? 0;
             if (idx < radios.length) {
               // Try the AI-selected index first
-                            let clicked = false;
+              let clicked = false;
               try {
                 await clickRadioOption(page, radios[idx]);
                 await page.waitForTimeout(300);
-                const isChecked = await radios[idx].isChecked().catch(() => false);
+                const isChecked = await radios[idx]
+                  .isChecked()
+                  .catch(() => false);
                 if (isChecked) clicked = true;
               } catch {}
 
@@ -2503,15 +2585,17 @@ JSON RULES:
               // Handles two-column CSS grid layouts common in Decipher
               if (!clicked) {
                 try {
-                  await radios[idx].evaluate(el => {
-                    el.scrollIntoView({ block: 'center' });
+                  await radios[idx].evaluate((el) => {
+                    el.scrollIntoView({ block: "center" });
                     el.click();
                     // Also dispatch change event in case survey JS listens for it
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                    el.dispatchEvent(new Event('input',  { bubbles: true }));
+                    el.dispatchEvent(new Event("change", { bubbles: true }));
+                    el.dispatchEvent(new Event("input", { bubbles: true }));
                   });
                   await page.waitForTimeout(400);
-                  const isChecked = await radios[idx].isChecked().catch(() => false);
+                  const isChecked = await radios[idx]
+                    .isChecked()
+                    .catch(() => false);
                   if (isChecked) clicked = true;
                 } catch {}
               }
@@ -2519,7 +2603,9 @@ JSON RULES:
               // Try clicking the label instead of the input
               if (!clicked) {
                 try {
-                  const id = await radios[idx].getAttribute('id').catch(() => null);
+                  const id = await radios[idx]
+                    .getAttribute("id")
+                    .catch(() => null);
                   if (id) {
                     const lbl = page.locator(`label[for="${id}"]`);
                     if (await lbl.isVisible().catch(() => false)) {
@@ -2534,7 +2620,9 @@ JSON RULES:
               // If click failed or radio not checked, try scrollIntoView + force click
               if (!clicked) {
                 try {
-                  await radios[idx].evaluate(el => el.scrollIntoView({ block: 'center' }));
+                  await radios[idx].evaluate((el) =>
+                    el.scrollIntoView({ block: "center" }),
+                  );
                   await page.waitForTimeout(200);
                   await radios[idx].click({ force: true });
                   await page.waitForTimeout(300);
@@ -2546,9 +2634,11 @@ JSON RULES:
               if (!clicked) {
                 const label = field.options?.[idx];
                 if (label) {
-                  const allLabels = await page.locator('label').all();
+                  const allLabels = await page.locator("label").all();
                   for (const lbl of allLabels) {
-                    const txt = (await lbl.textContent().catch(() => '')).trim();
+                    const txt = (
+                      await lbl.textContent().catch(() => "")
+                    ).trim();
                     if (txt === label) {
                       await lbl.click({ force: true }).catch(() => {});
                       await page.waitForTimeout(300);
@@ -2567,7 +2657,9 @@ JSON RULES:
                 aiControlled: true,
                 flags,
               });
-              console.log(`[AI] ✓ Radio [${field.groupIndex}] → "${label}" (clicked: ${clicked})`);
+              console.log(
+                `[AI] ✓ Radio [${field.groupIndex}] → "${label}" (clicked: ${clicked})`,
+              );
             }
             break;
           }
@@ -2845,13 +2937,16 @@ const resolveQuotaCell = async (persona, projectId, apiKey) => {
       api_key: apiKey,
       model: "claude-sonnet-4-6",
     };
-        const cellResult = await callAIProvider(mockProvider, {
+    const cellResult = await callAIProvider(mockProvider, {
       systemPrompt: "Map persona to quota dimensions. Return only JSON.",
       staticPart: "",
       dynamicPart: `Persona:\n${buildPersonaContext(persona)}\n\nDimensions:\n${dimensionsText}\n\nReturn JSON: {"DimensionName": "matched_value"}`,
       maxTokens: 250,
     });
-    const cellText = typeof cellResult === 'object' ? (cellResult?.text || '{}') : (cellResult || '{}');
+    const cellText =
+      typeof cellResult === "object"
+        ? cellResult?.text || "{}"
+        : cellResult || "{}";
     const cell = JSON.parse(cellText.replace(/```json|```/g, "").trim());
 
     console.log(`[Agent] Quota cell: ${JSON.stringify(cell)}`);
@@ -3346,18 +3441,18 @@ const processSession = async (job) => {
         const secretName = "openrouter_synthfield";
         const resolvedKey = readSecret(secretName);
         if (resolvedKey) {
-        providerConfig = {
-          provider_type:    "openrouter",
-          api_key:          resolvedKey,
-          model:            m.model_id,
-          base_url:         null,
-          inputPricePer1m:  parseFloat(m.input_price_per_1m  || 0),
-          outputPricePer1m: parseFloat(m.output_price_per_1m || 0),
-          _usage: { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 },
-        };
-        console.log(
-          `[Worker] ✓ AI model loaded: ${m.display_name} (${m.model_id}) — $${providerConfig.inputPricePer1m}/1M in, $${providerConfig.outputPricePer1m}/1M out`,
-        );
+          providerConfig = {
+            provider_type: "openrouter",
+            api_key: resolvedKey,
+            model: m.model_id,
+            base_url: null,
+            inputPricePer1m: parseFloat(m.input_price_per_1m || 0),
+            outputPricePer1m: parseFloat(m.output_price_per_1m || 0),
+            _usage: { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 },
+          };
+          console.log(
+            `[Worker] ✓ AI model loaded: ${m.display_name} (${m.model_id}) — $${providerConfig.inputPricePer1m}/1M in, $${providerConfig.outputPricePer1m}/1M out`,
+          );
         } else {
           console.warn(`[Worker] ⚠️ Secret "${secretName}" not found`);
           try {
@@ -3406,18 +3501,20 @@ const processSession = async (job) => {
         if (defaultModel) {
           const resolvedKey = readSecret("openrouter_synthfield");
           if (resolvedKey) {
-          providerConfig = {
-            provider_type:    "openrouter",
-            api_key:          resolvedKey,
-            model:            defaultModel.model_id,
-            base_url:         null,
-            inputPricePer1m:  parseFloat(defaultModel.input_price_per_1m  || 0),
-            outputPricePer1m: parseFloat(defaultModel.output_price_per_1m || 0),
-            _usage: { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 },
-          };
-          console.log(
-            `[Worker] ✓ AI model (workspace default): ${defaultModel.display_name} — $${providerConfig.inputPricePer1m}/1M in, $${providerConfig.outputPricePer1m}/1M out`,
-          );
+            providerConfig = {
+              provider_type: "openrouter",
+              api_key: resolvedKey,
+              model: defaultModel.model_id,
+              base_url: null,
+              inputPricePer1m: parseFloat(defaultModel.input_price_per_1m || 0),
+              outputPricePer1m: parseFloat(
+                defaultModel.output_price_per_1m || 0,
+              ),
+              _usage: { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 },
+            };
+            console.log(
+              `[Worker] ✓ AI model (workspace default): ${defaultModel.display_name} — $${providerConfig.inputPricePer1m}/1M in, $${providerConfig.outputPricePer1m}/1M out`,
+            );
           }
         }
       }
@@ -3434,11 +3531,11 @@ const processSession = async (job) => {
       null;
     if (fallbackKey) {
       providerConfig = {
-        provider_type:    "anthropic",
-        api_key:          fallbackKey,
-        model:            "claude-sonnet-4-6",
-        base_url:         null,
-        inputPricePer1m:  3.0,
+        provider_type: "anthropic",
+        api_key: fallbackKey,
+        model: "claude-sonnet-4-6",
+        base_url: null,
+        inputPricePer1m: 3.0,
         outputPricePer1m: 15.0,
         _usage: { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 },
       };
@@ -3648,8 +3745,8 @@ const processSession = async (job) => {
           baseMax = 10_000; // 5–10s
         } else {
           // Normal / no persona — default average human
-          baseMin = 25_000;
-          baseMax = 50_000; // 25–50s
+          baseMin = 8_000;
+          baseMax = 15_000; // 8–15s
         }
 
         // Each additional question on the page adds 60–80% of base time
@@ -3675,7 +3772,7 @@ const processSession = async (job) => {
             `multiplier: ${questionMultiplier.toFixed(2)}×)`,
         );
 
-                // Break the wait into chunks — wrapped in try/catch so a closed
+        // Break the wait into chunks — wrapped in try/catch so a closed
         // browser during reading delay doesn't crash the whole session
         let remaining = readMs;
         while (remaining > 0) {
@@ -3684,315 +3781,379 @@ const processSession = async (job) => {
             await page.waitForTimeout(chunk);
           } catch {
             // Page or browser closed during wait — exit reading delay gracefully
-            console.log(`[Worker] Browser closed during reading delay — stopping wait`);
+            console.log(
+              `[Worker] Browser closed during reading delay — stopping wait`,
+            );
             break;
           }
           remaining -= chunk;
 
           // Early exit if page already navigated away (survey auto-advanced)
-          let stillOnPage = '';
-          try { stillOnPage = page.url(); } catch { break; }
+          let stillOnPage = "";
+          try {
+            stillOnPage = page.url();
+          } catch {
+            break;
+          }
           if (stillOnPage && stillOnPage !== currentUrl) {
-            console.log(`[Worker] Page auto-advanced during reading delay — stopping wait`);
+            console.log(
+              `[Worker] Page auto-advanced during reading delay — stopping wait`,
+            );
             break;
           }
 
           // Early exit if session was manually stopped
           try {
             const statusCheck = await pool.query(
-              `SELECT status, error_log FROM sessions WHERE id = $1`, [sessionId]
+              `SELECT status, error_log FROM sessions WHERE id = $1`,
+              [sessionId],
             );
-            if (statusCheck.rows[0]?.error_log === 'Manually stopped by user') {
+            if (statusCheck.rows[0]?.error_log === "Manually stopped by user") {
               console.log(`[Worker] Session stopped during reading delay`);
-              outcome = 'error';
+              outcome = "error";
               remaining = 0; // exit inner loop
             }
           } catch {}
         }
         // If stopped during reading delay, exit the main survey loop too
-        if (outcome === 'error') break;
-      // Screenshot before answering
-      const screenshotFilename = `page_${pageCount}.png`;
-      const screenshotPath = path.join(
-        sessionScreenshotsDir,
-        screenshotFilename,
-      );
-      await takeScreenshot(page, screenshotPath);
-
-      const pageOptionsBefore = await capturePageOptions(page);
-
-      // ── AI answering ─────────────────────────────────────────────────────────────
-      let answersGiven = null;
-      const scenarioStepUsed = "ai";
-
-      // ── COUNTRY LOGIC: runs AFTER AI so it always has final say ──────────
-      if (countryLogic && !countryLogicApplied && questionsOnPage.length > 0) {
-        try {
-          const applied = await applyCountryMapping(
-            page, countryLogic, proxyCountry, questionsOnPage,
-          );
-          if (applied) {
-            countryLogicApplied = true; // prevent re-application on subsequent pages
-            console.log(`[CountryLogic] ✓ Hard-clicked: ${proxyCountry} answer on page ${pageCount}`);
-            await logSessionEvent(sessionId, 'country_logic_applied', {
-              page: pageCount,
-              country: proxyCountry,
-              question: questionsOnPage[0]?.slice(0, 100),
-            });
-            await page.waitForTimeout(500);
-            // Rescan in case CountryLogic click revealed a sub-question
-            await rescanForRevealedContent(page, providerConfig, persona, agentSetup.factSheet, questionsOnPage);
-          }
-        } catch (e) {
-          console.warn(`[CountryLogic] Hard-apply failed: ${e.message}`);
-        }
-      }
-
-      // ── AI fills all remaining fields (including any Country Logic missed) ──────
-      if (useAI) {
-        console.log(`[Worker] Page ${pageCount}: AI answering`);
-                answersGiven = await answerPageWithAI(
-          page,
-          persona,
-          scenario,
-          agentSetup.factSheet,
-          agentSetup.intentMap,
-          agentSetup.quotaCellText,
-          questionsOnPage,
-          pageOptionsBefore,
-          providerConfig,
-          proxyCountry,
+        if (outcome === "error") break;
+        // Screenshot before answering
+        const screenshotFilename = `page_${pageCount}.png`;
+        const screenshotPath = path.join(
+          sessionScreenshotsDir,
+          screenshotFilename,
         );
+        await takeScreenshot(page, screenshotPath);
 
-        if (answersGiven?.length > 0) {
-          questionCount++;
-          console.log(
-            `[Worker] Page ${pageCount}: AI answered ${answersGiven.length} field(s)`,
-          );
+        const pageOptionsBefore = await capturePageOptions(page);
 
-          // Apply intent timer if matched
-          const norm = (s) => (s || "").toLowerCase().trim();
-          const pageTextLower = questionsOnPage.map(norm).join(" ");
-          const matchedTimer = (agentSetup.intentMap?.timerRules || []).find(
-            (r) => {
-              if (r.when_type === "always") return true;
-              if (r.when_type === "question_contains")
-                return pageTextLower.includes(norm(r.when_value));
-              return false;
-            },
-          );
-          if (matchedTimer?.wait_min_s || matchedTimer?.wait_max_s) {
-            const wMin = parseInt(matchedTimer.wait_min_s) || 0;
-            const wMax = parseInt(matchedTimer.wait_max_s) || wMin;
-            const waitMs =
-              (wMin + Math.random() * Math.max(0, wMax - wMin)) * 1000;
-            console.log(
-              `[Worker] Intent timer — waiting ${Math.round(waitMs / 1000)}s`,
+        // ── AI answering ─────────────────────────────────────────────────────────────
+        let answersGiven = null;
+        const scenarioStepUsed = "ai";
+
+        // ── COUNTRY LOGIC: runs AFTER AI so it always has final say ──────────
+        if (
+          countryLogic &&
+          !countryLogicApplied &&
+          questionsOnPage.length > 0
+        ) {
+          try {
+            const applied = await applyCountryMapping(
+              page,
+              countryLogic,
+              proxyCountry,
+              questionsOnPage,
             );
-            await page.waitForTimeout(waitMs);
+            if (applied) {
+              countryLogicApplied = true; // prevent re-application on subsequent pages
+              console.log(
+                `[CountryLogic] ✓ Hard-clicked: ${proxyCountry} answer on page ${pageCount}`,
+              );
+              await logSessionEvent(sessionId, "country_logic_applied", {
+                page: pageCount,
+                country: proxyCountry,
+                question: questionsOnPage[0]?.slice(0, 100),
+              });
+              await page.waitForTimeout(500);
+              // Rescan in case CountryLogic click revealed a sub-question
+              await rescanForRevealedContent(
+                page,
+                providerConfig,
+                persona,
+                agentSetup.factSheet,
+                questionsOnPage,
+              );
+            }
+          } catch (e) {
+            console.warn(`[CountryLogic] Hard-apply failed: ${e.message}`);
+          }
+        }
+
+        // ── AI fills all remaining fields (including any Country Logic missed) ──────
+        if (useAI) {
+          console.log(`[Worker] Page ${pageCount}: AI answering`);
+          answersGiven = await answerPageWithAI(
+            page,
+            persona,
+            scenario,
+            agentSetup.factSheet,
+            agentSetup.intentMap,
+            agentSetup.quotaCellText,
+            questionsOnPage,
+            pageOptionsBefore,
+            providerConfig,
+            proxyCountry,
+          );
+
+          if (answersGiven?.length > 0) {
+            questionCount++;
+            console.log(
+              `[Worker] Page ${pageCount}: AI answered ${answersGiven.length} field(s)`,
+            );
+
+            // Apply intent timer if matched
+            const norm = (s) => (s || "").toLowerCase().trim();
+            const pageTextLower = questionsOnPage.map(norm).join(" ");
+            const matchedTimer = (agentSetup.intentMap?.timerRules || []).find(
+              (r) => {
+                if (r.when_type === "always") return true;
+                if (r.when_type === "question_contains")
+                  return pageTextLower.includes(norm(r.when_value));
+                return false;
+              },
+            );
+            if (matchedTimer?.wait_min_s || matchedTimer?.wait_max_s) {
+              const wMin = parseInt(matchedTimer.wait_min_s) || 0;
+              const wMax = parseInt(matchedTimer.wait_max_s) || wMin;
+              const waitMs =
+                (wMin + Math.random() * Math.max(0, wMax - wMin)) * 1000;
+              console.log(
+                `[Worker] Intent timer — waiting ${Math.round(waitMs / 1000)}s`,
+              );
+              await page.waitForTimeout(waitMs);
+            }
+          } else {
+            console.warn(
+              `[Worker] Page ${pageCount}: AI returned no answers — falling back to random`,
+            );
+            await logSessionEvent(sessionId, "flag_warning", {
+              flag: "AI_FALLBACK_RANDOM",
+              message: `AI failed on page ${pageCount} — random answering used`,
+              page: pageCount,
+            });
+            answersGiven = await answerPage(page, persona, readingSpeed);
+            questionCount++;
           }
         } else {
-          console.warn(
-            `[Worker] Page ${pageCount}: AI returned no answers — falling back to random`,
+          console.log(
+            `[Worker] Page ${pageCount}: AI disabled — random answering`,
           );
-          await logSessionEvent(sessionId, "flag_warning", {
-            flag: "AI_FALLBACK_RANDOM",
-            message: `AI failed on page ${pageCount} — random answering used`,
-            page: pageCount,
-          });
           answersGiven = await answerPage(page, persona, readingSpeed);
           questionCount++;
         }
-      } else {
-        console.log(
-          `[Worker] Page ${pageCount}: AI disabled — random answering`,
-        );
-        answersGiven = await answerPage(page, persona, readingSpeed);
-        questionCount++;
-      }
 
-      // Flag web search usage
-      if (useAI && answersGiven?.length > 0) {
-        const usedWebSearch = answersGiven.some((a) =>
-          a?.flags?.includes("web_search_used"),
-        );
-        if (usedWebSearch)
-          await logSessionEvent(sessionId, "flag_warning", {
-            flag: "NEED_ATTENTION_WEB_SEARCH",
-            message: `Web search used on page ${pageCount}`,
-            page: pageCount,
-          });
-
-        // Update pageHistory
-        for (let i = 0; i < answersGiven.length; i++) {
-          const ans = answersGiven[i];
-          if (!ans || ans.type === "country_mapping") continue;
-          const questionText =
-            questionsOnPage[i] ||
-            questionsOnPage[0] ||
-            `Page ${pageCount} field ${i + 1}`;
-          const answerText =
-            ans.type === "open-end"
-              ? ans.text
-              : ans.type === "numeric"
-                ? `${ans.value} (${ans.label || "numeric"})`
-                : Array.isArray(ans.selected)
-                  ? ans.selected.join(", ")
-                  : ans.selected || String(ans.value || "");
-          if (answerText)
-            agentSetup.factSheet.pageHistory.push({
+        // Flag web search usage
+        if (useAI && answersGiven?.length > 0) {
+          const usedWebSearch = answersGiven.some((a) =>
+            a?.flags?.includes("web_search_used"),
+          );
+          if (usedWebSearch)
+            await logSessionEvent(sessionId, "flag_warning", {
+              flag: "NEED_ATTENTION_WEB_SEARCH",
+              message: `Web search used on page ${pageCount}`,
               page: pageCount,
-              question: questionText.slice(0, 200),
-              answer: answerText.slice(0, 200),
-              type: ans.type,
             });
+
+          // Update pageHistory
+          for (let i = 0; i < answersGiven.length; i++) {
+            const ans = answersGiven[i];
+            if (!ans || ans.type === "country_mapping") continue;
+            const questionText =
+              questionsOnPage[i] ||
+              questionsOnPage[0] ||
+              `Page ${pageCount} field ${i + 1}`;
+            const answerText =
+              ans.type === "open-end"
+                ? ans.text
+                : ans.type === "numeric"
+                  ? `${ans.value} (${ans.label || "numeric"})`
+                  : Array.isArray(ans.selected)
+                    ? ans.selected.join(", ")
+                    : ans.selected || String(ans.value || "");
+            if (answerText)
+              agentSetup.factSheet.pageHistory.push({
+                page: pageCount,
+                question: questionText.slice(0, 200),
+                answer: answerText.slice(0, 200),
+                type: ans.type,
+              });
+          }
         }
-      }
 
-      // ── Post-answer hesitation delay ─────────────────────────────────────────────
-      // After selecting an answer, a real person pauses before clicking Next.
-      // Expressive/detailed personas take longer (reviewing their answer).
-      {
-                const styleStr = (
-          persona?.behavioural_attrs?.responseStyle || ""
-        ).toLowerCase();
-        let hesMs;
-        if (styleStr.includes("expressive") || styleStr.includes("detail"))
-          hesMs = 3000 + Math.random() * 4000;
-        else if (styleStr.includes("terse") || styleStr.includes("minimal"))
-          hesMs = 800 + Math.random() * 1200;
-        else hesMs = 1500 + Math.random() * 2500;
-        await page.waitForTimeout(Math.round(hesMs)).catch(() => {});
-    }
-      // Last-resort fill for anything AI missed
-      await fillRemainingInputs(page);
-
-      await page.waitForTimeout(800);
-      const pageOptionsAfter = await capturePageOptions(page);
-      const gridAnswers = await captureGridAnswers(page);
-
-      // Screenshot after answering
-      await takeScreenshot(page, screenshotPath);
-
-      const pageTime = Math.round((Date.now() - pageStart) / 1000);
-      const answerSummary = buildAnswerSummary(pageOptionsAfter, answersGiven);
-
-      pages.push({
-        pageNum: pageCount,
-        url: currentUrl,
-        title: pageTitle,
-        questions: questionsOnPage,
-        options: pageOptionsAfter,
-        answers: answersGiven,
-        answerSummary,
-        timeTaken: pageTime,
-        screenshot: `${sessionId}/${screenshotFilename}`,
-        scenarioStep: scenarioStepUsed || null,
-        gridAnswers: gridAnswers.length > 0 ? gridAnswers : undefined,
-      });
-
-      await logSessionEvent(sessionId, "page_answered", {
-        page: pageCount,
-        url: currentUrl,
-        title: pageTitle,
-        questions: questionsOnPage,
-        options: pageOptionsAfter,
-        answers: answersGiven,
-        answerSummary,
-        timeTaken: pageTime,
-        screenshot: `${sessionId}/${screenshotFilename}`,
-        scenarioStep: scenarioStepUsed || null,
-        gridAnswers: gridAnswers.length > 0 ? gridAnswers : undefined,
-        factSheet: useAI ? agentSetup.factSheet : undefined,
-      });
-
-      // Click next
-      const clicked = await clickNext(page);
-      if (!clicked) {
-        const noNextOutcome = await detectOutcomeFromPage(page);
-        outcome = noNextOutcome || detectOutcome(page.url()) || "completed";
-        console.log(`[Worker] No next button — outcome: ${outcome}`);
-        break;
-      }
-
-            try {
-        await page.waitForNavigation({
-          timeout: 15000,
-          waitUntil: "domcontentloaded",
-        });
-      } catch {
-        await page.waitForTimeout(3000);
-      }
-
-            const newUrl = page.url();
-
-      // ── Decipher validation error detection ────────────────────────────────
-      // Decipher uses hash-based routing for ALL navigation — #$, #&, #' etc.
-      // are legitimate page advances showing DIFFERENT questions.
-      // A TRUE validation error is when the SAME question reappears with a
-      // red error banner — NOT simply because the hash changed.
-      const newQuestionsAfterNav = await extractQuestionsFromPage(page).catch(() => []);
-      const sameQuestionReappeared =
-        questionsOnPage.length > 0 &&
-        newQuestionsAfterNav.length > 0 &&
-        newQuestionsAfterNav[0].slice(0, 60) === questionsOnPage[0]?.slice(0, 60);
-
-      if (sameQuestionReappeared) {
-        const hasRedError = await page.evaluate(() => {
-          // Only match the specific Decipher validation error banner
-          const bodyText = (document.body?.innerText || '').toLowerCase();
-          return bodyText.includes('there were problems with some of the data') ||
-                 !!document.querySelector('.errMsg, [class*="errMsg"], .survey-error-message');
-        }).catch(() => false);
-
-        if (hasRedError) {
-          console.warn(`[Worker] TRUE validation error — same question reappeared with error banner`);
-          await logSessionEvent(sessionId, 'flag_warning', {
-            flag: 'VALIDATION_ERROR',
-            message: `Decipher validation error on page ${pageCount} — answer not accepted`,
-            page: pageCount, url: newUrl,
-          });
-          pageCount--; // retry same page
-          outcome = null;
-          continue;
+        // ── Post-answer hesitation delay ─────────────────────────────────────────────
+        // After selecting an answer, a real person pauses before clicking Next.
+        // Expressive/detailed personas take longer (reviewing their answer).
+        {
+          const styleStr = (
+            persona?.behavioural_attrs?.responseStyle || ""
+          ).toLowerCase();
+          let hesMs;
+          if (styleStr.includes("expressive") || styleStr.includes("detail"))
+            hesMs = 3000 + Math.random() * 4000;
+          else if (styleStr.includes("terse") || styleStr.includes("minimal"))
+            hesMs = 800 + Math.random() * 1200;
+          else hesMs = 1500 + Math.random() * 2500;
+          await page.waitForTimeout(Math.round(hesMs)).catch(() => {});
         }
-      }
+        // Last-resort fill for anything AI missed
+        await fillRemainingInputs(page);
 
-      outcome = detectOutcome(newUrl);
-      if (!outcome) {
-        await page.waitForTimeout(1500);
-        outcome = await detectOutcomeFromPage(page);
-      }
+        await page.waitForTimeout(800);
+        const pageOptionsAfter = await capturePageOptions(page);
+        const gridAnswers = await captureGridAnswers(page);
 
-      if (outcome) {
-        const finalNum = pageCount + 1;
-        const finalFilename = `page_${finalNum}.png`;
-        await takeScreenshot(
-          page,
-          path.join(sessionScreenshotsDir, finalFilename),
+        // Screenshot after answering
+        await takeScreenshot(page, screenshotPath);
+
+        const pageTime = Math.round((Date.now() - pageStart) / 1000);
+        const answerSummary = buildAnswerSummary(
+          pageOptionsAfter,
+          answersGiven,
         );
+
+        pages.push({
+          pageNum: pageCount,
+          url: currentUrl,
+          title: pageTitle,
+          questions: questionsOnPage,
+          options: pageOptionsAfter,
+          answers: answersGiven,
+          answerSummary,
+          timeTaken: pageTime,
+          screenshot: `${sessionId}/${screenshotFilename}`,
+          scenarioStep: scenarioStepUsed || null,
+          gridAnswers: gridAnswers.length > 0 ? gridAnswers : undefined,
+        });
+
         await logSessionEvent(sessionId, "page_answered", {
-          page: finalNum,
-          url: newUrl,
-          title: await page.title().catch(() => "Exit Page"),
-          questions: [],
-          options: [],
-          answers: [],
-          answerSummary: [],
-          timeTaken: 0,
-          screenshot: `${sessionId}/${finalFilename}`,
-          isExitPage: true,
-          exitOutcome: outcome,
+          page: pageCount,
+          url: currentUrl,
+          title: pageTitle,
+          questions: questionsOnPage,
+          options: pageOptionsAfter,
+          answers: answersGiven,
+          answerSummary,
+          timeTaken: pageTime,
+          screenshot: `${sessionId}/${screenshotFilename}`,
+          scenarioStep: scenarioStepUsed || null,
+          gridAnswers: gridAnswers.length > 0 ? gridAnswers : undefined,
+          factSheet: useAI ? agentSetup.factSheet : undefined,
         });
-        await logSessionEvent(sessionId, "redirect_detected", {
-          url: newUrl,
-          outcome,
-          screenshot: `${sessionId}/${finalFilename}`,
-        });
-        break;
+
+        // ── Write running cost to DB after each page ──────────────────────────
+      // This lets the sessions tab show live cost on each refresh
+      if (providerConfig?._usage?.calls > 0) {
+        const runningUsage = providerConfig._usage;
+        await pool.query(
+          `UPDATE sessions SET
+             ai_calls_count      = $1,
+             input_tokens_total  = $2,
+             output_tokens_total = $3,
+             ai_cost_usd         = $4,
+             model_used          = $5
+           WHERE id = $6`,
+          [
+            runningUsage.calls,
+            runningUsage.inputTokens,
+            runningUsage.outputTokens,
+            parseFloat(runningUsage.costUsd.toFixed(8)),
+            providerConfig.model || null,
+            sessionId,
+          ]
+        ).catch(e => console.warn('[Cost] Mid-session write failed:', e.message));
+      }
+
+        // Click next
+        const clicked = await clickNext(page);
+        if (!clicked) {
+          const noNextOutcome = await detectOutcomeFromPage(page);
+          outcome = noNextOutcome || detectOutcome(page.url()) || "completed";
+          console.log(`[Worker] No next button — outcome: ${outcome}`);
+          break;
+        }
+
+        try {
+          await page.waitForNavigation({
+            timeout: 15000,
+            waitUntil: "domcontentloaded",
+          });
+        } catch {
+          await page.waitForTimeout(3000);
+        }
+
+        const newUrl = page.url();
+
+        // ── Decipher validation error detection ────────────────────────────────
+        // Decipher uses hash-based routing for ALL navigation — #$, #&, #' etc.
+        // are legitimate page advances showing DIFFERENT questions.
+        // A TRUE validation error is when the SAME question reappears with a
+        // red error banner — NOT simply because the hash changed.
+        const newQuestionsAfterNav = await extractQuestionsFromPage(page).catch(
+          () => [],
+        );
+        const sameQuestionReappeared =
+          questionsOnPage.length > 0 &&
+          newQuestionsAfterNav.length > 0 &&
+          newQuestionsAfterNav[0].slice(0, 60) ===
+            questionsOnPage[0]?.slice(0, 60);
+
+        if (sameQuestionReappeared) {
+          const hasRedError = await page
+            .evaluate(() => {
+              // Only match the specific Decipher validation error banner
+              const bodyText = (document.body?.innerText || "").toLowerCase();
+              return (
+                bodyText.includes(
+                  "there were problems with some of the data",
+                ) ||
+                !!document.querySelector(
+                  '.errMsg, [class*="errMsg"], .survey-error-message',
+                )
+              );
+            })
+            .catch(() => false);
+
+          if (hasRedError) {
+            console.warn(
+              `[Worker] TRUE validation error — same question reappeared with error banner`,
+            );
+            await logSessionEvent(sessionId, "flag_warning", {
+              flag: "VALIDATION_ERROR",
+              message: `Decipher validation error on page ${pageCount} — answer not accepted`,
+              page: pageCount,
+              url: newUrl,
+            });
+            pageCount--; // retry same page
+            outcome = null;
+            continue;
+          }
+        }
+
+        outcome = detectOutcome(newUrl);
+        if (!outcome) {
+          await page.waitForTimeout(1500);
+          outcome = await detectOutcomeFromPage(page);
+        }
+
+        if (outcome) {
+          const finalNum = pageCount + 1;
+          const finalFilename = `page_${finalNum}.png`;
+          await takeScreenshot(
+            page,
+            path.join(sessionScreenshotsDir, finalFilename),
+          );
+          await logSessionEvent(sessionId, "page_answered", {
+            page: finalNum,
+            url: newUrl,
+            title: await page.title().catch(() => "Exit Page"),
+            questions: [],
+            options: [],
+            answers: [],
+            answerSummary: [],
+            timeTaken: 0,
+            screenshot: `${sessionId}/${finalFilename}`,
+            isExitPage: true,
+            exitOutcome: outcome,
+          });
+          await logSessionEvent(sessionId, "redirect_detected", {
+            url: newUrl,
+            outcome,
+            screenshot: `${sessionId}/${finalFilename}`,
+          });
+          break;
+        }
       }
     }
-  }
     if (!outcome) outcome = pageCount >= MAX_PAGES ? "error" : "completed";
   } catch (err) {
     outcome = "error";
@@ -4015,26 +4176,31 @@ const processSession = async (job) => {
   }
 
   const durationS = Math.round((Date.now() - startTime) / 1000);
-  const usage = providerConfig?._usage || { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 };
+  const usage = providerConfig?._usage || {
+    inputTokens: 0,
+    outputTokens: 0,
+    calls: 0,
+    costUsd: 0,
+  };
 
   if (usage.calls > 0) {
     console.log(
       `[Cost] ✓ Session ${sessionId.slice(0, 8)}: ${usage.calls} AI calls | ` +
-      `${usage.inputTokens} input + ${usage.outputTokens} output tokens | ` +
-      `$${usage.costUsd.toFixed(6)} USD`
+        `${usage.inputTokens} input + ${usage.outputTokens} output tokens | ` +
+        `$${usage.costUsd.toFixed(6)} USD`,
     );
   }
 
   await updateSessionStatus(sessionId, outcome, {
     outcome,
-    totalDurationS:    durationS,
+    totalDurationS: durationS,
     questionCount,
-    redirectType:      outcome,
-    inputTokensTotal:  usage.inputTokens,
+    redirectType: outcome,
+    inputTokensTotal: usage.inputTokens,
     outputTokensTotal: usage.outputTokens,
-    aiCallsCount:      usage.calls,
-    aiCostUsd:         parseFloat(usage.costUsd.toFixed(8)),
-    modelUsed:         providerConfig?.model || null,
+    aiCallsCount: usage.calls,
+    aiCostUsd: parseFloat(usage.costUsd.toFixed(8)),
+    modelUsed: providerConfig?.model || null,
     ...(errorMessage ? { errorLog: errorMessage.slice(0, 2000) } : {}),
   });
   await logSessionEvent(sessionId, "session_complete", {

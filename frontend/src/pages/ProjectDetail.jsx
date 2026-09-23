@@ -3303,12 +3303,39 @@ function SessionReportModal({
   const [imgError, setImgError] = useState({});
   const printRef = useRef(null);
 
-  useEffect(() => {
-    api
-      .get(`/sessions/${sessionId}`)
-      .then((res) => setDetail(res.data))
-      .catch(() => setDetail(null))
-      .finally(() => setLoading(false));
+    useEffect(() => {
+    let pollInterval = null;
+
+    const load = () => {
+      api.get(`/sessions/${sessionId}`)
+        .then(r => {
+          setDetail(r.data);
+          setLoading(false);
+          // Stop polling once session is no longer active
+          const status = r.data?.session?.status;
+          if (!['queued','initialising','in_progress'].includes(status)) {
+            clearInterval(pollInterval);
+          }
+        })
+        .catch(() => {
+          setDetail(null);
+          setLoading(false);
+          clearInterval(pollInterval);
+        });
+    };
+
+    load();
+
+    // Poll every 5 seconds if session is active
+    pollInterval = setInterval(() => {
+      if (detail?.session?.status && !['queued','initialising','in_progress'].includes(detail.session.status)) {
+        clearInterval(pollInterval);
+        return;
+      }
+      load();
+    }, 5000);
+
+    return () => clearInterval(pollInterval);
   }, [sessionId]);
 
   useEffect(() => {
