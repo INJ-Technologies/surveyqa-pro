@@ -3892,7 +3892,7 @@ const processSession = async (job) => {
         break;
       }
 
-      try {
+            try {
         await page.waitForNavigation({
           timeout: 15000,
           waitUntil: "domcontentloaded",
@@ -3902,6 +3902,49 @@ const processSession = async (job) => {
       }
 
       const newUrl = page.url();
+
+      // ── Detect hash-only navigation (Decipher validation error) ────────────
+      // When Decipher shows a validation error it changes only the URL hash
+      // (#?, #$, #&, etc.) but stays on the same page. Detect this and handle.
+      const prevBase = currentUrl.split('#')[0];
+      const newBase  = newUrl.split('#')[0];
+      const isHashOnly = prevBase === newBase && newUrl !== currentUrl;
+
+      if (isHashOnly) {
+        console.log(`[Worker] Hash-only navigation detected — likely validation error`);
+
+        // Check if there's actually a validation error on the page
+        const hasValidationError = await page.evaluate(() => {
+          const errorSelectors = [
+            '.error', '.validation-error', '[class*="error"]',
+            '.alert', '[class*="alert"]', '.warning',
+          ];
+          for (const sel of errorSelectors) {
+            const el = document.querySelector(sel);
+            if (el && el.offsetParent) return true;
+          }
+          const bodyText = (document.body?.innerText || '').toLowerCase();
+          return bodyText.includes('there were problems') ||
+                 bodyText.includes('please select') ||
+                 bodyText.includes('required');
+        }).catch(() => false);
+
+        if (hasValidationError) {
+          console.warn(`[Worker] Validation error on page ${pageCount} — answer may not have been accepted`);
+          await logSessionEvent(sessionId, 'flag_warning', {
+            flag: 'VALIDATION_ERROR',
+            message: `Decipher validation error on page ${pageCount} — answer not accepted`,
+            page: pageCount,
+            url: newUrl,
+          });
+          // Don't increment pageCount — treat as same page, continue loop
+          // This prevents infinite loop by eventually hitting MAX_PAGES
+          pageCount--; // subtract so the outer loop increment keeps it the same
+        }
+        outcome = null; // not an exit outcome
+        continue;
+      }
+
       outcome = detectOutcome(newUrl);
       if (!outcome) {
         await page.waitForTimeout(1500);
