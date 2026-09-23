@@ -2475,14 +2475,45 @@ JSON RULES:
             const idx = ans.selectedIndex ?? 0;
             if (idx < radios.length) {
               // Try the AI-selected index first
-              let clicked = false;
+                            let clicked = false;
               try {
                 await clickRadioOption(page, radios[idx]);
                 await page.waitForTimeout(300);
-                // Verify it's actually checked
                 const isChecked = await radios[idx].isChecked().catch(() => false);
                 if (isChecked) clicked = true;
               } catch {}
+
+              // Force-click via JS if normal click didn't register
+              // Handles two-column CSS grid layouts common in Decipher
+              if (!clicked) {
+                try {
+                  await radios[idx].evaluate(el => {
+                    el.scrollIntoView({ block: 'center' });
+                    el.click();
+                    // Also dispatch change event in case survey JS listens for it
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new Event('input',  { bubbles: true }));
+                  });
+                  await page.waitForTimeout(400);
+                  const isChecked = await radios[idx].isChecked().catch(() => false);
+                  if (isChecked) clicked = true;
+                } catch {}
+              }
+
+              // Try clicking the label instead of the input
+              if (!clicked) {
+                try {
+                  const id = await radios[idx].getAttribute('id').catch(() => null);
+                  if (id) {
+                    const lbl = page.locator(`label[for="${id}"]`);
+                    if (await lbl.isVisible().catch(() => false)) {
+                      await lbl.click({ force: true });
+                      await page.waitForTimeout(400);
+                      clicked = true;
+                    }
+                  }
+                } catch {}
+              }
 
               // If click failed or radio not checked, try scrollIntoView + force click
               if (!clicked) {
