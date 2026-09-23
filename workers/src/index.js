@@ -1884,12 +1884,13 @@ const callAIProvider = async (
         tools: [{ type: "web_search_20250305", name: "web_search" }],
         messages: [{ role: "user", content: searchPrompt }],
       });
-      if (!res?.ok) return null;
+    if (!res?.ok) return null;
       const data = await res.json();
-      return (data.content || [])
-        .filter((b) => b.type === "text")
-        .map((b) => b.text)
-        .join("\n");
+      return {
+        text: (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n"),
+        inputTokens:  data.usage?.input_tokens  || 0,
+        outputTokens: data.usage?.output_tokens || 0,
+      };
     }
     const res = await callWithRetry({
       model,
@@ -1915,9 +1916,13 @@ const callAIProvider = async (
         },
       ],
     });
-    if (!res?.ok) return null;
+  if (!res?.ok) return null;
     const data = await res.json();
-    return data.content?.[0]?.text || "";
+    return {
+      text:         data.content?.[0]?.text || "",
+      inputTokens:  data.usage?.input_tokens  || 0,
+      outputTokens: data.usage?.output_tokens || 0,
+    };
   }
 
   // OpenRouter / OpenAI
@@ -1967,10 +1972,15 @@ const callAIProvider = async (
         { role: "user", content: searchPrompt },
       ],
     });
-    if (!res?.ok) return null;
+  if (!res?.ok) return null;
     const data = await res.json();
-    return data.choices?.[0]?.message?.content || "";
+    return {
+      text:         data.choices?.[0]?.message?.content || '',
+      inputTokens:  data.usage?.prompt_tokens     || 0,
+      outputTokens: data.usage?.completion_tokens || 0,
+    };
   }
+
   const fullUserContent = staticPart + "\n\n" + dynamicPart;
   const res = await callWithRetry({
     model,
@@ -1980,9 +1990,13 @@ const callAIProvider = async (
       { role: "user", content: fullUserContent },
     ],
   });
-  if (!res?.ok) return null;
+if (!res?.ok) return null;
   const data = await res.json();
-  return data.choices?.[0]?.message?.content || "";
+  return {
+    text:         data.choices?.[0]?.message?.content || '',
+    inputTokens:  data.usage?.prompt_tokens     || 0,
+    outputTokens: data.usage?.completion_tokens || 0,
+  };
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2113,6 +2127,7 @@ const answerPageWithAI = async (
           isSearch: true,
           searchPrompt,
         });
+        const searchText = typeof searchResult === 'object' ? (searchResult?.text || '') : (searchResult || '');
         webSearchContext = (searchResult || "").slice(0, 600);
         if (webSearchContext)
           console.log(`[AI] Web search: ${webSearchContext.length} chars`);
@@ -2346,17 +2361,38 @@ JSON RULES:
 - value for numeric inputs must be a NUMBER not a string.
 - newFacts may be {} if this page revealed nothing new to commit.`;
 
-    const rawText = await callAIProvider(providerConfig, {
+    const aiResult = await callAIProvider(providerConfig, {
       systemPrompt,
-      staticPart: staticPromptPart,
+      staticPart:  staticPromptPart,
       dynamicPart: dynamicPromptPart,
-      maxTokens: 10240,
+      maxTokens:   10240,
     });
-    if (!rawText) return null;
 
+    if (!aiResult) return null;
+    const rawText = typeof aiResult === 'string' ? aiResult : aiResult.text;
+
+    // ── Accumulate token usage on providerConfig._usage ──────────────────────
+    if (!providerConfig._usage) {
+      providerConfig._usage = { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 };
+    }
+    const inTok  = typeof aiResult === 'object' ? (aiResult.inputTokens  || 0) : 0;
+    const outTok = typeof aiResult === 'object' ? (aiResult.outputTokens || 0) : 0;
+    providerConfig._usage.inputTokens  += inTok;
+    providerConfig._usage.outputTokens += outTok;
+    providerConfig._usage.calls        += 1;
+    const inPrice  = parseFloat(providerConfig.inputPricePer1m  || 0);
+    const outPrice = parseFloat(providerConfig.outputPricePer1m || 0);
+    providerConfig._usage.costUsd +=
+      (inTok  / 1_000_000) * inPrice +
+      (outTok / 1_000_000) * outPrice;
+    if (inTok > 0 || outTok > 0) {
+      console.log(`[AI] Tokens: ${inTok} in + ${outTok} out | call cost: $${((inTok/1e6)*inPrice+(outTok/1e6)*outPrice).toFixed(6)}`);
+    }
+
+    if (!rawText) return null;
     let decisions;
     try {
-      decisions = JSON.parse(rawText.replace(/```json|```/g, "").trim());
+      decisions = JSON.parse(rawText.replace(/```json|```/g, '').trim());
     } catch {
       console.warn(`[AI] JSON parse failed — raw: ${rawText.slice(0, 300)}`);
       return null;
@@ -2707,15 +2743,15 @@ const resolveQuotaCell = async (persona, projectId, apiKey) => {
       api_key: apiKey,
       model: "claude-sonnet-4-6",
     };
-    const cellText = await callAIProvider(mockProvider, {
+        const cellResult = await callAIProvider(mockProvider, {
       systemPrompt: "Map persona to quota dimensions. Return only JSON.",
       staticPart: "",
       dynamicPart: `Persona:\n${buildPersonaContext(persona)}\n\nDimensions:\n${dimensionsText}\n\nReturn JSON: {"DimensionName": "matched_value"}`,
       maxTokens: 250,
     });
-    const cell = JSON.parse(
-      (cellText || "{}").replace(/```json|```/g, "").trim(),
-    );
+    const cellText = typeof cellResult === 'object' ? (cellResult?.text || '{}') : (cellResult || '{}');
+    const cell = JSON.parse(cellText.replace(/```json|```/g, "").trim());
+
     console.log(`[Agent] Quota cell: ${JSON.stringify(cell)}`);
     return cell;
   } catch (e) {
@@ -3207,15 +3243,18 @@ const processSession = async (job) => {
         const secretName = "openrouter_synthfield";
         const resolvedKey = readSecret(secretName);
         if (resolvedKey) {
-          providerConfig = {
-            provider_type: "openrouter",
-            api_key: resolvedKey,
-            model: m.model_id,
-            base_url: null,
-          };
-          console.log(
-            `[Worker] ✓ AI model loaded: ${m.display_name} (${m.model_id})`,
-          );
+        providerConfig = {
+          provider_type:    "openrouter",
+          api_key:          resolvedKey,
+          model:            m.model_id,
+          base_url:         null,
+          inputPricePer1m:  parseFloat(m.input_price_per_1m  || 0),
+          outputPricePer1m: parseFloat(m.output_price_per_1m || 0),
+          _usage: { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 },
+        };
+        console.log(
+          `[Worker] ✓ AI model loaded: ${m.display_name} (${m.model_id}) — $${providerConfig.inputPricePer1m}/1M in, $${providerConfig.outputPricePer1m}/1M out`,
+        );
         } else {
           console.warn(`[Worker] ⚠️ Secret "${secretName}" not found`);
           try {
@@ -3264,15 +3303,18 @@ const processSession = async (job) => {
         if (defaultModel) {
           const resolvedKey = readSecret("openrouter_synthfield");
           if (resolvedKey) {
-            providerConfig = {
-              provider_type: "openrouter",
-              api_key: resolvedKey,
-              model: defaultModel.model_id,
-              base_url: null,
-            };
-            console.log(
-              `[Worker] ✓ AI model (workspace default): ${defaultModel.display_name}`,
-            );
+          providerConfig = {
+            provider_type:    "openrouter",
+            api_key:          resolvedKey,
+            model:            defaultModel.model_id,
+            base_url:         null,
+            inputPricePer1m:  parseFloat(defaultModel.input_price_per_1m  || 0),
+            outputPricePer1m: parseFloat(defaultModel.output_price_per_1m || 0),
+            _usage: { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 },
+          };
+          console.log(
+            `[Worker] ✓ AI model (workspace default): ${defaultModel.display_name} — $${providerConfig.inputPricePer1m}/1M in, $${providerConfig.outputPricePer1m}/1M out`,
+          );
           }
         }
       }
@@ -3289,10 +3331,13 @@ const processSession = async (job) => {
       null;
     if (fallbackKey) {
       providerConfig = {
-        provider_type: "anthropic",
-        api_key: fallbackKey,
-        model: "claude-sonnet-4-6",
-        base_url: null,
+        provider_type:    "anthropic",
+        api_key:          fallbackKey,
+        model:            "claude-sonnet-4-6",
+        base_url:         null,
+        inputPricePer1m:  3.0,
+        outputPricePer1m: 15.0,
+        _usage: { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 },
       };
       console.log("[Worker] AI provider: fallback (anthropic env key)");
     }
@@ -3824,11 +3869,26 @@ const processSession = async (job) => {
   }
 
   const durationS = Math.round((Date.now() - startTime) / 1000);
+  const usage = providerConfig?._usage || { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 };
+
+  if (usage.calls > 0) {
+    console.log(
+      `[Cost] ✓ Session ${sessionId.slice(0, 8)}: ${usage.calls} AI calls | ` +
+      `${usage.inputTokens} input + ${usage.outputTokens} output tokens | ` +
+      `$${usage.costUsd.toFixed(6)} USD`
+    );
+  }
+
   await updateSessionStatus(sessionId, outcome, {
     outcome,
-    totalDurationS: durationS,
+    totalDurationS:    durationS,
     questionCount,
-    redirectType: outcome,
+    redirectType:      outcome,
+    inputTokensTotal:  usage.inputTokens,
+    outputTokensTotal: usage.outputTokens,
+    aiCallsCount:      usage.calls,
+    aiCostUsd:         parseFloat(usage.costUsd.toFixed(8)),
+    modelUsed:         providerConfig?.model || null,
     ...(errorMessage ? { errorLog: errorMessage.slice(0, 2000) } : {}),
   });
   await logSessionEvent(sessionId, "session_complete", {
