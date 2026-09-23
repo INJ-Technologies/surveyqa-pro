@@ -879,19 +879,49 @@ const fillRemainingInputs = async (page) => {
       if (!(await input.isVisible().catch(() => false))) continue;
       const existing = await input.inputValue().catch(() => "");
       if (existing && existing.trim() !== "") continue;
-      const isOrphanSpecBox = await input
+            const isOrphanSpecBox = await input
         .evaluate((el) => {
           let node = el.parentElement;
-          for (let i = 0; i < 6; i++) {
+          for (let i = 0; i < 8; i++) {
             if (!node) break;
+            // Check for unchecked radio
             const radio = node.querySelector('input[type="radio"]');
             if (radio) return !radio.checked;
+            // Check for unchecked checkbox — "Other, please specify" pattern
+            const cb = node.querySelector('input[type="checkbox"]');
+            if (cb) return !cb.checked;
             node = node.parentElement;
           }
           return false;
         })
         .catch(() => false);
       if (isOrphanSpecBox) continue;
+
+      // Also skip if the input's label text contains "other" and no adjacent checkbox is checked
+      const isOtherSpecBox = await input
+        .evaluate((el) => {
+          const ctx = (el.closest('td, tr, div, label')?.innerText || '').toLowerCase();
+          return /other.*specify|specify.*other/i.test(ctx);
+        })
+        .catch(() => false);
+      if (isOtherSpecBox) {
+        // Only fill if the "Other" checkbox in the same container is checked
+        const otherChecked = await input
+          .evaluate((el) => {
+            let node = el.parentElement;
+            for (let i = 0; i < 8; i++) {
+              if (!node) break;
+              const cb = node.querySelector('input[type="checkbox"]');
+              if (cb) return cb.checked;
+              const r = node.querySelector('input[type="radio"]');
+              if (r) return r.checked;
+              node = node.parentElement;
+            }
+            return false;
+          })
+          .catch(() => false);
+        if (!otherChecked) continue;
+      }
       const attrMin = await input.getAttribute("min").catch(() => null);
       const attrMax = await input.getAttribute("max").catch(() => null);
       const numMin =
@@ -1680,6 +1710,32 @@ const captureAllPageFields = async (page) => {
         }
         cbGroups[name].push({ label, checked: cb.checked });
       });
+            // Detect multi-column checkbox grids (e.g. "12 months ago / Today")
+      // These have checkboxes in table cells with shared column headers
+      const gridTables = document.querySelectorAll('table');
+      let hasGridCheckboxes = false;
+      gridTables.forEach(table => {
+        const headerCells = Array.from(table.querySelectorAll('thead th, tr:first-child th')).slice(1); // skip row label col
+        if (headerCells.length < 2) return;
+        const checkboxRows = Array.from(table.querySelectorAll('tr')).filter(tr =>
+          tr.querySelectorAll('input[type="checkbox"]').length >= 2
+        );
+        if (checkboxRows.length < 2) return;
+        hasGridCheckboxes = true;
+        // Add as a special grid field
+        const colHeaders = headerCells.map(th => (th.innerText || th.textContent || '').trim());
+        const rows = checkboxRows.map(tr => {
+          const cells = Array.from(tr.querySelectorAll('td'));
+          const rowLabel = cells[0] ? (cells[0].innerText || '').trim() : '';
+          const colCheckboxes = cells.slice(1).map((td, ci) => {
+            const cb = td.querySelector('input[type="checkbox"]');
+            return { colIndex: ci, colHeader: colHeaders[ci] || `Col ${ci+1}`, checked: cb?.checked || false, name: cb?.name || '', id: cb?.id || '' };
+          });
+          return { rowLabel, colCheckboxes };
+        });
+        fields.push({ fieldType: 'checkboxGrid', rows, colHeaders, questionLabel: '' });
+      });
+      if (hasGridCheckboxes) return fields; // return early, skip flat checkbox processing for grid pages
       cbOrder.forEach((name, gi) => {
         let questionLabel = "";
         const firstCb = document.querySelector(
@@ -1878,15 +1934,26 @@ const formatFieldsForPrompt = (fields) => {
         }
         case "textarea":
           return `[${i}] OPEN-END TEXT — "${f.questionLabel || f.placeholder || "open response"}"`;
-        case "input": {
+                case "input": {
           const parts = [];
           if (f.rowLabel) parts.push(`row: "${f.rowLabel}"`);
           if (f.columnHeader) parts.push(`column: "${f.columnHeader}"`);
           if (f.unitLabel) parts.push(`unit: "${f.unitLabel}"`);
           if (f.min || f.max)
             parts.push(`range: ${f.min ?? "?"}–${f.max ?? "?"}`);
+          // Detect percentage context so AI doesn't enter revenue-scale numbers
+          const ctx = (f.contextText || f.placeholder || f.unitLabel || f.rowLabel || '').toLowerCase();
+          const isPct = /%|percent|proportion|share|allocation/.test(ctx) || f.unitLabel === '%';
+          if (isPct) parts.push('PERCENTAGE: enter 0–100 only');
           const meta = parts.length > 0 ? ` [${parts.join(", ")}]` : "";
           return `[${i}] NUMERIC INPUT${meta} — context: "${f.contextText?.slice(0, 100) || f.placeholder || "numeric field"}"`;
+        }
+        case "checkboxGrid": {
+          const colHdrs = f.colHeaders?.join(' | ') || 'columns';
+          const rowDesc = f.rows?.map((r, ri) =>
+            `  Row ${ri}: "${r.rowLabel}" → columns: [${r.colCheckboxes?.map((c, ci) => `${ci}="${c.colHeader}"`).join(', ')}]`
+          ).join('\n') || '(no rows)';
+          return `[${i}] CHECKBOX GRID — columns: ${colHdrs}\n${rowDesc}\nFor each row select which column(s) apply. Return selectedCells: [{row:0,col:0},{row:1,col:1}]`;
         }
         default:
           return `[${i}] UNKNOWN FIELD`;
@@ -2418,11 +2485,12 @@ RULES — FOLLOW IN THIS EXACT ORDER OF PRIORITY
    Ask: "Would this persona genuinely answer this way given their background?"
 
 7. NUMERIC CONSISTENCY:
+   • PERCENTAGE FIELDS (marked "PERCENTAGE: enter 0–100 only"): ALWAYS enter a number between 0 and 100. Never enter thousands or millions. A "share of budget" is always 0–100%.
+   • When two percentage rows must sum to 100%, distribute realistically (e.g. 70/30, 60/40).
+   • When rows are independent percentages (e.g. "current" vs "expected"), each is 0–100 independently.
    • Sub-totals ≤ parent totals at all times.
-   • Percentages across related fields sum to 100%.
-   • Employee counts match stated company size band.
-   • Budgets match stated revenue band.
-   • Radio + spec box: select range containing target, type exact value in box.
+   • Budget/revenue fields: use realistic figures consistent with company size in persona.
+   • Employee headcounts: match stated company size band.
 
 8. OPEN-END QUALITY:
    • Sound like a real ${persona?.behavioural_attrs?.designation || "professional"} in ${persona?.country || "their country"}.
@@ -2466,6 +2534,10 @@ JSON RULES:
 - selectedIndices is always an array, even if only one checkbox selected.
 - text must be a plain string — no JSON, no line breaks as \\n.
 - value for numeric inputs must be a NUMBER not a string.
+- PERCENTAGE inputs: value must be 0–100. Never enter thousands.
+- checkboxGrid: use selectedCells array: [{"row":0,"col":1},{"row":2,"col":0}]
+  Select cells that apply to this persona. Vary across rows — avoid same column for all rows.
+- NEVER fill "Other, please specify" text boxes unless the "Other" checkbox/radio is selected.
 - newFacts may be {} if this page revealed nothing new to commit.`;
 
     const aiResult = await callAIProvider(providerConfig, {
@@ -2779,6 +2851,57 @@ JSON RULES:
                 `[AI] ✓ Open-end [${field.textareaIndex}] → "${ans.text.slice(0, 80)}"`,
               );
             }
+            break;
+          }
+                    case "checkboxGrid": {
+            // Multi-column checkbox grid — click specific row/column intersections
+            const cellsToClick = ans.selectedCells || [];
+            if (cellsToClick.length === 0) break;
+
+            const allTables = await page.locator('table').all();
+            for (const table of allTables) {
+              const allRows = await table.locator('tr').all();
+              const dataRows = [];
+              for (const row of allRows) {
+                const cbs = await row.locator('input[type="checkbox"]').all();
+                if (cbs.length >= 2) dataRows.push({ row, cbs });
+              }
+              if (dataRows.length < 2) continue;
+
+              for (const { row: ri, col: ci } of cellsToClick) {
+                const targetRow = dataRows[ri];
+                if (!targetRow) continue;
+                const cb = targetRow.cbs[ci];
+                if (!cb) continue;
+
+                let clicked = false;
+                try {
+                  const id = await cb.getAttribute('id').catch(() => null);
+                  if (id) {
+                    const lbl = page.locator(`label[for="${id}"]`);
+                    if (await lbl.isVisible().catch(() => false)) {
+                      await lbl.click();
+                      await page.waitForTimeout(150);
+                      clicked = true;
+                    }
+                  }
+                } catch {}
+                if (!clicked) {
+                  try {
+                    await cb.evaluate(el => {
+                      el.scrollIntoView({ block: 'center' });
+                      el.click();
+                      el.dispatchEvent(new Event('change', { bubbles: true }));
+                    });
+                    await page.waitForTimeout(150);
+                    clicked = true;
+                  } catch {}
+                }
+                if (clicked) console.log(`[AI] ✓ CheckboxGrid row ${ri} col ${ci}`);
+              }
+              break; // handled first matching table
+            }
+            answersGiven.push({ type: 'checkboxGrid', selected: cellsToClick, aiControlled: true, flags });
             break;
           }
           case "input": {
