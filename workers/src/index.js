@@ -1048,11 +1048,29 @@ const applyCountryMapping = async (
     q.toLowerCase().includes(questionContains.toLowerCase()),
   );
   if (!hasCountryQ) return false;
-  const mapping = mappings.find(
-    (m) => m.country.toUpperCase() === (proxyCountry || "").toUpperCase(),
+
+  // Resolve ISO code → full country name so mapping works regardless of
+  // whether the mapping stores "IN" or "India"
+  let resolvedCountryName = null;
+  try {
+    const cr = await pool.query(
+      `SELECT country FROM proxy_countries WHERE UPPER(code) = UPPER($1) LIMIT 1`,
+      [proxyCountry]
+    );
+    resolvedCountryName = cr.rows[0]?.country || null;
+    if (resolvedCountryName) {
+      console.log(`[CountryLogic] Resolved: ${proxyCountry} → "${resolvedCountryName}"`);
+    }
+  } catch {}
+
+  // Match by ISO code OR full country name (handles both storage formats)
+  const mapping = mappings.find((m) =>
+    m.country.toUpperCase() === (proxyCountry || '').toUpperCase() ||
+    (resolvedCountryName && m.country.toLowerCase() === resolvedCountryName.toLowerCase())
   );
+
   if (!mapping) {
-    console.log(`[CountryLogic] No mapping for "${proxyCountry}" — skipping`);
+    console.log(`[CountryLogic] No mapping for "${proxyCountry}" / "${resolvedCountryName}" — skipping`);
     return false;
   }
   const answer = mapping.answer;
@@ -2456,7 +2474,44 @@ JSON RULES:
             const radios = groupMap[groupOrder[field.groupIndex]] || [];
             const idx = ans.selectedIndex ?? 0;
             if (idx < radios.length) {
-              await clickRadioOption(page, radios[idx]);
+              // Try the AI-selected index first
+              let clicked = false;
+              try {
+                await clickRadioOption(page, radios[idx]);
+                await page.waitForTimeout(300);
+                // Verify it's actually checked
+                const isChecked = await radios[idx].isChecked().catch(() => false);
+                if (isChecked) clicked = true;
+              } catch {}
+
+              // If click failed or radio not checked, try scrollIntoView + force click
+              if (!clicked) {
+                try {
+                  await radios[idx].evaluate(el => el.scrollIntoView({ block: 'center' }));
+                  await page.waitForTimeout(200);
+                  await radios[idx].click({ force: true });
+                  await page.waitForTimeout(300);
+                  clicked = true;
+                } catch {}
+              }
+
+              // Last resort: click by label text
+              if (!clicked) {
+                const label = field.options?.[idx];
+                if (label) {
+                  const allLabels = await page.locator('label').all();
+                  for (const lbl of allLabels) {
+                    const txt = (await lbl.textContent().catch(() => '')).trim();
+                    if (txt === label) {
+                      await lbl.click({ force: true }).catch(() => {});
+                      await page.waitForTimeout(300);
+                      clicked = true;
+                      break;
+                    }
+                  }
+                }
+              }
+
               await fillFollowupInput(page);
               const label = field.options?.[idx] || `option ${idx}`;
               answersGiven.push({
@@ -2465,7 +2520,7 @@ JSON RULES:
                 aiControlled: true,
                 flags,
               });
-              console.log(`[AI] ✓ Radio [${field.groupIndex}] → "${label}"`);
+              console.log(`[AI] ✓ Radio [${field.groupIndex}] → "${label}" (clicked: ${clicked})`);
             }
             break;
           }
@@ -3611,6 +3666,28 @@ const processSession = async (job) => {
       let answersGiven = null;
       const scenarioStepUsed = "ai";
 
+      // ── COUNTRY LOGIC: runs AFTER AI so it always has final say ──────────
+      if (countryLogic && questionsOnPage.length > 0) {
+        try {
+          const applied = await applyCountryMapping(
+            page, countryLogic, proxyCountry, questionsOnPage,
+          );
+          if (applied) {
+            console.log(`[CountryLogic] ✓ Hard-clicked: ${proxyCountry} answer on page ${pageCount}`);
+            await logSessionEvent(sessionId, 'country_logic_applied', {
+              page: pageCount,
+              country: proxyCountry,
+              question: questionsOnPage[0]?.slice(0, 100),
+            });
+            await page.waitForTimeout(500);
+            // Rescan in case CountryLogic click revealed a sub-question
+            await rescanForRevealedContent(page, providerConfig, persona, agentSetup.factSheet, questionsOnPage);
+          }
+        } catch (e) {
+          console.warn(`[CountryLogic] Hard-apply failed: ${e.message}`);
+        }
+      }
+
       // ── AI fills all remaining fields (including any Country Logic missed) ──────
       if (useAI) {
         console.log(`[Worker] Page ${pageCount}: AI answering`);
@@ -3711,27 +3788,7 @@ const processSession = async (job) => {
         }
       }
 
-            // ── COUNTRY LOGIC: runs AFTER AI so it always has final say ──────────
-      if (countryLogic && questionsOnPage.length > 0) {
-        try {
-          const applied = await applyCountryMapping(
-            page, countryLogic, proxyCountry, questionsOnPage,
-          );
-          if (applied) {
-            console.log(`[CountryLogic] ✓ Hard-clicked: ${proxyCountry} answer on page ${pageCount}`);
-            await logSessionEvent(sessionId, 'country_logic_applied', {
-              page: pageCount,
-              country: proxyCountry,
-              question: questionsOnPage[0]?.slice(0, 100),
-            });
-            await page.waitForTimeout(500);
-            // Rescan in case CountryLogic click revealed a sub-question
-            await rescanForRevealedContent(page, providerConfig, persona, agentSetup.factSheet, questionsOnPage);
-          }
-        } catch (e) {
-          console.warn(`[CountryLogic] Hard-apply failed: ${e.message}`);
-        }
-      }
+      
 
       // ── Post-answer hesitation delay ──────────────────────────────────────
 
