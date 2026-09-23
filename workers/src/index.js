@@ -3659,30 +3659,39 @@ const processSession = async (job) => {
             `multiplier: ${questionMultiplier.toFixed(2)}×)`,
         );
 
-        // Break the wait into chunks so the session stop-check still works
-        // Check every 10s if the session was manually stopped
+                // Break the wait into chunks — wrapped in try/catch so a closed
+        // browser during reading delay doesn't crash the whole session
         let remaining = readMs;
         while (remaining > 0) {
           const chunk = Math.min(remaining, 10_000);
-          await page.waitForTimeout(chunk);
+          try {
+            await page.waitForTimeout(chunk);
+          } catch {
+            // Page or browser closed during wait — exit reading delay gracefully
+            console.log(`[Worker] Browser closed during reading delay — stopping wait`);
+            break;
+          }
           remaining -= chunk;
 
           // Early exit if page already navigated away (survey auto-advanced)
-          // page.url() is synchronous in Playwright — no .catch() needed
-          let stillOnPage = "";
-          try {
-            stillOnPage = page.url();
-          } catch {
-            stillOnPage = "";
-          }
+          let stillOnPage = '';
+          try { stillOnPage = page.url(); } catch { break; }
           if (stillOnPage && stillOnPage !== currentUrl) {
-            console.log(
-              `[Worker] Page auto-advanced during reading delay — stopping wait`,
-            );
+            console.log(`[Worker] Page auto-advanced during reading delay — stopping wait`);
             break;
           }
+
+          // Early exit if session was manually stopped
+          try {
+            const statusCheck = await pool.query(
+              `SELECT status, error_log FROM sessions WHERE id = $1`, [sessionId]
+            );
+            if (statusCheck.rows[0]?.error_log === 'Manually stopped by user') {
+              console.log(`[Worker] Session stopped during reading delay`);
+              break;
+            }
+          } catch {}
         }
-      }
 
       // Screenshot before answering
       const screenshotFilename = `page_${pageCount}.png`;
@@ -3829,7 +3838,7 @@ const processSession = async (job) => {
       // After selecting an answer, a real person pauses before clicking Next.
       // Expressive/detailed personas take longer (reviewing their answer).
       {
-        const styleStr = (
+                const styleStr = (
           persona?.behavioural_attrs?.responseStyle || ""
         ).toLowerCase();
         let hesMs;
@@ -3838,8 +3847,7 @@ const processSession = async (job) => {
         else if (styleStr.includes("terse") || styleStr.includes("minimal"))
           hesMs = 800 + Math.random() * 1200;
         else hesMs = 1500 + Math.random() * 2500;
-        await page.waitForTimeout(Math.round(hesMs));
-      }
+        await page.waitForTimeout(Math.round(hesMs)).catch(() => {});
 
       // Last-resort fill for anything AI missed
       await fillRemainingInputs(page);
