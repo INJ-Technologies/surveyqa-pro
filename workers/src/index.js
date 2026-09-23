@@ -2146,7 +2146,7 @@ const answerPageWithAI = async (
           searchPrompt,
         });
         const searchText = typeof searchResult === 'object' ? (searchResult?.text || '') : (searchResult || '');
-        webSearchContext = (searchResult || "").slice(0, 600);
+        webSearchContext = searchText.slice(0, 600);
         if (webSearchContext)
           console.log(`[AI] Web search: ${webSearchContext.length} chars`);
       } catch (e) {
@@ -3692,7 +3692,7 @@ const processSession = async (job) => {
             }
           } catch {}
         }
-
+      }
       // Screenshot before answering
       const screenshotFilename = `page_${pageCount}.png`;
       const screenshotPath = path.join(
@@ -3830,10 +3830,6 @@ const processSession = async (job) => {
         }
       }
 
-      
-
-      // ── Post-answer hesitation delay ──────────────────────────────────────
-
       // ── Post-answer hesitation delay ─────────────────────────────────────────────
       // After selecting an answer, a real person pauses before clicking Next.
       // Expressive/detailed personas take longer (reviewing their answer).
@@ -3848,7 +3844,7 @@ const processSession = async (job) => {
           hesMs = 800 + Math.random() * 1200;
         else hesMs = 1500 + Math.random() * 2500;
         await page.waitForTimeout(Math.round(hesMs)).catch(() => {});
-
+    }
       // Last-resort fill for anything AI missed
       await fillRemainingInputs(page);
 
