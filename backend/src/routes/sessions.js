@@ -276,7 +276,7 @@ router.get("/live/:projectId", async (req, res) => {
 // This is the global sessions listing endpoint used by the Sessions sidebar page.
 
 // ─── GET /api/sessions — All sessions across all projects (workspace-scoped) ──
-router.get('/', requireAuth, async (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const {
       projectId, surveyUrl, status, outcome,
