@@ -276,46 +276,7 @@ router.get("/live/:projectId", async (req, res) => {
 // This is the global sessions listing endpoint used by the Sessions sidebar page.
 
 // ─── GET /api/sessions — All sessions across all projects (workspace-scoped) ──
-router.get('/', requireAuth, async (req, res) => {
-  try {
-    const {
-      projectId,
-      surveyUrl,
-      status,
-      outcome,
-      country,
-      internalTesting,
-      limit   = 50,
-      offset  = 0,
-    } = req.query;
-
-    const wsId = req.user.workspace_id;
-    const conditions = [`p.workspace_id = $1`];
-    const values = [wsId];
-    let idx = 2;
-
-    if (projectId)       { conditions.push(`s.project_id = $${idx++}`);        values.push(projectId); }
-    if (status)          { conditions.push(`s.status = $${idx++}`);             values.push(status); }
-    if (outcome)         { conditions.push(`s.outcome = $${idx++}`);            values.push(outcome); }
-    if (country)         { conditions.push(`s.proxy_country = $${idx++}`);      values.push(country); }
-    if (surveyUrl)       { conditions.push(`sv.url ILIKE $${idx++}`);           values.push(`%${surveyUrl}%`); }
-    if (internalTesting === 'true')  conditions.push(`s.internal_testing = true`);
-    if (internalTesting === 'false') conditions.push(`(s.internal_testing = false OR s.internal_testing IS NULL)`);
-
-    const where = conditions.join(' AND ');
-
-    // Total count for pagination
-    const countResult = await pool.query(
-      `SELECT COUNT(DISTINCT s.id) AS total
-       FROM sessions s
-       JOIN projects p ON p.id = s.project_id
-       LEFT JOIN project_surveys sv ON sv.project_id = s.project_id
-       WHERE ${where}`,
-      values
-    );
-    const total = parseInt(countResult.rows[0]?.total || 0);
-
-    // ─── GET /api/sessions — All sessions across all projects (workspace-scoped) ──
+// ─── GET /api/sessions — All sessions across all projects (workspace-scoped) ──
 router.get('/', requireAuth, async (req, res) => {
   try {
     const {
@@ -327,7 +288,7 @@ router.get('/', requireAuth, async (req, res) => {
 
     const wsId   = req.user.workspace_id;
     const values = [wsId];
-    const extra  = [];   // extra conditions beyond workspace check
+    const extra  = [];
     let   idx    = 2;
 
     if (projectId) { extra.push(`s.project_id = $${idx++}`);   values.push(projectId); }
@@ -335,16 +296,16 @@ router.get('/', requireAuth, async (req, res) => {
     if (outcome)   { extra.push(`s.outcome = $${idx++}`);       values.push(outcome); }
     if (country)   { extra.push(`s.proxy_country = $${idx++}`); values.push(country); }
     if (surveyUrl) {
-      extra.push(`EXISTS (
-        SELECT 1 FROM project_surveys ps2
-        WHERE ps2.project_id = s.project_id AND ps2.url ILIKE $${idx++}
-      )`);
+      extra.push(`s.survey_url ILIKE $${idx++}`);
       values.push(`%${surveyUrl}%`);
     }
     if (internalTesting === 'true')  extra.push(`s.internal_testing = true`);
     if (internalTesting === 'false') extra.push(`(s.internal_testing = false OR s.internal_testing IS NULL)`);
 
     const extraWhere = extra.length > 0 ? `AND ${extra.join(' AND ')}` : '';
+
+    const limitVal  = parseInt(limit)  || 50;
+    const offsetVal = parseInt(offset) || 0;
 
     // Total count
     const countResult = await pool.query(
@@ -356,26 +317,25 @@ router.get('/', requireAuth, async (req, res) => {
     );
     const total = parseInt(countResult.rows[0]?.total || 0);
 
-    // Sessions list
-    const limitVal  = parseInt(limit);
-    const offsetVal = parseInt(offset);
-    const listResult = await pool.query(
+    // Sessions list — only columns that exist in the sessions table
+    const sessionsResult = await pool.query(
       `SELECT
          s.id, s.project_id, s.status, s.outcome,
-         s.response_id, s.proxy_country, s.ip_address,
-         s.device_type, s.internal_testing,
-         s.persona_name, s.scenario_name, s.quality_score,
-         s.total_duration_s, s.started_at, s.completed_at, s.created_at,
+         s.response_id, s.proxy_country, s.proxy_ip,
+         s.proxy_provider, s.device_type, s.internal_testing,
+         s.persona_id, s.scenario_name, s.quality_score,
+         s.total_duration_s, s.question_count,
+         s.started_at, s.completed_at, s.created_at,
          s.ai_cost_usd, s.ai_calls_count,
          s.input_tokens_total, s.output_tokens_total,
-         s.proxy_ip AS ip_address,
-         p.name        AS project_name,
+         s.model_used, s.survey_url, s.survey_label,
+         s.error_log,
+         p.name         AS project_name,
          p.reference_id AS project_reference_id,
-         (SELECT url FROM project_surveys ps
-          WHERE ps.project_id = s.project_id
-          LIMIT 1) AS survey_url
+         pe.name        AS persona_name
        FROM sessions s
        JOIN projects p ON p.id = s.project_id
+       LEFT JOIN personas pe ON pe.id = s.persona_id
        WHERE p.workspace_id = $1 ${extraWhere}
        ORDER BY s.created_at DESC
        LIMIT $${idx++} OFFSET $${idx++}`,
@@ -385,14 +345,14 @@ router.get('/', requireAuth, async (req, res) => {
     // Aggregate stats
     const statsResult = await pool.query(
       `SELECT
-         COUNT(*)                                                              AS total,
-         COUNT(*) FILTER (WHERE s.status IN ('in_progress','initialising','queued')) AS active,
-         COUNT(*) FILTER (WHERE s.outcome = 'completed')                      AS completed,
-         COUNT(*) FILTER (WHERE s.outcome = 'terminated')                     AS terminated,
-         COUNT(*) FILTER (WHERE s.outcome = 'over_quota')                     AS over_quota,
-         COUNT(*) FILTER (WHERE s.status  = 'error')                          AS errors,
-         ROUND(AVG(s.total_duration_s))                                        AS avg_duration,
-         COALESCE(SUM(s.ai_cost_usd), 0)                                      AS total_ai_cost
+         COUNT(*)                                                                      AS total,
+         COUNT(*) FILTER (WHERE s.status IN ('in_progress','initialising','queued'))  AS active,
+         COUNT(*) FILTER (WHERE s.outcome = 'completed')                              AS completed,
+         COUNT(*) FILTER (WHERE s.outcome = 'terminated')                             AS terminated,
+         COUNT(*) FILTER (WHERE s.outcome = 'over_quota')                             AS over_quota,
+         COUNT(*) FILTER (WHERE s.status  = 'error')                                  AS errors,
+         ROUND(AVG(s.total_duration_s))                                                AS avg_duration,
+         COALESCE(SUM(s.ai_cost_usd), 0)                                              AS total_ai_cost
        FROM sessions s
        JOIN projects p ON p.id = s.project_id
        WHERE p.workspace_id = $1 ${extraWhere}`,
@@ -400,45 +360,15 @@ router.get('/', requireAuth, async (req, res) => {
     );
 
     res.json({
-      sessions: listResult.rows,
+      sessions: sessionsResult.rows,
       stats:    statsResult.rows[0],
       total,
-      limit:  limitVal,
-      offset: offsetVal,
+      limit:    limitVal,
+      offset:   offsetVal,
     });
   } catch (err) {
-    console.error('[Sessions] Global fetch error:', err.message, err.stack);
+    console.error('[Sessions] Global fetch error:', err.message);
     res.status(500).json({ error: 'Failed to fetch sessions', detail: err.message });
-  }
-});
-
-    // Aggregate stats across all returned sessions (for the stats bar)
-    const statsResult = await pool.query(
-      `SELECT
-         COUNT(*)                                           AS total,
-         COUNT(*) FILTER (WHERE s.status IN ('in_progress','initialising','queued')) AS active,
-         COUNT(*) FILTER (WHERE s.outcome = 'completed')   AS completed,
-         COUNT(*) FILTER (WHERE s.outcome = 'terminated')  AS terminated,
-         COUNT(*) FILTER (WHERE s.outcome = 'over_quota')  AS over_quota,
-         COUNT(*) FILTER (WHERE s.status  = 'error')       AS errors,
-         ROUND(AVG(s.total_duration_s))                    AS avg_duration,
-         SUM(COALESCE(s.ai_cost_usd, 0))                   AS total_ai_cost
-       FROM sessions s
-       JOIN projects p ON p.id = s.project_id
-       WHERE ${where}`,
-      values
-    );
-
-    res.json({
-      sessions: result.rows,
-      stats:    statsResult.rows[0],
-      total,
-      limit:  parseInt(limit),
-      offset: parseInt(offset),
-    });
-  } catch (err) {
-    console.error('Global sessions fetch error:', err.message);
-    res.status(500).json({ error: 'Failed to fetch sessions' });
   }
 });
 
