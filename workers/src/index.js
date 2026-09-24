@@ -2462,6 +2462,19 @@ const captureAllPageFields = async (page) => {
           });
           inpIdx++;
         });
+      // ── Ranking questions ──────────────────────────────────────────────────
+      // Decipher renders ranking as a sortable list or numbered selects
+      const rankSelects = Array.from(document.querySelectorAll('select')).filter(sel => {
+        const name = sel.name || '';
+        const opts = Array.from(sel.options).map(o => o.text.trim());
+        return /rank|order|priorit/i.test(name) ||
+          opts.some(o => /^[0-9]+$/.test(o.trim())) ||
+          (opts.length <= 10 && opts.every(o => /^[0-9]+$/.test(o.trim())));
+      });
+      // Ranking selects are already captured as regular selects above — this is
+      // just a marker so the prompt knows they form a set. No separate handling needed
+      // as long as formatFieldsForPrompt groups them with context from questionsOnPage.
+
       return fields;
     });
   } catch (e) {
@@ -2470,9 +2483,13 @@ const captureAllPageFields = async (page) => {
   }
 };
 
-const formatFieldsForPrompt = (fields, questionsOnPage = []) => {
+const formatFieldsForPrompt = (fields, questionsOnPage = [], instructionsOnPage = []) => {
   if (!fields || fields.length === 0)
     return "None — this may be an intro or transition page.";
+
+  const instrText = instructionsOnPage.length > 0
+    ? `\n⚠ PAGE INSTRUCTIONS (apply to all fields below):\n${instructionsOnPage.map(i => `• ${i}`).join('\n')}\n`
+    : '';
 
   const inputCount = fields.filter(f => f.fieldType === 'input').length;
 
@@ -2496,20 +2513,35 @@ const formatFieldsForPrompt = (fields, questionsOnPage = []) => {
     gridWarning = `\n⚠ ${inputCount} NUMERIC INPUT FIELDS on this page — answer every single one.\n`;
   }
 
-  const header = `THERE ARE EXACTLY ${fields.length} FIELD(S). Return exactly ${fields.length} answer(s) in the answers array.${gridWarning}\n`;
+  const header = `THERE ARE EXACTLY ${fields.length} FIELD(S). Return exactly ${fields.length} answer(s) in the answers array.${gridWarning}${instrText}\n`;
 
   return header + fields.map((f, i) => {
     switch (f.fieldType) {
       case "radio": {
-        const opts = f.options.map((o, idx) => `  [${idx}] ${o || "(unlabelled)"}`).join("\n");
+        const MUTEX = /^(none of the above|not applicable|none|don'?t know|not sure|prefer not|no formal|no opinion|neither)/i;
+        const opts = f.options.map((o, idx) => {
+          const label = o || "(unlabelled)";
+          const isMutex = MUTEX.test(label.trim());
+          return `  [${idx}] ${label}${isMutex ? ' ⚠ MUTUALLY EXCLUSIVE — only if no other option fits' : ''}`;
+        }).join("\n");
         return `[${i}] RADIO — "${f.questionLabel || "question"}"\n${opts}`;
       }
       case "checkbox": {
-        const opts = f.options.map((o, idx) => `  [${idx}] ${o || "(unlabelled)"}`).join("\n");
-        return `[${i}] CHECKBOX (select 1–4 that apply) — "${f.questionLabel || "question"}"\n${opts}`;
+        const MUTEX = /^(none of the above|not applicable|none|don'?t know|not sure|prefer not|no formal|no opinion|neither)/i;
+        const opts = f.options.map((o, idx) => {
+          const label = o || "(unlabelled)";
+          const isMutex = MUTEX.test(label.trim());
+          return `  [${idx}] ${label}${isMutex ? ' ⚠ MUTUALLY EXCLUSIVE — only if nothing else applies' : ''}`;
+        }).join("\n");
+        return `[${i}] CHECKBOX — "${f.questionLabel || "question"}"\n${opts}`;
       }
       case "select": {
+        const isRanking = f.options.length <= 12 &&
+          f.options.every(o => /^\d+$/.test((o.label || '').trim()));
         const opts = f.options.map((o, idx) => `  [${idx}] ${o.label}`).join("\n");
+        if (isRanking) {
+          return `[${i}] RANKING DROPDOWN — "${f.questionLabel || "rank this item"}"\n${opts}\n    ↳ Rank 1 = most important. Each item must get a unique rank.`;
+        }
         return `[${i}] DROPDOWN — "${f.questionLabel || "question"}"\n${opts}`;
       }
       case "textarea": {
@@ -2761,7 +2793,7 @@ const answerPageWithAI = async (
     }
     const allFields = await captureAllPageFields(page);
     const actionableFields = allFields.filter((f) =>
-      ["radio", "checkbox", "select", "textarea", "input"].includes(
+      ["radio", "checkbox", "select", "textarea", "input", "checkboxGrid"].includes(
         f.fieldType,
       ),
     );
@@ -2934,7 +2966,7 @@ ${instructionsOnPage.length > 0 ? `\n⚠ ANSWER INSTRUCTIONS (MANDATORY):\n${ins
 ═══════════════════════════════════════════════
 FIELDS TO FILL
 ═══════════════════════════════════════════════
-${formatFieldsForPrompt(actionableFields, questionsOnPage)}
+${formatFieldsForPrompt(actionableFields, questionsOnPage, instructionsOnPage)}
 
 ═══════════════════════════════════════════════
 QUESTION TYPE GUIDE — HOW TO ANSWER EACH TYPE
@@ -3118,11 +3150,27 @@ RULES — FOLLOW IN THIS EXACT ORDER OF PRIORITY
    • Never select the exact same number of checkboxes every time.
    • Real people have varied opinions — vary naturally across rows and pages.
 
-10. PROBLEM OPTIONS — Use only when genuinely unavoidable for this persona:
-    • "Don't know" — only if this persona truly would not know.
-    • "Prefer not to say" — only if the question is genuinely sensitive.
-    • "Other (please specify)" — only if NO listed option fits this persona at all.
-    • "None of the above" — only if this persona has zero relevant experience.
+10. MUTUALLY EXCLUSIVE OPTIONS — ABSOLUTE RULES:
+    Options marked ⚠ MUTUALLY EXCLUSIVE in the field list above must NEVER be selected
+    if ANY other substantive option applies to this persona.
+
+    HARD BLOCK — NEVER select these when a scenario is active:
+    • "None of the above" — only valid if zero other listed options apply. If even one
+      other option is plausible for this persona, select that instead.
+    • "Not sure / Don't know" — a ${persona?.behavioural_attrs?.designation || 'senior professional'}
+      working in ${persona?.behavioural_attrs?.industry || 'their industry'} KNOWS their own
+      organisation's operations, budget, vendors, and strategy. Selecting this is a
+      disqualifying red flag. Only valid for topics genuinely outside their expertise.
+    • "Prefer not to say" — never appropriate in a B2B professional survey.
+    • "Not applicable" — only if the question category truly does not apply.
+    • "No formal process" — only if the organisation genuinely has none.
+
+    IF A SCENARIO IS ACTIVE: selecting any mutually exclusive option on a scenario-matched
+    question OVERRIDES the scenario and defeats its purpose. This is forbidden.
+
+    SELF-CHECK before submitting: scan every selectedIndex/selectedIndices — if any maps to
+    an option marked ⚠ MUTUALLY EXCLUSIVE, replace it with the most relevant substantive
+    option for this persona.
 
 ═══════════════════════════════════════════════
 RETURN ONLY THIS JSON — NO MARKDOWN, NO PREAMBLE
@@ -4850,20 +4898,12 @@ const processSession = async (job) => {
         // ── AI fills all remaining fields (including any Country Logic missed) ──────
         if (useAI) {
           console.log(`[Worker] Page ${pageCount}: AI answering`);
-          answersGiven = await answerPageWithAI(
-            page,
-            persona,
-            scenario,
-            agentSetup.factSheet,
-            agentSetup.intentMap,
-            agentSetup.quotaCellText,
-            questionsOnPage,
-            pageOptionsBefore,
-            providerConfig,
-            resolvedProxyCountry,   // full name from DB, not ISO code
-            instructionsOnPage,
-            agentSetup.personaBrief,
-          );
+            answersGiven = await answerPageWithAI(
+              page, persona, scenario, agentSetup.factSheet,
+              agentSetup.intentMap, agentSetup.quotaCellText,
+              questionsOnPage, pageOptionsBefore, providerConfig,
+              resolvedProxyCountry, instructionsOnPage, agentSetup.personaBrief,
+            );
 
           if (answersGiven?.length > 0) {
             questionCount++;
@@ -4900,7 +4940,7 @@ const processSession = async (job) => {
               page, persona, scenario, agentSetup.factSheet,
               agentSetup.intentMap, agentSetup.quotaCellText,
               questionsOnPage, pageOptionsBefore, providerConfig,
-              proxyCountry, instructionsOnPage, agentSetup.personaBrief,
+              resolvedProxyCountry, instructionsOnPage, agentSetup.personaBrief,
             );
             if (!answersGiven?.length) {
               console.warn(`[Worker] Page ${pageCount}: AI retry also failed — skipping page answers`);
