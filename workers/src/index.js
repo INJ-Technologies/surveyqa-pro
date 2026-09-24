@@ -874,23 +874,8 @@ You MUST respond with ONLY the JSON object below. Do not write any explanation, 
           const decisions = JSON.parse(
             rawText.replace(/```json|```/g, "").trim(),
           );
-    for (const ans of decisions.answers || []) {
-      const field = actionableFields[ans.fieldIndex];
-      if (!field) {
-        console.warn(`[AI] fieldIndex ${ans.fieldIndex} not found`);
-        continue;
-      }
-
-      // Skip radio fields that are already checked (filled by scenario)
-      if (ans.fieldType === 'radio' && field.groupName) {
-        const alreadyChecked = await page.evaluate((name) => {
-          return !!document.querySelector(`input[type="radio"][name="${name}"]:checked`);
-        }, field.groupName).catch(() => false);
-        if (alreadyChecked) {
-          console.log(`[AI] Skipping radio [${field.groupIndex}] — already answered by scenario`);
-          continue;
-        }
-      }
+          for (const ans of decisions.answers || []) {
+            const field = revealed[ans.fieldIndex];
             if (!field) continue;
             if (field.fieldType === "radio") {
               const allRadios = await page
@@ -3416,11 +3401,6 @@ JSON RULES:
             for (let gi = 0; gi < groupIdx; gi++) {
               const pf = actionableFields.find(
                 (f) => f.fieldType === "checkbox" && (f.groupIndex ?? 0) === gi,
-              );
-              if (pf) groupStart += pf.options?.length || 0;
-            }
-              const pf = actionableFields.find(
-                (f) => f.fieldType === "checkbox" && f.groupIndex === gi,
               );
               if (pf) groupStart += pf.options?.length || 0;
             }
