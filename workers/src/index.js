@@ -3307,6 +3307,29 @@ JSON RULES:
         console.warn(`[AI] fieldIndex ${ans.fieldIndex} not found`);
         continue;
       }
+
+      // Skip radio fields already answered by scenario — do not override
+      if (ans.fieldType === 'radio' && field.groupName) {
+        const alreadyChecked = await page.evaluate((name) => {
+          return !!document.querySelector(`input[type="radio"][name="${name}"]:checked`);
+        }, field.groupName).catch(() => false);
+        if (alreadyChecked) {
+          console.log(`[AI] Skipping radio [${field.groupIndex}] — already answered by scenario`);
+          continue;
+        }
+      }
+
+      // Skip checkbox groups already answered by scenario
+      if (ans.fieldType === 'checkbox' && field.groupName) {
+        const anyChecked = await page.evaluate((name) => {
+          return !!document.querySelector(`input[type="checkbox"][name="${name}"]:checked`);
+        }, field.groupName).catch(() => false);
+        if (anyChecked) {
+          console.log(`[AI] Skipping checkbox [${field.groupIndex}] — already answered by scenario`);
+          continue;
+        }
+      }
+
       try {
         switch (ans.fieldType) {
           case "radio": {
