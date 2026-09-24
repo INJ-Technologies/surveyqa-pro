@@ -1610,13 +1610,310 @@ const findMatchingStep = (scenario, questionsOnPage, pageNum) => {
 // PERSONA CONTEXT BUILDER — upgraded with structured lookup and answering rules
 // ══════════════════════════════════════════════════════════════════════════════
 const buildPersonaContext = (persona) => {
-  if (!persona)
+  if (!persona) {
+    // ── Randomized realistic persona generator ────────────────────────────────
+    // Age is the anchor — all other attributes derive from it logically.
+    // A 25-year-old analyst cannot run a $5B IT budget.
+    const rand = (arr) => arr[Math.floor(Math.random() * arr.length)];
+    const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+    // Step 1: Age band determines tier
+    const ageBand = rand([
+      { min: 22, max: 26, tier: 'junior' },
+      { min: 24, max: 28, tier: 'junior' },
+      { min: 26, max: 30, tier: 'junior' },
+      { min: 28, max: 33, tier: 'mid' },
+      { min: 30, max: 35, tier: 'mid' },
+      { min: 32, max: 37, tier: 'mid' },
+      { min: 34, max: 40, tier: 'senior' },
+      { min: 36, max: 42, tier: 'senior' },
+      { min: 38, max: 44, tier: 'senior' },
+      { min: 40, max: 47, tier: 'senior' },
+      { min: 42, max: 50, tier: 'director' },
+      { min: 44, max: 52, tier: 'director' },
+      { min: 46, max: 54, tier: 'director' },
+      { min: 46, max: 54, tier: 'vp' },
+      { min: 48, max: 56, tier: 'vp' },
+      { min: 50, max: 58, tier: 'vp' },
+      { min: 48, max: 58, tier: 'csuite' },
+      { min: 50, max: 62, tier: 'csuite' },
+      { min: 52, max: 65, tier: 'csuite' },
+    ]);
+    const age = randInt(ageBand.min, ageBand.max);
+    const tier = ageBand.tier;
+
+    // Step 2: Gender
+    const gender = rand(['Male','Male','Male','Female','Female','Female','Male','Female','Female','Male']);
+
+    // Step 3: Industry (90+ options across all major sectors)
+    const industries = [
+      // Financial Services (12)
+      'Retail Banking','Investment Banking','Private Equity','Venture Capital',
+      'Asset Management','Insurance & Reinsurance','Wealth Management',
+      'Payment Processing & Fintech','Microfinance & Lending','Credit & Risk Analytics',
+      'Commodity Trading','Islamic Finance',
+      // Technology & Software (14)
+      'Enterprise Software & SaaS','Cloud Infrastructure & Services','Cybersecurity',
+      'Semiconductor & Hardware','Artificial Intelligence & Machine Learning',
+      'Data Analytics & Business Intelligence','IT Services & Outsourcing',
+      'ERP & Business Applications','EdTech','HealthTech','LegalTech',
+      'DevOps & Platform Engineering','E-commerce Technology','Digital Payments',
+      // Manufacturing & Industrial (10)
+      'Automotive Manufacturing','Aerospace & Defence','Industrial Machinery & Equipment',
+      'Chemical & Specialty Materials','Pharmaceutical Manufacturing',
+      'FMCG & Consumer Goods Manufacturing','Electronics & Component Manufacturing',
+      'Textile & Apparel Manufacturing','Steel & Metals Processing',
+      'Packaging & Container Manufacturing',
+      // Healthcare & Life Sciences (8)
+      'Hospitals & Health Systems','Pharmaceutical & Biotech',
+      'Medical Devices & Diagnostics','Clinical Research & CRO',
+      'Health Insurance & Managed Care','Genomics & Precision Medicine',
+      'Mental Health & Behavioural Health','Home Healthcare & Telemedicine',
+      // Energy & Resources (8)
+      'Oil & Gas Upstream Exploration','Oil & Gas Downstream & Refining',
+      'Renewable Energy & Clean Tech','Electric Utilities & Grid',
+      'Mining & Minerals','Water & Waste Management',
+      'Nuclear Energy','Energy Trading & Commodity Markets',
+      // Retail & Consumer (8)
+      'Grocery & Supermarkets','Fashion & Luxury Retail',
+      'Electronics & Appliance Retail','E-commerce & Marketplace',
+      'Consumer Electronics & Gadgets','Food & Beverage',
+      'Restaurants & Hospitality','Beauty & Personal Care',
+      // Professional Services (8)
+      'Management Consulting','Accounting, Audit & Tax',
+      'Legal Services & Law Firms','Market Research & Insights',
+      'Recruitment & Executive Search','PR, Communications & Advertising',
+      'Architecture, Engineering & Construction','Real Estate & Property Services',
+      // Transport & Logistics (8)
+      'Air Transport & Aviation','Shipping & Maritime',
+      'Road Freight & Trucking','Rail Transport',
+      'Supply Chain & Third-Party Logistics','Last-Mile Delivery & Courier',
+      'Warehousing & Distribution','Port & Terminal Operations',
+      // Media, Telecoms & Entertainment (8)
+      'Telecommunications & Wireless','Broadcasting & Television',
+      'Digital Advertising & AdTech','Book & Magazine Publishing',
+      'Gaming & Interactive Entertainment','Streaming & OTT Media',
+      'Music & Live Events','Social Media & Content Platforms',
+      // Public Sector & Non-Profit (6)
+      'Central Government & Public Administration','State & Local Government',
+      'Higher Education & Universities','K-12 & Secondary Education',
+      'Non-profit, NGO & Charities','International Development & Aid',
+      // Agriculture & Food (4)
+      'Agribusiness & Crop Production','Food Processing & Distribution',
+      'Aquaculture & Fisheries','Agricultural Technology & Precision Farming',
+    ];
+    const industry = rand(industries);
+
+    // Step 4: Company size — constrained by seniority tier
+    const companySizesByTier = {
+      junior: [
+        '11–50 employees','51–100 employees','101–200 employees',
+        '201–500 employees','501–1,000 employees',
+      ],
+      mid: [
+        '51–100 employees','101–200 employees','201–500 employees',
+        '501–1,000 employees','1,001–5,000 employees',
+      ],
+      senior: [
+        '101–200 employees','201–500 employees','501–1,000 employees',
+        '1,001–5,000 employees','5,001–10,000 employees',
+      ],
+      director: [
+        '201–500 employees','501–1,000 employees','1,001–5,000 employees',
+        '5,001–10,000 employees','10,001–50,000 employees',
+      ],
+      vp: [
+        '501–1,000 employees','1,001–5,000 employees','5,001–10,000 employees',
+        '10,001–50,000 employees','50,000+ employees',
+      ],
+      csuite: [
+        '11–50 employees','51–200 employees','201–500 employees',
+        '501–1,000 employees','1,001–5,000 employees',
+        '5,001–10,000 employees','10,001–50,000 employees','50,000+ employees',
+      ],
+    };
+    const companySize = rand(companySizesByTier[tier]);
+
+    // Step 5: Revenue — derived from company size
+    const revenueBySize = {
+      '11–50 employees':         ['$1M–$5M','$5M–$10M','$10M–$25M'],
+      '51–100 employees':        ['$5M–$25M','$10M–$50M','$25M–$75M'],
+      '101–200 employees':       ['$25M–$75M','$50M–$150M','$75M–$200M'],
+      '201–500 employees':       ['$50M–$200M','$100M–$350M','$250M–$500M'],
+      '501–1,000 employees':     ['$150M–$500M','$300M–$750M','$500M–$1B'],
+      '1,001–5,000 employees':   ['$300M–$1B','$500M–$2B','$1B–$5B'],
+      '5,001–10,000 employees':  ['$1B–$5B','$2B–$7B','$5B–$10B'],
+      '10,001–50,000 employees': ['$3B–$10B','$5B–$20B','$10B–$50B'],
+      '50,000+ employees':       ['$10B–$30B','$20B–$75B','$50B–$200B'],
+    };
+    const revenue = rand(revenueBySize[companySize] || ['$100M–$500M']);
+
+    // Step 6: Department (18 options)
+    const departments = [
+      'Information Technology','Finance & Accounting','Operations & Manufacturing',
+      'Strategy & Corporate Development','Marketing & Brand','Sales & Business Development',
+      'Human Resources & People','Supply Chain & Procurement','Legal, Risk & Compliance',
+      'Product Management','Research & Development','Customer Success & Experience',
+      'Data & Analytics','Digital Transformation','Internal Audit & Controls',
+      'Corporate Affairs & Sustainability','Facilities & Real Estate',
+      'Treasury & Investor Relations',
+    ];
+    const department = rand(departments);
+
+    // Step 7: Job title — strictly constrained by tier
+    const titlesByTier = {
+      junior: [
+        'Analyst','Associate','Coordinator','Executive','Specialist',
+        'Junior Analyst','Research Analyst','Business Analyst','Associate Analyst',
+        'Graduate Analyst','Trainee Associate','Junior Executive','Associate Consultant',
+        'Data Analyst','Operations Analyst','Financial Analyst','Marketing Executive',
+        'Sales Executive','IT Analyst','HR Executive','Procurement Analyst',
+        'Strategy Analyst','Risk Analyst','Compliance Analyst','Product Analyst',
+        'Digital Analyst','Account Executive','Client Servicing Executive',
+        'Customer Success Analyst','Quality Analyst','Process Analyst',
+        'Investment Analyst','Equity Research Analyst','Credit Analyst',
+        'Marketing Analyst','Content Executive','Social Media Executive',
+        'Supply Chain Analyst','Logistics Coordinator','HR Analyst',
+        'Recruitment Executive','Audit Associate','Tax Analyst',
+        'Technical Analyst','Support Engineer','Implementation Analyst',
+      ],
+      mid: [
+        'Senior Analyst','Senior Executive','Senior Associate','Principal Analyst',
+        'Team Lead','Senior Specialist','Consultant','Senior Consultant',
+        'Senior Business Analyst','Senior Data Analyst','Senior Financial Analyst',
+        'Senior Marketing Manager','Senior HR Executive','Senior IT Consultant',
+        'Account Manager','Project Manager','Operations Manager',
+        'Senior Operations Analyst','Product Manager','Senior Product Analyst',
+        'Digital Manager','Senior Risk Analyst','Senior Compliance Analyst',
+        'Senior Procurement Analyst','Campaign Manager','Brand Manager',
+        'Sales Manager','Regional Sales Manager','Technical Lead',
+        'Engineering Manager','Senior Software Engineer','DevOps Lead',
+        'Finance Manager','Senior Accountant','Treasury Analyst',
+        'Senior HR Manager','Talent Acquisition Manager','Learning Manager',
+        'Senior Project Manager','Programme Coordinator','Business Development Manager',
+      ],
+      senior: [
+        'Manager','Senior Manager','Assistant Manager','Group Manager',
+        'Principal Consultant','Senior Project Manager','Programme Manager',
+        'IT Manager','Finance Manager','Marketing Manager','HR Manager',
+        'Operations Manager','Risk Manager','Compliance Manager',
+        'Procurement Manager','Sales Manager','Product Manager',
+        'Digital Manager','Data Manager','Strategy Manager',
+        'Key Account Manager','Client Relationship Manager',
+        'Category Manager','Channel Manager','Portfolio Manager',
+        'P&L Manager','Factory Manager','Plant Manager',
+        'Regional Manager','Country Operations Manager','Business Unit Manager',
+        'Technical Programme Manager','Enterprise Architect',
+        'Senior Finance Manager','Senior IT Manager','Senior HR Manager',
+        'Transformation Manager','Change Manager','Innovation Manager',
+      ],
+      director: [
+        'Director','Senior Director','Associate Director',
+        'Director of Operations','Finance Director','IT Director',
+        'Marketing Director','HR Director','Commercial Director',
+        'Sales Director','Technology Director','Director of Strategy',
+        'Director of Analytics','Director of Procurement','Director of Digital',
+        'Director of Risk','Director of Compliance','Director of Product',
+        'Director of Partnerships','Director of Customer Success',
+        'Director of Supply Chain','Director of Engineering',
+        'Director of Innovation','Director of Transformation',
+        'Director of Business Development','Regional Director',
+        'Divisional Director','Country Director','Global Director',
+        'Director of Finance & Planning','Director of People & Culture',
+        'Director of Corporate Affairs','Director of Internal Audit',
+        'Director of Treasury','Director of Investor Relations',
+      ],
+      vp: [
+        'Vice President','Senior Vice President','Executive Vice President',
+        'VP of Technology','VP of Finance','VP of Operations','VP of Sales',
+        'VP of Marketing','VP of Strategy','VP of Product','VP of HR',
+        'VP of Supply Chain','VP of Digital','VP of Risk','VP of Analytics',
+        'VP of Business Development','VP of Customer Experience',
+        'VP of Engineering','VP of Data','VP of Compliance',
+        'VP of Corporate Development','VP of Procurement','VP of Commercial',
+        'Head of Technology','Head of Finance','Head of Operations',
+        'Head of Marketing','Head of Strategy','Head of Digital',
+        'Head of Data & Analytics','Head of IT Infrastructure',
+        'Head of Human Resources','Head of Risk','Head of Compliance',
+        'Head of Procurement','Head of Sales','Head of Product',
+        'Head of Customer Success','Head of Engineering',
+        'Head of Transformation','Head of Innovation','Head of AI',
+        'Head of Cybersecurity','Head of Enterprise Architecture',
+        'Head of Supply Chain','Head of Corporate Finance',
+        'Head of Treasury','Head of Internal Audit',
+      ],
+      csuite: [
+        'Chief Executive Officer','Chief Operating Officer','Chief Financial Officer',
+        'Chief Technology Officer','Chief Information Officer','Chief Marketing Officer',
+        'Chief Human Resources Officer','Chief Strategy Officer',
+        'Chief Digital Officer','Chief Data Officer','Chief Risk Officer',
+        'Chief Commercial Officer','Chief Product Officer','Chief Procurement Officer',
+        'Chief Analytics Officer','Chief Transformation Officer',
+        'Chief Customer Officer','Chief Revenue Officer','Chief Legal Officer',
+        'Chief Compliance Officer','Chief Administrative Officer',
+        'Managing Director','Executive Director','Group CEO',
+        'Group CFO','Group CTO','Group COO','Group CIO',
+        'President','President & CEO','President & COO',
+        'General Manager','Country Manager','Regional Managing Director',
+        'Founder & CEO','Co-Founder & CTO','Chairman & CEO',
+      ],
+    };
+    const jobTitle = rand(titlesByTier[tier]);
+
+    // Step 8: Professional attitude (15 options)
+    const attitudes = [
+      'pragmatic and data-driven, focused on measurable ROI and business outcomes',
+      'innovation-focused early adopter, comfortable with calculated risk and experimentation',
+      'cautious and process-oriented, prefers proven solutions with strong vendor track records',
+      'cost-conscious and efficiency-driven, always optimising spend and eliminating waste',
+      'growth-oriented and ambitious, focused on scaling operations and capturing market share',
+      'relationship-driven and collaborative, prioritises long-term partnerships over transactions',
+      'compliance-first and risk-averse, security and regulatory requirements drive every decision',
+      'employee-centric leader, culture, talent retention, and team development come first',
+      'customer-obsessed, every technology and process decision is filtered through end-user impact',
+      'metrics-driven and analytical, builds detailed business cases before any major commitment',
+      'strategic long-term thinker, evaluates decisions on 3–5 year horizon not short-term gains',
+      'operationally excellent, relentlessly focused on process automation and standardisation',
+      'sustainability-conscious, ESG and environmental impact influence vendor and technology choices',
+      'fast-moving and decisive, prefers speed of execution over perfect planning',
+      'people-first but commercially astute, balances team wellbeing with hard business outcomes',
+    ];
+
+    // Step 9: AI maturity (7 options)
+    const aiMaturity = rand([
+      'early in AI adoption — still evaluating potential use cases and ROI',
+      'has run pilots and proofs-of-concept with mixed results so far',
+      'actively deploying AI tools across several business functions',
+      'AI is a board-level strategic priority with dedicated budget and headcount',
+      'sceptical of AI hype — focused on proven productivity and automation tools first',
+      'uses AI tools daily for personal and team productivity, exploring enterprise applications',
+      'building internal AI capabilities through upskilling, hiring, and vendor partnerships',
+    ]);
+
+    // Step 10: Years of experience — derived from age
+    const yearsExp = age - randInt(20, 23);
+
     return [
-      "You are a realistic survey respondent — a mid-level professional in a corporate setting.",
-      "Age: 30–45. Gender: unspecified. Country: India. Language: English.",
-      "You answer all questions honestly and consistently as this type of person.",
-      "You are not extreme in any view — you are measured, practical, and grounded.",
+      `── GENERATED RESPONDENT PROFILE ──`,
+      `Age: ${age} years old. Gender: ${gender}.`,
+      `Years of professional experience: approximately ${yearsExp} years.`,
+      `Job Title: ${jobTitle}.`,
+      `Department / Function: ${department}.`,
+      `Industry: ${industry}.`,
+      `Company Size: ${companySize}.`,
+      `Company Annual Revenue: ${revenue}.`,
+      `Country: India. Language: English.`,
+      ``,
+      `Professional attitude: ${rand(attitudes)}.`,
+      `AI & technology maturity: ${aiMaturity}.`,
+      ``,
+      `You ARE this person. Answer every survey question from their specific viewpoint.`,
+      `A ${jobTitle} in ${industry} with ${yearsExp} years of experience has formed strong,`,
+      `specific opinions. Your answers should reflect the budget authority, vendor knowledge,`,
+      `decision-making scope, and industry exposure appropriate to this exact profile.`,
+      `Do NOT answer like a generic respondent — answer like THIS person specifically.`,
     ].join("\n");
+  }
 
   const attrs = persona.behavioural_attrs || {};
   const isB2B = !!(attrs.designation || attrs.department || attrs.industry);
@@ -1639,21 +1936,16 @@ const buildPersonaContext = (persona) => {
   if (persona.gender) lines.push(`Gender: ${persona.gender}`);
   if (attrs.educationLevel) lines.push(`Education: ${attrs.educationLevel}`);
   if (attrs.maritalStatus) lines.push(`Marital Status: ${attrs.maritalStatus}`);
-  if (attrs.childrenStatus)
-    lines.push(`Children / Dependants: ${attrs.childrenStatus}`);
-  if (attrs.annualIncome)
-    lines.push(`Annual Personal Income: ${attrs.annualIncome}`);
+  if (attrs.childrenStatus) lines.push(`Children / Dependants: ${attrs.childrenStatus}`);
+  if (attrs.annualIncome) lines.push(`Annual Personal Income: ${attrs.annualIncome}`);
 
   if (isB2B) {
     lines.push("", "── PROFESSIONAL PROFILE ──");
     if (attrs.designation) lines.push(`Job Title: ${attrs.designation}`);
-    if (attrs.department)
-      lines.push(`Department / Function: ${attrs.department}`);
+    if (attrs.department) lines.push(`Department / Function: ${attrs.department}`);
     if (attrs.industry) lines.push(`Industry: ${attrs.industry}`);
-    if (attrs.companyRevenue)
-      lines.push(`Company Annual Revenue: ${attrs.companyRevenue}`);
-    if (attrs.employeeSize)
-      lines.push(`Company Size (employees): ${attrs.employeeSize}`);
+    if (attrs.companyRevenue) lines.push(`Company Annual Revenue: ${attrs.companyRevenue}`);
+    if (attrs.employeeSize) lines.push(`Company Size (employees): ${attrs.employeeSize}`);
   }
 
   lines.push("", "── DEVICE & SURVEY BEHAVIOUR ──");
@@ -1670,60 +1962,34 @@ const buildPersonaContext = (persona) => {
 
   if (attrs.secondaryDescription) {
     lines.push("", "── FULL CHARACTER BRIEF ──");
-    lines.push(
-      "Read this carefully — it defines your mindset, priorities, opinions, and habits:",
-    );
+    lines.push("Read this carefully — it defines your mindset, priorities, opinions, and habits:");
     lines.push(attrs.secondaryDescription);
   }
 
   lines.push("", "── HOW YOU ANSWER THIS SURVEY ──");
-  lines.push(
-    "1. You answer as this specific person — not as a generic AI respondent.",
-  );
-  lines.push(
-    "2. Your opinions, experiences, and choices are consistent with your background above.",
-  );
-  lines.push(
-    "3. You are not gaming the survey — you answer honestly as this persona.",
-  );
-  lines.push(
-    "4. You use natural variation — you do not always pick the middle or safe option.",
-  );
-  lines.push(
-    `5. Response style: ${attrs.responseStyle || "balanced and measured — not too brief, not too elaborate"}.`,
-  );
-  lines.push(
-    "6. You keep all answers consistent with everything you have answered before in this session.",
-  );
+  lines.push("1. You answer as this specific person — not as a generic AI respondent.");
+  lines.push("2. Your opinions, experiences, and choices are consistent with your background above.");
+  lines.push("3. You are not gaming the survey — you answer honestly as this persona.");
+  lines.push("4. You use natural variation — you do not always pick the middle or safe option.");
+  lines.push(`5. Response style: ${attrs.responseStyle || "balanced and measured — not too brief, not too elaborate"}.`);
+  lines.push("6. You keep all answers consistent with everything you have answered before in this session.");
 
-  // ── HARD CONSTRAINTS — non-negotiable persona facts ──────────────────────
-  // These are injected separately so the AI treats them as deterministic,
-  // not as background colour. AI must find the closest matching survey option.
   const constraints = [];
-  if (persona.country)
-    constraints.push(`• Respondent country / location → ${persona.country}`);
+  if (persona.country) constraints.push(`• Respondent country / location → ${persona.country}`);
   const a = persona.behavioural_attrs || {};
   if (a.industry) constraints.push(`• Industry / sector → ${a.industry}`);
   if (a.designation) constraints.push(`• Job title / role → ${a.designation}`);
-  if (a.department)
-    constraints.push(`• Department / function → ${a.department}`);
-  if (a.companyRevenue)
-    constraints.push(`• Company annual revenue → ${a.companyRevenue}`);
-  if (a.employeeSize)
-    constraints.push(`• Company size (employees) → ${a.employeeSize}`);
-  if (persona.age_min && persona.age_max)
-    constraints.push(`• Age → ${persona.age_min}–${persona.age_max} years old`);
+  if (a.department) constraints.push(`• Department / function → ${a.department}`);
+  if (a.companyRevenue) constraints.push(`• Company annual revenue → ${a.companyRevenue}`);
+  if (a.employeeSize) constraints.push(`• Company size (employees) → ${a.employeeSize}`);
+  if (persona.age_min && persona.age_max) constraints.push(`• Age → ${persona.age_min}–${persona.age_max} years old`);
   if (persona.gender) constraints.push(`• Gender → ${persona.gender}`);
 
   if (constraints.length > 0) {
     lines.push("");
     lines.push("── HARD CONSTRAINTS (non-negotiable) ──");
-    lines.push(
-      "When a survey question relates to any item below, you MUST select",
-    );
-    lines.push(
-      "the closest matching option available — even if the wording differs.",
-    );
+    lines.push("When a survey question relates to any item below, you MUST select");
+    lines.push("the closest matching option available — even if the wording differs.");
     lines.push("Do NOT deviate from these facts under any circumstances:");
     constraints.forEach((c) => lines.push(c));
   }
@@ -3266,31 +3532,61 @@ const buildCountryLogicIntent = (countryLogic, proxyCountry) => {
 
 const initFactSheet = (persona, country) => {
   const attrs = persona?.behavioural_attrs || {};
+
+  // When no persona is assigned, seed with randomized but logically consistent defaults
+  // so different no-persona sessions start from genuinely different baselines
+  const rd = !persona ? (() => {
+    const r = (arr) => arr[Math.floor(Math.random() * arr.length)];
+    const tiers = ['junior','mid','senior','director','vp','csuite'];
+    const tier = r(tiers);
+    return {
+      title: r({
+        junior:   ['Analyst','Business Analyst','Financial Analyst','IT Analyst','Research Analyst'],
+        mid:      ['Senior Analyst','Senior Manager','Consultant','Project Manager','Account Manager'],
+        senior:   ['Manager','Senior Manager','Programme Manager','IT Manager','Finance Manager'],
+        director: ['Director','Senior Director','Associate Director','Finance Director','IT Director'],
+        vp:       ['Vice President','Head of Technology','Head of Finance','Head of Operations','VP of Strategy'],
+        csuite:   ['Chief Technology Officer','Chief Financial Officer','Chief Operating Officer','Managing Director','CEO'],
+      }[tier]),
+      dept: r(['Information Technology','Finance & Accounting','Operations','Strategy','Marketing','Procurement','Risk & Compliance','Data & Analytics']),
+      industry: r(['Financial Services','Manufacturing','Healthcare','Technology & Software','Retail','Energy','Professional Services','Telecommunications','Pharmaceutical']),
+      size: r({
+        junior:   ['101–200 employees','201–500 employees'],
+        mid:      ['201–500 employees','501–1,000 employees'],
+        senior:   ['501–1,000 employees','1,001–5,000 employees'],
+        director: ['1,001–5,000 employees','5,001–10,000 employees'],
+        vp:       ['5,001–10,000 employees','10,001–50,000 employees'],
+        csuite:   ['201–500 employees','501–1,000 employees','1,001–5,000 employees'],
+      }[tier]),
+      revenue: r({
+        junior:   ['$10M–$50M','$25M–$100M'],
+        mid:      ['$50M–$250M','$100M–$500M'],
+        senior:   ['$100M–$500M','$250M–$1B'],
+        director: ['$500M–$2B','$1B–$5B'],
+        vp:       ['$1B–$5B','$5B–$10B'],
+        csuite:   ['$250M–$1B','$500M–$2B','$1B–$5B'],
+      }[tier]),
+    };
+  })() : null;
+
   return {
-    gender: persona?.gender || null,
-    age: persona?.age_min
-      ? `${persona.age_min}${persona.age_max ? "–" + persona.age_max : "+"}`
-      : null,
-    job_title: attrs.designation || null,
-    seniority_level: null,
-    industry: attrs.industry || null,
-    country: country || persona?.country || null,
-    company_size: attrs.employeeSize || null,
-    company_revenue: attrs.companyRevenue || null,
+    gender:             persona?.gender || null,
+    age:                persona?.age_min ? `${persona.age_min}${persona.age_max ? '–' + persona.age_max : '+'}` : null,
+    job_title:          attrs.designation  || rd?.title    || null,
+    seniority_level:    null,
+    industry:           attrs.industry     || rd?.industry || null,
+    country:            country || persona?.country || null,
+    company_size:       attrs.employeeSize || rd?.size     || null,
+    company_revenue:    attrs.companyRevenue || rd?.revenue || null,
     ai_adoption_status: null,
-    ai_budget: null,
-    current_vendors: null,
-    purchase_timeline: null,
-    decision_maker: null,
-    brand_awareness: {
-      aware_of: [],
-      not_aware_of: [],
-      used: [],
-      satisfaction: {},
-    },
-    committed_numbers: {},
-    survey_specific: {},
-    pageHistory: [],
+    ai_budget:          null,
+    current_vendors:    null,
+    purchase_timeline:  null,
+    decision_maker:     null,
+    brand_awareness:    { aware_of: [], not_aware_of: [], used: [], satisfaction: {} },
+    committed_numbers:  {},
+    survey_specific:    {},
+    pageHistory:        [],
   };
 };
 
@@ -4019,10 +4315,10 @@ const processSession = async (job) => {
 
   const useAI = !!providerConfig;
 
-  if (useAI && persona) {
+    if (useAI) {
     try {
       agentSetup = await prepareSessionAgent(
-        persona,
+        persona,      // may be null — prepareSessionAgent handles null persona
         scenario,
         countryLogic,
         projectId,
