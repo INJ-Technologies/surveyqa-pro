@@ -443,7 +443,7 @@ const detectUnit = (text) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // FILL FOLLOWUP INPUT — revealed inputs after radio click
 // ══════════════════════════════════════════════════════════════════════════════
-const fillFollowupInput = async (page) => {
+const fillFollowupInput = async (page, personaBrief = null) => {
   try {
     await page.waitForTimeout(900);
     const filledByContainer = await page
@@ -554,7 +554,76 @@ const fillFollowupInput = async (page) => {
           .catch(() => false);
         if (!isInChecked) continue;
         const existing = await input.inputValue().catch(() => "");
-        if (existing && existing.trim() !== "") return true;
+                if (existing && existing.trim() !== "") return true;
+
+        // ── Detect if this is a text "specify" field (wants text, not a number) ──
+        const surroundingText = await input.evaluate((el) => {
+          let node = el.parentElement;
+          for (let i = 0; i < 8; i++) {
+            const t = (node?.innerText || '').trim().toLowerCase();
+            if (t.length > 3) return t;
+            node = node?.parentElement;
+          }
+          return '';
+        }).catch(() => '');
+
+        const isSpecifyField = /please specify|specify|job title|designation|role title|position|your title|your role|your job/i.test(surroundingText)
+          || input.getAttribute('type').then(t => t === 'text').catch(() => false);
+
+        const inputType = await input.getAttribute('type').catch(() => 'text');
+
+        if (inputType === 'text' && /specify|title|designation|role|position|name|describe/i.test(surroundingText)) {
+          // This is a "please specify" text field — needs text, not a number
+          // Get the selected radio label to infer what to type
+          const selectedLabel = await page.evaluate(() => {
+            const checked = document.querySelector('input[type="radio"]:checked');
+            if (!checked) return '';
+            if (checked.id) {
+              const lbl = document.querySelector(`label[for="${checked.id}"]`);
+              if (lbl) return (lbl.innerText || '').trim();
+            }
+            const pl = checked.closest('label');
+            if (pl) return (pl.innerText || '').trim();
+            return '';
+          }).catch(() => '');
+
+          // Extract a short specific text from the selected option context
+          // e.g. if selected = "C-suite (please specify)" and persona is CTO → "CTO"
+          let specifyText = '';
+
+          // Try to infer from persona context passed via closure — use global agentSetup
+          // Since we don't have persona here, use the surrounding label for clues
+          if (/c.?suite|executive|c-level/i.test(selectedLabel)) {
+            // Try to extract title from persona brief first
+            if (personaBrief) {
+              const titleMatch = personaBrief.match(/Job Title:\s*([^\n]+)/i)
+                || personaBrief.match(/job_title['":\s]+([^\n,'"]+)/i);
+              if (titleMatch) {
+                specifyText = titleMatch[1].trim().slice(0, 50);
+              }
+            }
+            if (!specifyText) {
+              const csuiteOptions = ['CEO', 'CFO', 'CTO', 'COO', 'CIO', 'CMO', 'CHRO', 'CPO', 'CDO', 'CSO'];
+              specifyText = csuiteOptions[Math.floor(Math.random() * csuiteOptions.length)];
+            }
+          } else if (/director/i.test(selectedLabel)) {
+            specifyText = 'Director of Technology';
+          } else if (/vp|vice president/i.test(selectedLabel)) {
+            specifyText = 'Vice President';
+          } else if (/manager/i.test(selectedLabel)) {
+            specifyText = 'Senior Manager';
+          } else {
+            // Generic fallback for other specify fields
+            specifyText = surroundingText.includes('industry') ? 'Technology Services'
+              : surroundingText.includes('country') ? 'India'
+              : surroundingText.includes('compan') ? 'Enterprise Solutions Ltd'
+              : 'Other professional services';
+          }
+
+          await input.fill(specifyText).catch(() => {});
+          console.log(`[Scenario] ✓ Specify field filled: "${specifyText}" (context: "${surroundingText.slice(0,50)}")`);
+          return true;
+        }
 
         let min = null,
           max = null;
@@ -805,8 +874,23 @@ You MUST respond with ONLY the JSON object below. Do not write any explanation, 
           const decisions = JSON.parse(
             rawText.replace(/```json|```/g, "").trim(),
           );
-          for (const ans of decisions.answers || []) {
-            const field = revealed[ans.fieldIndex];
+    for (const ans of decisions.answers || []) {
+      const field = actionableFields[ans.fieldIndex];
+      if (!field) {
+        console.warn(`[AI] fieldIndex ${ans.fieldIndex} not found`);
+        continue;
+      }
+
+      // Skip radio fields that are already checked (filled by scenario)
+      if (ans.fieldType === 'radio' && field.groupName) {
+        const alreadyChecked = await page.evaluate((name) => {
+          return !!document.querySelector(`input[type="radio"][name="${name}"]:checked`);
+        }, field.groupName).catch(() => false);
+        if (alreadyChecked) {
+          console.log(`[AI] Skipping radio [${field.groupIndex}] — already answered by scenario`);
+          continue;
+        }
+      }
             if (!field) continue;
             if (field.fieldType === "radio") {
               const allRadios = await page
@@ -2106,7 +2190,7 @@ const captureAllPageFields = async (page) => {
               if (qt) questionLabel = (qt.innerText || '').trim().slice(0, 150);
             }
             // Replace any existing duplicate cbGroups for this table with the deduplicated version
-            fields.push({
+                        fields.push({
               fieldType: 'checkbox',
               groupIndex: fields.filter(f => f.fieldType === 'checkbox').length,
               groupName: `multicolumn_${fields.length}`,
@@ -3195,7 +3279,7 @@ JSON RULES:
                 }
               }
 
-              await fillFollowupInput(page);
+              await fillFollowupInput(page, prebuiltPersonaContext);
               const label = field.options?.[idx] || `option ${idx}`;
               answersGiven.push({
                 type: "radio",
@@ -3215,8 +3299,14 @@ JSON RULES:
             for (const cb of allCbs) {
               if (await cb.isVisible().catch(() => false)) visible.push(cb);
             }
+            const groupIdx = field.groupIndex ?? 0; // safety: undefined → 0
             let groupStart = 0;
-            for (let gi = 0; gi < field.groupIndex; gi++) {
+            for (let gi = 0; gi < groupIdx; gi++) {
+              const pf = actionableFields.find(
+                (f) => f.fieldType === "checkbox" && (f.groupIndex ?? 0) === gi,
+              );
+              if (pf) groupStart += pf.options?.length || 0;
+            }
               const pf = actionableFields.find(
                 (f) => f.fieldType === "checkbox" && f.groupIndex === gi,
               );
