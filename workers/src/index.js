@@ -4098,10 +4098,11 @@ const processSession = async (job) => {
       // ── Question extraction ─────────────────────────────────────────────────
       let pageTitle = "";
       let questionsOnPage = [];
+      let instructionsOnPage = [];
       try {
         pageTitle = await page.title();
-                questionsOnPage = await extractQuestionsFromPage(page);
-        const instructionsOnPage = await extractQuestionInstructions(page);
+        questionsOnPage = await extractQuestionsFromPage(page);
+        instructionsOnPage = await extractQuestionInstructions(page);
         console.log(
           `[Worker] Questions detected (${questionsOnPage.length}): [${questionsOnPage.map((q) => `"${q.slice(0, 50)}"`).join(", ")}]`,
         );
