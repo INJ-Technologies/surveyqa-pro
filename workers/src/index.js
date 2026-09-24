@@ -1677,23 +1677,11 @@ const findMatchingStep = (scenario, questionsOnPage, pageNum) => {
 // ══════════════════════════════════════════════════════════════════════════════
 const buildPersonaContext = (persona, sessionCountry = null) => {
   if (!persona) {
-    // ── Randomized realistic persona generator ────────────────────────────────
-    // Age is the anchor — all other attributes derive from it logically.
-    // A 25-year-old analyst cannot run a $5B IT budget.
     const rand = (arr) => arr[Math.floor(Math.random() * arr.length)];
     const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
-        // Resolve country display name from ISO code or use as-is
-    const countryDisplayMap = {
-      US: 'United States', IN: 'India', GB: 'United Kingdom', DE: 'Germany',
-      FR: 'France', JP: 'Japan', AU: 'Australia', SG: 'Singapore',
-      AE: 'UAE', CA: 'Canada', NL: 'Netherlands', IT: 'Italy',
-      ES: 'Spain', CN: 'China', BR: 'Brazil', MX: 'Mexico',
-      KR: 'South Korea', ZA: 'South Africa',
-    };
-    const _sessionCountry = sessionCountry
-      ? (countryDisplayMap[sessionCountry.toUpperCase()] || sessionCountry)
-      : null;
+    // sessionCountry is already the resolved full name (resolved from DB in processSession)
+    const _sessionCountry = sessionCountry || null;
 
     // Step 1: Age band determines tier
     const ageBand = rand([
@@ -2788,29 +2776,9 @@ const answerPageWithAI = async (
 
     // Inject session country as hard override — prevents AI inventing wrong country
     // This fires even when no persona or Country Logic scenario is configured
-    const countryIsoMap = {
-      IN: "India",
-      GB: "United Kingdom",
-      US: "United States",
-      DE: "Germany",
-      FR: "France",
-      JP: "Japan",
-      AU: "Australia",
-      SG: "Singapore",
-      AE: "UAE",
-      CA: "Canada",
-      NL: "Netherlands",
-      IT: "Italy",
-      ES: "Spain",
-      CN: "China",
-      BR: "Brazil",
-      MX: "Mexico",
-      KR: "South Korea",
-      ZA: "South Africa",
-    };
-    const countryFullName = sessionCountry
-      ? countryIsoMap[sessionCountry.toUpperCase()] || sessionCountry
-      : null;
+    // sessionCountry is already the full name resolved from DB in processSession
+    const countryFullName = sessionCountry || null;
+
     const sessionCountryNote = countryFullName
       ? `\n⚠️ SESSION COUNTRY OVERRIDE — ABSOLUTE MANDATORY RULE:\nThis session is configured for: ${countryFullName} (${sessionCountry}).\nFor ANY question about country, location, headquarters, or region:\n→ You MUST select "${countryFullName}" or the closest matching option.\n→ This overrides ALL other reasoning, persona details, or company associations.\n→ Do NOT select Germany, USA, or any other country.\n→ Violation of this rule means session failure.\n`
       : "";
@@ -4391,15 +4359,31 @@ const processSession = async (job) => {
   const tracePath = path.join(TRACES_DIR, `${sessionId}.zip`);
   const pages = [];
 
-  // Build persona context ONCE — stored and reused across all pages this session
-  const sessionPersonaBrief = buildPersonaContext(persona, proxyCountry);
+  // Resolve ISO code → full country name from DB (same table used by persona/countryLogic)
+  let resolvedProxyCountry = proxyCountry || null;
+  if (proxyCountry) {
+    try {
+      const cr = await pool.query(
+        `SELECT country FROM proxy_countries WHERE UPPER(code) = UPPER($1) LIMIT 1`,
+        [proxyCountry],
+      );
+      if (cr.rows[0]?.country) {
+        resolvedProxyCountry = cr.rows[0].country;
+        console.log(`[Session] Country resolved: ${proxyCountry} → "${resolvedProxyCountry}"`);
+      }
+    } catch (e) {
+      console.warn(`[Session] Country resolution failed: ${e.message}`);
+    }
+  }
+
+  const sessionPersonaBrief = buildPersonaContext(persona, resolvedProxyCountry);
   console.log(`[Session] Persona brief: ${sessionPersonaBrief.split('\n').slice(0,3).join(' | ')}`);
 
   let agentSetup = {
     personaBrief: sessionPersonaBrief,
     quotaCellText: "Not resolved",
     intentMap: buildIntentMap(scenario),
-    factSheet: initFactSheet(persona, proxyCountry),
+    factSheet: initFactSheet(persona, resolvedProxyCountry),
   };
 
   // ── Resolve AI provider / model ────────────────────────────────────────────
@@ -4508,13 +4492,13 @@ const processSession = async (job) => {
     if (useAI) {
     try {
       agentSetup = await prepareSessionAgent(
-        persona,      // may be null — prepareSessionAgent handles null persona
+        persona,
         scenario,
         countryLogic,
         projectId,
-        proxyCountry,
+        resolvedProxyCountry,   // full name, not ISO code
         providerConfig,
-        sessionPersonaBrief,   // pass the already-built brief — never regenerate
+        sessionPersonaBrief,
       );
     } catch (e) {
       console.warn("[Agent] prepareSessionAgent failed:", e.message);
@@ -4876,9 +4860,9 @@ const processSession = async (job) => {
             questionsOnPage,
             pageOptionsBefore,
             providerConfig,
-            proxyCountry,
-             instructionsOnPage,
-             agentSetup.personaBrief,   // ← consistent across all pages
+            resolvedProxyCountry,   // full name from DB, not ISO code
+            instructionsOnPage,
+            agentSetup.personaBrief,
           );
 
           if (answersGiven?.length > 0) {
