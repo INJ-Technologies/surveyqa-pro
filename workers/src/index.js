@@ -1435,6 +1435,30 @@ const executeScenarioAction = async (page, step) => {
     }
     if (action === "select_one_of") {
       const { groupMap, groupOrder } = await getRadioGroups();
+
+      // If no radio groups found, try checkboxes
+      if (groupOrder.length === 0) {
+        const allCbs = await page.locator('input[type="checkbox"]').all();
+        const visibleCbs = [];
+        for (const cb of allCbs) {
+          if (await cb.isVisible().catch(() => false)) visibleCbs.push(cb);
+        }
+        const validCbs = vals.filter(v => v >= 1 && v <= visibleCbs.length).map(v => visibleCbs[v - 1]);
+        if (validCbs.length === 0) return null;
+        const chosen = validCbs[Math.floor(Math.random() * validCbs.length)];
+        try {
+          const id = await chosen.getAttribute('id').catch(() => null);
+          if (id) {
+            const lbl = page.locator(`label[for="${id}"]`);
+            if (await lbl.isVisible().catch(() => false)) { await lbl.click(); await page.waitForTimeout(150); }
+          } else {
+            await chosen.evaluate(el => { el.click(); el.dispatchEvent(new Event('change', { bubbles: true })); });
+          }
+        } catch {}
+        console.log(`[Scenario] select_one_of (checkbox) → option selected`);
+        return [{ type: 'checkbox', scenarioControlled: true }];
+      }
+
       if (groupOrder.length === 0) return null;
       const options = groupMap[groupOrder[0]];
       const valid = vals.filter((v) => v >= 1 && v <= options.length);
@@ -1456,6 +1480,42 @@ const executeScenarioAction = async (page, step) => {
     }
     if (action === "select_not_in") {
       const { groupMap, groupOrder } = await getRadioGroups();
+
+      // If no radio groups found, try checkboxes instead
+      if (groupOrder.length === 0) {
+        const allCbs = await page.locator('input[type="checkbox"]').all();
+        const visibleCbs = [];
+        for (const cb of allCbs) {
+          if (await cb.isVisible().catch(() => false)) visibleCbs.push(cb);
+        }
+        if (visibleCbs.length === 0) return null;
+
+        const excludeIdxs = new Set(vals.map(v => v - 1));
+        const available = visibleCbs.filter((_, i) => !excludeIdxs.has(i));
+        if (available.length === 0) return null;
+
+        // Select 2-4 random available checkboxes
+        const count = Math.min(available.length, Math.floor(Math.random() * 3) + 2);
+        const shuffled = available.sort(() => Math.random() - 0.5).slice(0, count);
+        for (const cb of shuffled) {
+          try {
+            const id = await cb.getAttribute('id').catch(() => null);
+            if (id) {
+              const lbl = page.locator(`label[for="${id}"]`);
+              if (await lbl.isVisible().catch(() => false)) {
+                await lbl.click();
+                await page.waitForTimeout(150);
+                continue;
+              }
+            }
+            await cb.evaluate(el => { el.click(); el.dispatchEvent(new Event('change', { bubbles: true })); });
+            await page.waitForTimeout(150);
+          } catch {}
+        }
+        console.log(`[Scenario] select_not_in (checkbox) → selected ${shuffled.length} of ${visibleCbs.length} available`);
+        return [{ type: 'checkbox', scenarioControlled: true }];
+      }
+
       if (groupOrder.length === 0) return null;
       const options = groupMap[groupOrder[0]];
       const excludeIdxs = new Set(vals.map((v) => v - 1));
@@ -2078,49 +2138,101 @@ const captureAllPageFields = async (page) => {
       });
       const cbGroups = {};
       const cbOrder = [];
-      document.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+            document.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
         if (!cb.offsetParent) return;
         const name = cb.name || cb.closest("fieldset")?.id || "cb_group";
         if (!cbGroups[name]) {
           cbGroups[name] = [];
           cbOrder.push(name);
         }
+
         let label = "";
+
+        // Strategy 1: explicit label[for] — most reliable
         if (cb.id) {
           const lbl = document.querySelector(`label[for="${cb.id}"]`);
-          if (lbl) label = (lbl.innerText || "").trim();
+          if (lbl) label = (lbl.innerText || lbl.textContent || "").replace(/\s+/g, ' ').trim();
         }
+
+        // Strategy 2: ancestor label element
         if (!label) {
           const pl = cb.closest("label");
-          if (pl) label = (pl.innerText || "").trim();
+          if (pl) {
+            const clone = pl.cloneNode(true);
+            clone.querySelectorAll('input').forEach(n => n.remove());
+            label = (clone.innerText || clone.textContent || "").replace(/\s+/g, ' ').trim();
+          }
         }
+
+        // Strategy 3: next sibling span/div/text (Decipher wraps label text this way)
         if (!label) {
-          // Try sibling text node
+          let sib = cb.nextElementSibling;
+          if (sib && !sib.querySelector('input')) {
+            label = (sib.innerText || sib.textContent || "").replace(/\s+/g, ' ').trim();
+          }
+        }
+
+        // Strategy 4: parent cell text minus the input
+        if (!label) {
+          const cell = cb.closest('td, li, div.answer, div.option, [class*="answer"], [class*="option"]');
+          if (cell) {
+            const clone = cell.cloneNode(true);
+            clone.querySelectorAll('input, button').forEach(n => n.remove());
+            const t = (clone.innerText || clone.textContent || "").replace(/\s+/g, ' ').trim();
+            if (t.length > 0 && t.length < 300) label = t;
+          }
+        }
+
+        // Strategy 5: text nodes adjacent to checkbox
+        if (!label) {
           const parent = cb.parentElement;
           if (parent) {
-            const text = Array.from(parent.childNodes)
-              .filter((n) => n.nodeType === 3)
-              .map((n) => n.textContent.trim())
-              .filter((t) => t.length > 0)
-              .join(" ");
-            if (text) label = text;
+            const texts = Array.from(parent.childNodes)
+              .filter(n => n.nodeType === 3 || (n.nodeType === 1 && !n.querySelector('input')))
+              .map(n => (n.textContent || '').replace(/\s+/g, ' ').trim())
+              .filter(t => t.length > 1);
+            if (texts.length) label = texts.join(' ');
           }
         }
+
+        // Strategy 6: aria-label or title attribute
         if (!label) {
-          // Try next sibling element
-          let sib = cb.nextSibling;
-          while (sib) {
-            const t = (sib.textContent || "").trim();
-            if (t.length > 2) {
-              label = t;
-              break;
-            }
-            sib = sib.nextSibling;
-          }
+          label = cb.getAttribute('aria-label') || cb.getAttribute('title') || '';
+          label = label.replace(/\s+/g, ' ').trim();
         }
+
         cbGroups[name].push({ label, checked: cb.checked });
       });
-            // ── Multi-column checkbox detection ──────────────────────────────────
+
+            // ── Merge checkbox groups that belong to the same question block ──────
+      // Decipher sometimes gives each checkbox a unique name attribute
+      // even though they're visually one multi-select question.
+      // Detect by checking if their qblock parent is the same element.
+      const mergedCbGroups = {};
+      const mergedCbOrder = [];
+      const qblockToGroupName = {};
+
+      cbOrder.forEach(name => {
+        const firstCb = document.querySelector(`input[type="checkbox"][name="${name}"]`);
+        const qblock = firstCb?.closest('.qblock, .question, [class*="qblock"], fieldset');
+        const qblockKey = qblock ? (qblock.className + '|' + (qblock.id || '') + '|' + (qblock.dataset?.id || '')) : name;
+
+        if (!qblockToGroupName[qblockKey]) {
+          qblockToGroupName[qblockKey] = name;
+          mergedCbGroups[name] = [];
+          mergedCbOrder.push(name);
+        }
+        const targetGroup = qblockToGroupName[qblockKey];
+        mergedCbGroups[targetGroup].push(...(cbGroups[name] || []));
+      });
+
+      // Replace cbGroups and cbOrder with merged versions
+      Object.keys(cbGroups).forEach(k => delete cbGroups[k]);
+      Object.assign(cbGroups, mergedCbGroups);
+      cbOrder.length = 0;
+      cbOrder.push(...mergedCbOrder);
+
+      // ── Multi-column checkbox detection ──────────────────────────────────
       // Rule: columns WITH headers = separate questions (answer each column)
       //       columns WITHOUT headers = single list split visually (deduplicate)
       const gridTables = document.querySelectorAll('table');
@@ -3358,8 +3470,30 @@ JSON RULES:
                 } catch {}
               }
 
-              if (clicked) {
-                selected.push(field.options?.[idx] || `option ${idx}`);
+                            if (clicked) {
+                const optLabel = field.options?.[idx];
+                // Only log meaningful labels — skip empty/fallback ones
+                if (optLabel && optLabel.trim() && !optLabel.startsWith('option ')) {
+                  selected.push(optLabel);
+                } else {
+                  // Try to get the actual label from the DOM at click time
+                  const domLabel = await cbEl.evaluate((el) => {
+                    if (el.id) {
+                      const lbl = document.querySelector(`label[for="${el.id}"]`);
+                      if (lbl) return (lbl.innerText || '').trim();
+                    }
+                    const pl = el.closest('label');
+                    if (pl) {
+                      const clone = pl.cloneNode(true);
+                      clone.querySelectorAll('input').forEach(n => n.remove());
+                      return (clone.innerText || '').trim();
+                    }
+                    const sib = el.nextElementSibling;
+                    if (sib) return (sib.innerText || '').trim();
+                    return `option ${idx}`;
+                  }).catch(() => `option ${idx}`);
+                  selected.push(domLabel);
+                }
               }
             }
 
