@@ -2619,6 +2619,7 @@ const answerPageWithAI = async (
   providerConfig,
   sessionCountry,
   instructionsOnPage = [],
+  prebuiltPersonaContext = null,   // ← passed once per session, not regenerated
 ) => {
   try {
     if (!providerConfig?.api_key) {
@@ -2636,7 +2637,8 @@ const answerPageWithAI = async (
       return null;
     }
 
-    const personaContext = buildPersonaContext(persona);
+    // Use pre-built context if provided — avoids regenerating random profile each page
+    const personaContext = prebuiltPersonaContext || buildPersonaContext(persona);
     const scenarioContext = buildScenarioContext(scenario);
 
     // Inject session country as hard override — prevents AI inventing wrong country
@@ -3670,8 +3672,10 @@ const prepareSessionAgent = async (
   console.log(
     `[Agent] Ready — cell: ${quotaCellText} | intents: ${intentMap.instructions.length}`,
   );
+  const personaBrief = buildPersonaContext(persona);
+  console.log(`[Persona] Profile: ${personaBrief.split('\n').slice(0,4).join(' | ')}`);
   return {
-    personaBrief: buildPersonaContext(persona),
+    personaBrief,
     quotaCellText,
     intentMap,
     factSheet,
@@ -4205,8 +4209,12 @@ const processSession = async (job) => {
   const tracePath = path.join(TRACES_DIR, `${sessionId}.zip`);
   const pages = [];
 
+  // Build persona context ONCE — stored and reused across all pages this session
+  const sessionPersonaBrief = buildPersonaContext(persona);
+  console.log(`[Session] Persona brief: ${sessionPersonaBrief.split('\n').slice(0,3).join(' | ')}`);
+
   let agentSetup = {
-    personaBrief: buildPersonaContext(persona),
+    personaBrief: sessionPersonaBrief,
     quotaCellText: "Not resolved",
     intentMap: buildIntentMap(scenario),
     factSheet: initFactSheet(persona, proxyCountry),
@@ -4655,6 +4663,7 @@ const processSession = async (job) => {
             providerConfig,
             proxyCountry,
              instructionsOnPage,
+             agentSetup.personaBrief,   // ← consistent across all pages
           );
 
           if (answersGiven?.length > 0) {
