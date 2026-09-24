@@ -381,6 +381,66 @@ const migrate = async () => {
       `ALTER TABLE session_events ADD COLUMN IF NOT EXISTS payload JSONB DEFAULT '{}'`
     );
 
+        // ─── SURVEY MAPS ───────────────────────────────────────────────────────
+    // Pre-read survey structure stored once per project per survey URL
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS survey_maps (
+        id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        project_id     UUID         NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        survey_url     TEXT         NOT NULL,
+        platform       VARCHAR(50)  DEFAULT 'decipher',
+        page_count     INTEGER,
+        screener_pages JSONB        DEFAULT '[]',
+        question_map   JSONB        DEFAULT '[]',
+        routing_hints  JSONB        DEFAULT '{}',
+        mapped_at      TIMESTAMPTZ  DEFAULT NOW(),
+        UNIQUE(project_id, survey_url)
+      )
+    `);
+
+    // ─── RESPONSE FINGERPRINTS ─────────────────────────────────────────────
+    // Detects duplicate response patterns across sessions
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS response_fingerprints (
+        id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        project_id   UUID         NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        session_id   UUID         REFERENCES sessions(id) ON DELETE SET NULL,
+        fingerprint  TEXT         NOT NULL,
+        page_count   INTEGER,
+        created_at   TIMESTAMPTZ  DEFAULT NOW(),
+        UNIQUE(project_id, fingerprint)
+      )
+    `);
+
+    // ─── SESSION ANOMALIES ─────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS session_anomalies (
+        id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        project_id   UUID         NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        session_id   UUID         REFERENCES sessions(id) ON DELETE SET NULL,
+        anomaly_type VARCHAR(50)  NOT NULL,
+        details      JSONB        DEFAULT '{}',
+        severity     VARCHAR(20)  DEFAULT 'warning'
+                       CHECK (severity IN ('info','warning','critical')),
+        created_at   TIMESTAMPTZ  DEFAULT NOW()
+      )
+    `);
+
+    // ─── SESSIONS additional columns ───────────────────────────────────────
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS internal_testing BOOLEAN DEFAULT false`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS scenario_name VARCHAR(255)`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS persona_name VARCHAR(255)`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ai_calls_count INTEGER DEFAULT 0`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS input_tokens_total INTEGER DEFAULT 0`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS output_tokens_total INTEGER DEFAULT 0`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ai_cost_usd NUMERIC(12,8) DEFAULT 0`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS model_used VARCHAR(100)`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS straight_line_score NUMERIC(5,2)`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS openend_quality_score NUMERIC(5,2)`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS validation_errors INTEGER DEFAULT 0`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS platform_detected VARCHAR(50)`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS survey_map_id UUID REFERENCES survey_maps(id) ON DELETE SET NULL`);
+
     // ─── INDEXES ───────────────────────────────────────────────────────────
     const indexes = [
       `CREATE INDEX IF NOT EXISTS idx_projects_workspace   ON projects(workspace_id)`,

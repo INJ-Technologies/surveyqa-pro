@@ -25,14 +25,15 @@ const {
 const {
   detectOutcome,
   detectOutcomeFromPage,
-  answerPage,
   clickNext,
   capturePageOptions,
-  isHintText,
 } = require("../../backend/src/services/decipherEngine");
 const { pool } = require("../../backend/src/db/index");
 const { getActiveScenarios } = require("../../backend/src/db/scenarios");
 const { getDefaultModel } = require("../../backend/src/db/ai_models");
+const { buildSurveyMap, getSurveyMap, detectPlatform } = require("./surveyMap");
+const { checkDuplicateIP, buildResponseFingerprint, checkDuplicateFingerprint, storeResponseFingerprint } = require("./duplicateDetection");
+const { preSessionAnomalyCheck, logAnomaly, detectStraightLine, scoreOpenEnds } = require("./anomalyMonitor");
 
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY) || 5;
 const MAX_PAGES = 200;
@@ -1072,6 +1073,140 @@ Return ONLY this JSON:
   } catch (e) {
     console.warn(`[AI] fillMissedFieldsWithAI error: ${e.message}`);
   }
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RESPONSE VALIDATION — Read back DOM state after answering to confirm
+// clicks registered correctly before clicking Next
+// ══════════════════════════════════════════════════════════════════════════════
+const validatePageAnswers = async (page, actionableFields, decisions) => {
+  const mismatches = [];
+  try {
+    for (const ans of decisions?.answers || []) {
+      const field = actionableFields[ans.fieldIndex];
+      if (!field) continue;
+
+      if (ans.fieldType === 'radio' && field.groupName) {
+        const checkedIdx = await page.evaluate((name) => {
+          const radios = Array.from(document.querySelectorAll(`input[type="radio"][name="${name}"]`));
+          return radios.findIndex(r => r.checked);
+        }, field.groupName).catch(() => -1);
+
+        if (checkedIdx === -1) {
+          mismatches.push({ fieldIndex: ans.fieldIndex, type: 'radio', expected: ans.selectedIndex, got: 'none' });
+        } else if (checkedIdx !== ans.selectedIndex) {
+          mismatches.push({ fieldIndex: ans.fieldIndex, type: 'radio', expected: ans.selectedIndex, got: checkedIdx });
+        }
+      }
+
+      if (ans.fieldType === 'checkbox' && field.groupName) {
+        const checkedCount = await page.evaluate((name) => {
+          return document.querySelectorAll(`input[type="checkbox"][name="${name}"]:checked`).length;
+        }, field.groupName).catch(() => 0);
+
+        if (checkedCount === 0 && (ans.selectedIndices || []).length > 0) {
+          mismatches.push({ fieldIndex: ans.fieldIndex, type: 'checkbox', expected: ans.selectedIndices.length, got: 0 });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[Validate] Read-back error:', e.message);
+  }
+
+  if (mismatches.length > 0) {
+    console.warn(`[Validate] ⚠ ${mismatches.length} answer(s) did not register — re-clicking`);
+    for (const m of mismatches) {
+      console.warn(`[Validate]   Field ${m.fieldIndex} (${m.type}): expected ${m.expected}, got ${m.got}`);
+    }
+  } else {
+    console.log(`[Validate] ✓ All answers confirmed in DOM`);
+  }
+
+  return mismatches;
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PROXY HEALTH CHECK — Verify proxy is working before launching session
+// ══════════════════════════════════════════════════════════════════════════════
+const checkProxyHealth = async (page, expectedCountry) => {
+  try {
+    const res = await page.goto('https://api.ipify.org?format=json', { timeout: 10000 });
+    if (!res?.ok()) return { healthy: false, ip: null, reason: 'IP check request failed' };
+    const data = await res.json();
+    const ip = data?.ip;
+    if (!ip) return { healthy: false, ip: null, reason: 'No IP returned' };
+    console.log(`[Proxy] Health check: IP ${ip}`);
+    return { healthy: true, ip };
+  } catch (e) {
+    return { healthy: false, ip: null, reason: e.message };
+  }
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// QUOTA REAL-TIME CHECK — Verify target cell is still open before answering
+// ══════════════════════════════════════════════════════════════════════════════
+const checkQuotaStillOpen = async (projectId) => {
+  try {
+    const r = await pool.query(
+      `SELECT COUNT(*) as open FROM quota_cells
+       WHERE project_id = $1 AND status = 'open' AND current_count < target`,
+      [projectId]
+    );
+    return parseInt(r.rows[0]?.open || 0) > 0;
+  } catch {
+    return true; // assume open if check fails
+  }
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FACT SHEET CONSTRAINT ENFORCEMENT
+// Blocks answers inconsistent with persona profile
+// ══════════════════════════════════════════════════════════════════════════════
+const enforceFactSheetConstraints = (factSheet, actionableFields, decisions) => {
+  if (!decisions?.answers) return decisions;
+
+  const revenue = factSheet?.company_revenue || '';
+  // Parse revenue range to get rough asset size expectation
+  // Revenue $1B–$5B → assets unlikely to be "trillion"
+  const revenueNum = (() => {
+    const m = revenue.match(/\$?([\d.]+)([BMK]?)/i);
+    if (!m) return null;
+    const n = parseFloat(m[1]);
+    const s = (m[2] || '').toUpperCase();
+    if (s === 'B') return n * 1e9;
+    if (s === 'M') return n * 1e6;
+    if (s === 'K') return n * 1e3;
+    return n;
+  })();
+
+  for (const ans of decisions.answers) {
+    const field = actionableFields[ans.fieldIndex];
+    if (!field) continue;
+
+    // Block "trillion" asset selection for non-trillion revenue companies
+    if (ans.fieldType === 'radio' || ans.fieldType === 'select') {
+      const selectedOption = field.options?.[ans.selectedIndex];
+      const optionLabel = (typeof selectedOption === 'string' ? selectedOption : selectedOption?.label || '').toLowerCase();
+
+      if (/trillion/i.test(optionLabel) && revenueNum && revenueNum < 5e11) {
+        // Find the most appropriate option based on revenue
+        const replacementIdx = field.options?.findIndex((o) => {
+          const l = (typeof o === 'string' ? o : o?.label || '').toLowerCase();
+          if (revenueNum > 1e11) return /100.*billion|200.*billion|500.*billion/i.test(l);
+          if (revenueNum > 1e10) return /10.*billion|50.*billion|100.*billion/i.test(l);
+          if (revenueNum > 1e9) return /1.*billion|5.*billion|10.*billion/i.test(l);
+          return /million/i.test(l);
+        }) ?? -1;
+
+        if (replacementIdx >= 0) {
+          console.warn(`[Constraint] Blocked "trillion" for revenue ${revenue} — replacing with option ${replacementIdx}`);
+          ans.selectedIndex = replacementIdx;
+        }
+      }
+    }
+  }
+
+  return decisions;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3581,6 +3716,34 @@ JSON RULES:
       return null;
     }
 
+    // ── Read-back validation — confirm DOM reflects what AI decided ───────────
+    await page.waitForTimeout(300);
+    const mismatches = await validatePageAnswers(page, actionableFields, decisions);
+    if (mismatches.length > 0) {
+      // Re-attempt mismatched radio fields only
+      for (const m of mismatches) {
+        if (m.type !== 'radio') continue;
+        const field = actionableFields[m.fieldIndex];
+        if (!field) continue;
+        try {
+          const allRadios = await page.locator(`input[type="radio"][name="${field.groupName}"]`).all();
+          const target = allRadios[m.expected];
+          if (target) {
+            await target.evaluate(el => {
+              el.scrollIntoView({ block: 'center' });
+              el.click();
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            });
+            await page.waitForTimeout(300);
+            console.log(`[Validate] ✓ Re-clicked field ${m.fieldIndex} radio option ${m.expected}`);
+          }
+        } catch {}
+      }
+    }
+
+    // ── Apply fact sheet constraints before returning ──────────────────────────
+    enforceFactSheetConstraints(factSheet, actionableFields, decisions);
+
     return answersGiven;
   } catch (e) {
     console.warn(`[AI] answerPageWithAI crashed: ${e.message}`);
@@ -4267,6 +4430,17 @@ const processSession = async (job) => {
     `[Worker] Session ${sessionId} | Country: ${proxyCountry} | ResponseID: ${responseId}`,
   );
 
+  // ── Pre-session anomaly check — stop if project is in bad state ─────────────
+  const anomalyWarnings = await preSessionAnomalyCheck(projectId);
+  for (const w of anomalyWarnings) {
+    console.warn(`[Anomaly] ${w.severity.toUpperCase()}: ${w.type} — ${w.detail}`);
+    if (w.severity === 'critical') {
+      console.error(`[Worker] Session ${sessionId} aborted — critical anomaly: ${w.type}`);
+      await updateSessionStatus(sessionId, 'error', { errorLog: `Aborted: ${w.type} — ${w.detail}` });
+      return { sessionId, outcome: 'error', durationS: 0, responseId };
+    }
+  }
+
   await updateSessionStatus(sessionId, "initialising");
   await logSessionEvent(sessionId, "worker_started", {
     jobId: job.id,
@@ -4533,7 +4707,22 @@ const processSession = async (job) => {
           ip: ipData.ip,
           country: proxyCountry,
         });
-        console.log(`[Worker] IP: ${ipData.ip} (${proxyCountry})`);
+                console.log(`[Worker] IP: ${ipData.ip} (${proxyCountry})`);
+
+        // Duplicate IP check
+        const isDuplicateIP = await checkDuplicateIP(projectId, ipData.ip);
+        if (isDuplicateIP) {
+          console.warn(`[Worker] Duplicate IP detected: ${ipData.ip} — flagging session`);
+          await logAnomaly(projectId, sessionId, 'DUPLICATE_IP', { ip: ipData.ip }, 'warning');
+          await logSessionEvent(sessionId, 'flag_warning', { flag: 'DUPLICATE_IP', ip: ipData.ip });
+        }
+
+        await recordUsedIP(projectId, sessionId, ipData.ip);
+        await logSessionEvent(sessionId, "ip_assigned", {
+          ip: ipData.ip,
+          country: proxyCountry,
+          duplicate: isDuplicateIP,
+        });
       }
     } catch (e) {
       await logSessionEvent(sessionId, "ip_check_failed", { error: e.message });
@@ -4556,6 +4745,22 @@ const processSession = async (job) => {
       surveyUrl,
       scenarioName: scenario?.name || null,
     });
+
+        // ── Survey map — pre-read structure if not already cached ─────────────────
+    let surveyMap = await getSurveyMap(projectId, surveyUrl);
+    if (!surveyMap) {
+      console.log('[SurveyMap] No cached map — building now');
+      surveyMap = await buildSurveyMap(surveyUrl, projectId, browser, providerConfig);
+    } else {
+      console.log(`[SurveyMap] Using cached map — ${surveyMap.page_count} pages, platform: ${surveyMap.platform}`);
+    }
+
+    // Detect and log platform
+    const platformDetected = surveyMap?.platform || 'unknown';
+    await pool.query(
+      `UPDATE sessions SET platform_detected = $1 WHERE id = $2`,
+      [platformDetected, sessionId]
+    ).catch(() => {});
 
     console.log(`[Worker] Navigating to: ${surveyUrl}`);
     await page.goto(surveyUrl, {
@@ -4797,6 +5002,15 @@ const processSession = async (job) => {
             } catch (e) {
               console.warn(`[Scenario] Step execution failed: ${e.message}`);
             }
+          }
+        }
+                // ── Quota real-time check every 5 pages ───────────────────────────────
+        if (pageCount % 5 === 0) {
+          const quotaOpen = await checkQuotaStillOpen(projectId);
+          if (!quotaOpen) {
+            console.warn(`[Worker] All quota cells filled — ending session early`);
+            outcome = 'over_quota';
+            break;
           }
         }
 
@@ -5123,8 +5337,29 @@ const processSession = async (job) => {
     costUsd: 0,
   };
 
-  // Calculate quality score from all session signals
+  // ── Response fingerprint — detect duplicate answer patterns ───────────────
+  const fingerprint = buildResponseFingerprint(agentSetup.factSheet?.pageHistory || []);
+  if (fingerprint) {
+    const isDuplicateResponse = await checkDuplicateFingerprint(projectId, fingerprint);
+    if (isDuplicateResponse) {
+      console.warn(`[Worker] Duplicate response pattern detected — flagging`);
+      await logAnomaly(projectId, sessionId, 'DUPLICATE_RESPONSE_PATTERN',
+        { fingerprint: fingerprint.slice(0, 8) }, 'warning');
+    }
+    await storeResponseFingerprint(projectId, sessionId, fingerprint, pageCount);
+  }
+
+  // ── Enhanced quality scoring ──────────────────────────────────────────────
   const qualityScore = calculateQualityScore(pages, [], pageCount, outcome);
+  const straightLineScore = detectStraightLine(agentSetup.factSheet?.pageHistory || []);
+  const openEndScore = scoreOpenEnds(agentSetup.factSheet?.pageHistory || []);
+
+  if (straightLineScore > 50) {
+    console.warn(`[Quality] High straight-line rate: ${straightLineScore}%`);
+    await logAnomaly(projectId, sessionId, 'STRAIGHT_LINING',
+      { score: straightLineScore }, 'warning');
+  }
+  console.log(`[Quality] Straight-line: ${straightLineScore}% | Open-end: ${openEndScore ?? 'N/A'}`);
 
   if (usage.calls > 0) {
     console.log(
@@ -5144,7 +5379,8 @@ const processSession = async (job) => {
     aiCallsCount: usage.calls,
     aiCostUsd: parseFloat(usage.costUsd.toFixed(8)),
     modelUsed: providerConfig?.model || null,
-    qualityScore: qualityScore,
+    straight_line_score: straightLineScore,
+    openend_quality_score: openEndScore,
     ...(errorMessage ? { errorLog: errorMessage.slice(0, 2000) } : {}),
   });
   await logSessionEvent(sessionId, "session_complete", {
