@@ -2652,6 +2652,26 @@ JSON RULES:
     }
 
     const answersGiven = [];
+
+    // ── Pre-capture all visible inputs ONCE before processing any answers ──────
+    // Critical: if we rebuild the list per-field, each fill removes an element
+    // and shifts all subsequent inputIndex values — causing the index drift bug.
+    const allPageInputs = await page.locator("input[type='text'], input[type='number']").all();
+    const previsibleInputs = [];
+    for (const inp of allPageInputs) {
+      if (await inp.isVisible().catch(() => false)) previsibleInputs.push(inp);
+    }
+    const allPageSelects   = await page.locator('select').all();
+    const previsibleSelects = [];
+    for (const sel of allPageSelects) {
+      if (await sel.isVisible().catch(() => false)) previsibleSelects.push(sel);
+    }
+    const allPageTextareas = await page.locator('textarea').all();
+    const previsibleTextareas = [];
+    for (const ta of allPageTextareas) {
+      if (await ta.isVisible().catch(() => false)) previsibleTextareas.push(ta);
+    }
+
     for (const ans of decisions.answers || []) {
       const field = actionableFields[ans.fieldIndex];
       if (!field) {
@@ -2845,11 +2865,6 @@ JSON RULES:
             break;
           }
           case "select": {
-            const allSels = await page.locator("select").all();
-            const visible = [];
-            for (const s of allSels) {
-              if (await s.isVisible().catch(() => false)) visible.push(s);
-            }
             const sel = visible[field.selectIndex];
             if (sel) {
               const targetOpt = field.options?.[ans.selectedIndex];
@@ -2869,11 +2884,6 @@ JSON RULES:
             break;
           }
           case "textarea": {
-            const allTas = await page.locator("textarea").all();
-            const visible = [];
-            for (const ta of allTas) {
-              if (await ta.isVisible().catch(() => false)) visible.push(ta);
-            }
             const ta = visible[field.textareaIndex];
             if (ta && ans.text) {
               await ta.fill(ans.text).catch(() => {});
@@ -2946,40 +2956,19 @@ JSON RULES:
             });
             break;
           }
-          case "input": {
-            const allInputs = await page
-              .locator("input[type='text'], input[type='number']")
-              .all();
-            const visible = [];
-            for (const inp of allInputs) {
-              if (!(await inp.isVisible().catch(() => false))) continue;
-              const existing = await inp.inputValue().catch(() => "");
-              if (existing && existing.trim() !== "") continue;
-              visible.push(inp);
-            }
-            const inp = visible[field.inputIndex];
-            if (
-              inp &&
-              ans.value !== undefined &&
-              ans.value !== null &&
-              String(ans.value) !== ""
-            ) {
+          case 'input': {
+            // Use pre-captured absolute index — no index drift after fills
+            const inp = previsibleInputs[field.inputIndex];
+            if (inp && ans.value !== undefined && ans.value !== null && String(ans.value) !== '') {
+              await inp.scrollIntoViewIfNeeded().catch(() => {});
               await inp.fill(String(ans.value)).catch(() => {});
-              const label =
-                field.rowLabel ||
-                field.columnHeader ||
-                field.contextText?.slice(0, 40) ||
-                `input ${field.inputIndex}`;
-              answersGiven.push({
-                type: "numeric",
-                value: ans.value,
-                label,
-                aiControlled: true,
-                flags,
-              });
-              console.log(
-                `[AI] ✓ Input [${field.inputIndex}] "${label}" → ${ans.value}`,
-              );
+              await inp.dispatchEvent('change').catch(() => {});
+              await page.waitForTimeout(150);
+              const label = field.rowLabel || field.columnHeader || field.contextText?.slice(0, 40) || `input ${field.inputIndex}`;
+              answersGiven.push({ type: 'numeric', value: ans.value, label, aiControlled: true, flags });
+              console.log(`[AI] ✓ Input [${field.inputIndex}] "${label}" → ${ans.value}`);
+            } else if (!inp) {
+              console.warn(`[AI] Input [${field.inputIndex}] not found — previsible has ${previsibleInputs.length}`);
             }
             break;
           }
