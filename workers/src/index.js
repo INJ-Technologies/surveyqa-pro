@@ -1715,45 +1715,86 @@ const captureAllPageFields = async (page) => {
         }
         cbGroups[name].push({ label, checked: cb.checked });
       });
-      // Detect multi-column checkbox grids (e.g. "12 months ago / Today")
-      // These have checkboxes in table cells with shared column headers
-      const gridTables = document.querySelectorAll("table");
+            // ── Multi-column checkbox detection ──────────────────────────────────
+      // Rule: columns WITH headers = separate questions (answer each column)
+      //       columns WITHOUT headers = single list split visually (deduplicate)
+      const gridTables = document.querySelectorAll('table');
       let hasGridCheckboxes = false;
-      gridTables.forEach((table) => {
-        const headerCells = Array.from(
-          table.querySelectorAll("thead th, tr:first-child th"),
-        ).slice(1); // skip row label col
-        if (headerCells.length < 2) return;
-        const checkboxRows = Array.from(table.querySelectorAll("tr")).filter(
-          (tr) => tr.querySelectorAll('input[type="checkbox"]').length >= 2,
+
+      gridTables.forEach(table => {
+        const headerRow = table.querySelector('thead tr, tr:first-child');
+        const headerCells = headerRow
+          ? Array.from(headerRow.querySelectorAll('th')).filter(th => !th.querySelector('input'))
+          : [];
+        const dataColHeaders = headerCells.slice(1); // skip row label column
+
+        const checkboxRows = Array.from(table.querySelectorAll('tr')).filter(tr =>
+          tr.querySelectorAll('input[type="checkbox"]').length >= 2
         );
         if (checkboxRows.length < 2) return;
-        hasGridCheckboxes = true;
-        // Add as a special grid field
-        const colHeaders = headerCells.map((th) =>
-          (th.innerText || th.textContent || "").trim(),
-        );
-        const rows = checkboxRows.map((tr) => {
-          const cells = Array.from(tr.querySelectorAll("td"));
-          const rowLabel = cells[0] ? (cells[0].innerText || "").trim() : "";
-          const colCheckboxes = cells.slice(1).map((td, ci) => {
-            const cb = td.querySelector('input[type="checkbox"]');
-            return {
-              colIndex: ci,
-              colHeader: colHeaders[ci] || `Col ${ci + 1}`,
-              checked: cb?.checked || false,
-              name: cb?.name || "",
-              id: cb?.id || "",
-            };
+
+        const hasColumnHeaders = dataColHeaders.length > 0 &&
+          dataColHeaders.some(th => (th.innerText || '').trim().length > 0);
+
+        if (hasColumnHeaders) {
+          // Headed grid: each column is a separate dimension — treat as checkboxGrid
+          hasGridCheckboxes = true;
+          const colHeaders = dataColHeaders.map(th => (th.innerText || th.textContent || '').trim());
+          const rows = checkboxRows.map(tr => {
+            const cells = Array.from(tr.querySelectorAll('td'));
+            const rowLabel = cells[0] ? (cells[0].innerText || '').trim() : '';
+            const colCheckboxes = cells.slice(1).map((td, ci) => {
+              const cb = td.querySelector('input[type="checkbox"]');
+              return { colIndex: ci, colHeader: colHeaders[ci] || `Col ${ci+1}`, checked: cb?.checked || false, name: cb?.name || '', id: cb?.id || '' };
+            });
+            return { rowLabel, colCheckboxes };
           });
-          return { rowLabel, colCheckboxes };
-        });
-        fields.push({
-          fieldType: "checkboxGrid",
-          rows,
-          colHeaders,
-          questionLabel: "",
-        });
+          fields.push({ fieldType: 'checkboxGrid', rows, colHeaders, questionLabel: '' });
+        } else {
+          // No column headers: visual multi-column layout of a SINGLE list
+          // Deduplicate — only capture unique labels once
+          const seen = new Set();
+          const uniqueOptions = [];
+          checkboxRows.forEach(tr => {
+            tr.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+              let label = '';
+              if (cb.id) {
+                const lbl = document.querySelector(`label[for="${cb.id}"]`);
+                if (lbl) label = (lbl.innerText || '').trim();
+              }
+              if (!label) {
+                const pl = cb.closest('label');
+                if (pl) label = (pl.innerText || '').trim();
+              }
+              if (!label) {
+                const td = cb.closest('td');
+                if (td) label = (td.innerText || '').trim().split('\n')[0];
+              }
+              if (label && !seen.has(label)) {
+                seen.add(label);
+                uniqueOptions.push({ label, checked: cb.checked });
+              }
+            });
+          });
+          if (uniqueOptions.length > 0) {
+            // Find question label from nearest qblock
+            let questionLabel = '';
+            const qblock = table.closest('.qblock, .question, [class*="qblock"]');
+            if (qblock) {
+              const qt = qblock.querySelector('.qtext, .question-text, legend, h2, h3');
+              if (qt) questionLabel = (qt.innerText || '').trim().slice(0, 150);
+            }
+            // Replace any existing duplicate cbGroups for this table with the deduplicated version
+            fields.push({
+              fieldType: 'checkbox',
+              groupIndex: fields.filter(f => f.fieldType === 'checkbox').length,
+              groupName: `multicolumn_${fields.length}`,
+              questionLabel,
+              options: uniqueOptions.map(o => o.label),
+            });
+            hasGridCheckboxes = true;
+          }
+        }
       });
       if (hasGridCheckboxes) return fields; // return early, skip flat checkbox processing for grid pages
       cbOrder.forEach((name, gi) => {
@@ -2188,6 +2229,7 @@ const answerPageWithAI = async (
   pageOptions,
   providerConfig,
   sessionCountry,
+  instructionsOnPage = [],
 ) => {
   try {
     if (!providerConfig?.api_key) {
@@ -2379,6 +2421,7 @@ ${webSearchContext ? `═══════════════════�
 QUESTIONS ON THIS PAGE
 ═══════════════════════════════════════════════
 ${questionsOnPage.length > 0 ? questionsOnPage.map((q, i) => `${i + 1}. ${q}`).join("\n") : "(No question text detected)"}
+${instructionsOnPage.length > 0 ? `\n⚠ ANSWER INSTRUCTIONS (MANDATORY):\n${instructionsOnPage.map(i => `• ${i}`).join('\n')}\nThese instructions OVERRIDE the default selection count rules. Follow them exactly.` : ''}
 
 ═══════════════════════════════════════════════
 FIELDS TO FILL
@@ -2408,13 +2451,30 @@ RADIO (single select):
 - INDUSTRY: use stated industry — match exactly or pick closest sector.
 
 CHECKBOX (multi-select):
-- Read instruction carefully: "Select all that apply" vs "Select up to 3" vs "Select at least 2".
-- Never select contradictory options (e.g. "Use daily" AND "Never use").
+- Read the ANSWER INSTRUCTIONS above first — they set the exact count required.
+- "Select all that apply" → select everything that genuinely applies to this persona.
+- "Please select top 3" / "Select up to 3" → select EXACTLY 3 (or fewer only if fewer apply).
+- "Select at least 2" → select at minimum 2.
+- If no instruction → typical count is 2–4, but vary naturally.
+
+MUTUALLY EXCLUSIVE OPTIONS — NEVER select these unless persona truly cannot answer:
+- "Not sure / Don't know" — a Head of Technology Finance, CXO, or senior professional
+  KNOWS their own company's budget, technology stack, vendors, and strategy.
+  Only select if the question is about something genuinely outside their role.
+- "None of the above" — only if zero listed options apply.
+- "No formal process" — only if the persona's company genuinely has none.
+- "Prefer not to say" — almost never appropriate for a B2B professional survey.
+- "Not applicable" — only if the question category truly doesn't apply.
+
+RULE: If the persona has a senior B2B role (CXO, Head of X, Director, VP) AND the
+question is about their own organization's budget, technology, vendors, strategy,
+or operations — they MUST select substantive answers, not "Don't know".
+Selecting "Don't know" for a budget question when the persona IS the technology
+finance head is a disqualifying inconsistency.
+
 - Never select "None of the above" alongside other options.
-- BRAND AWARENESS: only tick brands this persona would genuinely know in their industry/role.
-- CHANNELS / MEDIA: tick what this persona actually uses based on their profile and tags.
-- Typical count: 2–4 unless persona naturally uses more or the question asks for fewer.
-- Do NOT select "Don't know" or "None" unless the persona genuinely has no experience.
+- Never select contradictory options (e.g. "Use daily" AND "Never use").
+- BRAND AWARENESS: only tick brands this persona would realistically know.
 
 DROPDOWN (select):
 - Treat exactly like RADIO — single select, best fit for this persona.
@@ -3338,6 +3398,54 @@ const updateFactSheet = async (
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
+// EXTRACT QUESTION INSTRUCTIONS — "please select top 3", "select all that apply"
+// These are sub-instructions under the question text that constrain answer count.
+// ══════════════════════════════════════════════════════════════════════════════
+const extractQuestionInstructions = async (page) => {
+  try {
+    return await page.evaluate(() => {
+      const hints = new Set();
+      const instructionSelectors = [
+        '.instruction', '.hint', '.subtext', '.sub-text',
+        '[class*="instruction"]', '[class*="hint"]', '[class*="subtext"]',
+        '.qsubtext', '[class*="qsubtext"]', '.help-text',
+        '[class*="help-text"]', '.answer-instruction',
+      ];
+      for (const sel of instructionSelectors) {
+        document.querySelectorAll(sel).forEach(el => {
+          const t = (el.innerText || el.textContent || '').trim();
+          if (t && t.length > 5 && t.length < 200) hints.add(t);
+        });
+      }
+      // Also scan for italic/small text near question blocks
+      document.querySelectorAll('.qblock, .question, [class*="qblock"]').forEach(block => {
+        block.querySelectorAll('i, em, small, .note').forEach(el => {
+          const t = (el.innerText || '').trim();
+          if (t && t.length > 5 && t.length < 200) hints.add(t);
+        });
+        // Look for paragraphs that contain instruction keywords
+        block.querySelectorAll('p, div, span').forEach(el => {
+          if (el.querySelector('input, select, textarea, label')) return;
+          const t = (el.innerText || '').trim();
+          if (/select (all|up to|at least|top|exactly|one|two|three|[0-9]+)/i.test(t) ||
+              /check (all|up to|at least|[0-9]+)/i.test(t) ||
+              /choose (all|up to|at least|[0-9]+)/i.test(t) ||
+              /please (select|check|choose|tick)/i.test(t) ||
+              /maximum of [0-9]+/i.test(t) ||
+              /enter a (number|value|percentage)/i.test(t) ||
+              /between [0-9]+ and [0-9]+/i.test(t)) {
+            if (t.length < 200) hints.add(t);
+          }
+        });
+      });
+      return [...hints];
+    });
+  } catch {
+    return [];
+  }
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
 // QUESTION EXTRACTOR — 3-priority system, expanded NON_QUESTION_PATTERNS
 // ══════════════════════════════════════════════════════════════════════════════
 const extractQuestionsFromPage = async (page) => {
@@ -3992,10 +4100,14 @@ const processSession = async (job) => {
       let questionsOnPage = [];
       try {
         pageTitle = await page.title();
-        questionsOnPage = await extractQuestionsFromPage(page);
+                questionsOnPage = await extractQuestionsFromPage(page);
+        const instructionsOnPage = await extractQuestionInstructions(page);
         console.log(
           `[Worker] Questions detected (${questionsOnPage.length}): [${questionsOnPage.map((q) => `"${q.slice(0, 50)}"`).join(", ")}]`,
         );
+        if (instructionsOnPage.length > 0) {
+          console.log(`[Worker] Instructions: [${instructionsOnPage.map(i => `"${i.slice(0, 60)}"`).join(', ')}]`);
+        }
       } catch (e) {
         console.warn(`[Worker] Question detection failed: ${e.message}`);
       }
@@ -4169,6 +4281,7 @@ const processSession = async (job) => {
             pageOptionsBefore,
             providerConfig,
             proxyCountry,
+             instructionsOnPage,
           );
 
           if (answersGiven?.length > 0) {
