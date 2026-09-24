@@ -767,7 +767,7 @@ Select the most appropriate answer for each field, consistent with the persona.
 You MUST respond with ONLY the JSON object below. Do not write any explanation, apology, or prose. Do not use markdown. Output raw JSON only:
 {"answers":[{"fieldIndex":0,"fieldType":"radio","selectedIndex":2}]}`;
 
-      const rawText = await callAIProvider(providerConfig, {
+      const rawResult = await callAIProvider(providerConfig, {
         systemPrompt:
           "Answer revealed survey fields consistently with persona. Return only JSON.",
         staticPart: "",
@@ -775,8 +775,9 @@ You MUST respond with ONLY the JSON object below. Do not write any explanation, 
         maxTokens: 400,
       });
 
+      const rawText = typeof rawResult === 'object' ? rawResult?.text : rawResult;
+
       if (rawText) {
-        // ADD THIS BLOCK:
         const trimmed = rawText.trim();
         if (/^(I'm sorry|I cannot|I can't|I apologize|Sorry,)/i.test(trimmed)) {
           console.warn(
@@ -869,9 +870,10 @@ You MUST respond with ONLY the JSON object below. Do not write any explanation, 
 // ══════════════════════════════════════════════════════════════════════════════
 // FILL REMAINING INPUTS
 // ══════════════════════════════════════════════════════════════════════════════
-const fillRemainingInputs = async (page) => {
+const fillRemainingInputs = async (page, providerConfig = null, persona = null, questionsOnPage = []) => {
   try {
     let filled = 0;
+    const otherSpecBoxFills = []; // collect "Other specify" boxes for AI fill
     const inputs = await page
       .locator("input[type='text'], input[type='number']")
       .all();
@@ -906,8 +908,8 @@ const fillRemainingInputs = async (page) => {
           return /other.*specify|specify.*other/i.test(ctx);
         })
         .catch(() => false);
-      if (isOtherSpecBox) {
-        // Only fill if the "Other" checkbox in the same container is checked
+            if (isOtherSpecBox) {
+        // Only fill if the "Other" checkbox/radio in the same container is checked
         const otherChecked = await input
           .evaluate((el) => {
             let node = el.parentElement;
@@ -923,6 +925,55 @@ const fillRemainingInputs = async (page) => {
           })
           .catch(() => false);
         if (!otherChecked) continue;
+
+        // This is an "Other, please specify" text box — fill with AI-generated
+        // contextual text, NOT a random number
+        const existingVal = await input.inputValue().catch(() => '');
+        if (existingVal && existingVal.trim() !== '') continue; // already filled
+
+        // Get surrounding question context
+        const questionContext = await input.evaluate((el) => {
+          // Walk up to find the question block
+          let node = el.parentElement;
+          for (let i = 0; i < 12; i++) {
+            if (!node || node === document.body) break;
+            const qtext = node.querySelector('.qtext, .question-text, h2, h3, legend');
+            if (qtext) return (qtext.innerText || '').trim().slice(0, 200);
+            node = node.parentElement;
+          }
+          return '';
+        }).catch(() => '');
+
+        // Get what other options were selected on this question (for context)
+        const selectedContext = await input.evaluate((el) => {
+          const selected = [];
+          let node = el.parentElement;
+          for (let i = 0; i < 12; i++) {
+            if (!node || node === document.body) break;
+            // Find checked checkboxes
+            node.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
+              if (cb.id) {
+                const lbl = document.querySelector(`label[for="${cb.id}"]`);
+                if (lbl) selected.push((lbl.innerText || '').trim());
+              }
+            });
+            // Find checked radios (excluding the "Other" one itself)
+            node.querySelectorAll('input[type="radio"]:checked').forEach(r => {
+              if (r.id) {
+                const lbl = document.querySelector(`label[for="${r.id}"]`);
+                const txt = (lbl?.innerText || '').trim();
+                if (txt && !/other|specify/i.test(txt)) selected.push(txt);
+              }
+            });
+            if (selected.length > 0) break;
+            node = node.parentElement;
+          }
+          return selected;
+        }).catch(() => []);
+
+        // Skip numeric fill — this needs AI text
+        otherSpecBoxFills.push({ input, questionContext, selectedContext });
+        continue; // handle after the loop with AI
       }
       const attrMin = await input.getAttribute("min").catch(() => null);
       const attrMax = await input.getAttribute("max").catch(() => null);
@@ -1001,6 +1052,73 @@ const fillRemainingInputs = async (page) => {
         console.log(`[Worker] ✓ Filled remaining dropdown: "${chosen}"`);
       }
     }
+            // ── Fill "Other, please specify" boxes with AI-generated contextual text ──
+    if (otherSpecBoxFills.length > 0 && providerConfig?.api_key) {
+      for (const { input, questionContext, selectedContext } of otherSpecBoxFills) {
+        try {
+          const personaCtx = persona
+            ? `Job: ${persona.behavioural_attrs?.designation || 'professional'}, Industry: ${persona.behavioural_attrs?.industry || 'technology'}, Country: ${persona.country || 'India'}`
+            : 'Mid-level professional in technology';
+
+          const otherPrompt = `You are completing a survey as this persona: ${personaCtx}
+
+Question: "${questionContext || 'survey question'}"
+Already selected options: ${selectedContext.length > 0 ? selectedContext.join(', ') : 'none'}
+
+The respondent selected "Other, please specify". Write a SHORT, specific, humanized text response (5–15 words max) that:
+- Explains what "other" means for this persona specifically
+- Is relevant to the question topic
+- Sounds like a real person wrote it, not AI
+- Does NOT repeat any already-selected options
+- Is NOT a number or percentage
+
+Return ONLY the text to type, no quotes, no explanation.`;
+
+          const result = await callAIProvider(providerConfig, {
+            systemPrompt: 'Complete survey open-end fields naturally. Return only the text to type.',
+            staticPart: '',
+            dynamicPart: otherPrompt,
+            maxTokens: 60,
+          });
+
+          const text = typeof result === 'object' ? result?.text : result;
+          const cleaned = (text || '').replace(/^["']|["']$/g, '').trim();
+
+          if (cleaned && cleaned.length > 2 && cleaned.length < 100) {
+            await input.fill(cleaned).catch(() => {});
+            filled++;
+            console.log(`[Worker] ✓ Other specify filled: "${cleaned}"`);
+          } else {
+            // Fallback to a generic contextual phrase
+            const fallbacks = [
+              'Internal process optimization tools',
+              'Custom vendor-specific solutions',
+              'Proprietary enterprise platforms',
+              'Industry-specific niche tools',
+            ];
+            const fallback = fallbacks[Math.floor(Math.random() * fallbacks.length)];
+            await input.fill(fallback).catch(() => {});
+            filled++;
+            console.log(`[Worker] ✓ Other specify fallback: "${fallback}"`);
+          }
+        } catch (e) {
+          console.warn(`[Worker] Other specify AI fill failed: ${e.message}`);
+        }
+      }
+    } else if (otherSpecBoxFills.length > 0) {
+      // No AI — use generic contextual fallbacks
+      const fallbacks = [
+        'Other industry-specific tools',
+        'Custom internal solutions',
+        'Proprietary platforms',
+      ];
+      for (const { input } of otherSpecBoxFills) {
+        const fb = fallbacks[Math.floor(Math.random() * fallbacks.length)];
+        await input.fill(fb).catch(() => {});
+        filled++;
+      }
+    }
+
     if (filled > 0)
       console.log(`[Worker] fillRemainingInputs: filled ${filled} field(s)`);
     return filled > 0;
@@ -2108,9 +2226,10 @@ const callAIProvider = async (
         outputTokens: data.usage?.output_tokens || 0,
       };
     }
-    const res = await callWithRetry({
+        const res = await callWithRetry({
       model,
       max_tokens: maxTokens,
+      temperature: 0.8,
       system: [
         {
           type: "text",
@@ -2176,14 +2295,17 @@ const callAIProvider = async (
     }
     return null;
   };
-  if (isSearch && searchPrompt) {
+    if (isSearch && searchPrompt) {
+    // OpenRouter/OpenAI doesn't support Anthropic's web_search tool.
+    // Some OpenRouter models have built-in browsing — pass the prompt as a
+    // regular message and let the model use its training data for benchmarks.
     const res = await callWithRetry({
       model,
       max_tokens: 500,
       messages: [
         {
           role: "system",
-          content: "Provide current industry benchmarks and realistic figures.",
+          content: "You are a market research expert. Provide realistic industry benchmarks and figures based on your knowledge. Be specific and numeric.",
         },
         { role: "user", content: searchPrompt },
       ],
@@ -2197,10 +2319,11 @@ const callAIProvider = async (
     };
   }
 
-  const fullUserContent = staticPart + "\n\n" + dynamicPart;
+    const fullUserContent = staticPart + "\n\n" + dynamicPart;
   const res = await callWithRetry({
     model,
     max_tokens: maxTokens,
+    temperature: 0.8,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: fullUserContent },
@@ -2388,7 +2511,11 @@ const answerPageWithAI = async (
 
     const systemPrompt = `You are simulating a real human survey respondent with a consistent life story. Your answers must be realistic, internally coherent, and NEVER contradict the session fact sheet. You respond ONLY with valid JSON — no markdown, no explanation outside JSON.`;
 
-    const staticPromptPart = `${sessionCountryNote}═══════════════════════════════════════════════
+        // Unique per-session seed to break determinism across identical-context sessions
+    const variationSeed = Math.random().toString(36).slice(2, 8).toUpperCase();
+    const sessionVariationNote = `\nSESSION ID: ${variationSeed} — Each session must reflect natural human variation. Do NOT produce identical answers to other sessions. Vary your specific choices, numeric values, brand mentions, and open-end wording while remaining true to the persona.\n`;
+
+    const staticPromptPart = `${sessionCountryNote}${sessionVariationNote}═══════════════════════════════════════════════
 PERSONA — YOU ARE THIS PERSON
 ═══════════════════════════════════════════════
 ${personaContext}
@@ -2924,8 +3051,8 @@ JSON RULES:
             );
             break;
           }
-          case "select": {
-            const sel = visible[field.selectIndex];
+                    case "select": {
+            const sel = previsibleSelects[field.selectIndex];
             if (sel) {
               const targetOpt = field.options?.[ans.selectedIndex];
               if (targetOpt?.value) {
@@ -2943,8 +3070,8 @@ JSON RULES:
             }
             break;
           }
-          case "textarea": {
-            const ta = visible[field.textareaIndex];
+                    case "textarea": {
+            const ta = previsibleTextareas[field.textareaIndex];
             if (ta && ans.text) {
               await ta.fill(ans.text).catch(() => {});
               answersGiven.push({
@@ -3167,14 +3294,15 @@ const initFactSheet = (persona, country) => {
   };
 };
 
-const resolveQuotaCell = async (persona, projectId, apiKey) => {
-  if (!apiKey || !projectId) return null;
+const resolveQuotaCell = async (persona, projectId, providerConfig) => {
+  if (!providerConfig?.api_key || !projectId) return null;
   try {
     const result = await pool.query(
       `SELECT dimensions FROM quota_cells WHERE project_id = $1`,
       [projectId],
     );
     if (!result.rows.length) return null;
+
     const dimMap = {};
     for (const row of result.rows) {
       for (const [dim, val] of Object.entries(row.dimensions || {})) {
@@ -3183,15 +3311,12 @@ const resolveQuotaCell = async (persona, projectId, apiKey) => {
       }
     }
     if (!Object.keys(dimMap).length) return null;
+
     const dimensionsText = Object.entries(dimMap)
-      .map(([d, vals]) => `${d}: ${[...vals].join(", ")}`)
+      .map(([d, vals]) => `${d}: ${[...vals].join(', ')}`)
       .join("\n");
-    const mockProvider = {
-      provider_type: "anthropic",
-      api_key: apiKey,
-      model: "claude-sonnet-4-6",
-    };
-    const cellResult = await callAIProvider(mockProvider, {
+
+    const cellResult = await callAIProvider(providerConfig, {
       systemPrompt: "Map persona to quota dimensions. Return only JSON.",
       staticPart: "",
       dynamicPart: `Persona:\n${buildPersonaContext(persona)}\n\nDimensions:\n${dimensionsText}\n\nReturn JSON: {"DimensionName": "matched_value"}`,
@@ -3217,10 +3342,10 @@ const prepareSessionAgent = async (
   countryLogic,
   projectId,
   proxyCountry,
-  apiKey,
+  providerConfig,
 ) => {
   const [quotaCell, intentMap, factSheet] = await Promise.all([
-    resolveQuotaCell(persona, projectId, apiKey),
+    resolveQuotaCell(persona, projectId, providerConfig),
     Promise.resolve(buildIntentMap(scenario)),
     Promise.resolve(initFactSheet(persona, proxyCountry)),
   ]);
@@ -3257,8 +3382,8 @@ const prepareSessionAgent = async (
   };
 };
 
-const detectAttentionCheck = async (questionsOnPage, allFields, apiKey) => {
-  if (!apiKey || !questionsOnPage.length) return null;
+const detectAttentionCheck = async (questionsOnPage, allFields, providerConfig) => {
+  if (!providerConfig?.api_key || !questionsOnPage.length) return null;
   const fullText = questionsOnPage.join(" ");
   const optionTexts = allFields
     .filter((f) => ["radio", "checkbox"].includes(f.fieldType))
@@ -3280,29 +3405,14 @@ const detectAttentionCheck = async (questionsOnPage, allFields, apiKey) => {
   );
   if (!hasSignal) return null;
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 200,
-        system: "Detect attention checks. Return only JSON.",
-        messages: [
-          {
-            role: "user",
-            content: `Question: ${fullText.slice(0, 400)}\nOptions: ${optionTexts.slice(0, 300)}\n\nReturn: {"isAttentionCheck": boolean, "confidence": "high" or "low", "instruction": "what to do or null"}`,
-          },
-        ],
-      }),
+    const result = await callAIProvider(providerConfig, {
+      systemPrompt: 'Detect attention checks in survey questions. Return only JSON.',
+      staticPart: '',
+      dynamicPart: `Question: ${fullText.slice(0, 400)}\nOptions: ${optionTexts.slice(0, 300)}\n\nReturn: {"isAttentionCheck": boolean, "confidence": "high" or "low", "instruction": "what to do or null"}`,
+      maxTokens: 200,
     });
-    const data = await res.json();
-    return JSON.parse(
-      (data.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim(),
-    );
+    const text = typeof result === 'object' ? result?.text : result;
+    return JSON.parse((text || '{}').replace(/```json|```/g, '').trim());
   } catch {
     return null;
   }
@@ -3313,7 +3423,7 @@ const updateFactSheet = async (
   answersGiven,
   questionsOnPage,
   pageNum,
-  apiKey,
+  providerConfig,
 ) => {
   if (!answersGiven?.length) return factSheet;
   for (let i = 0; i < answersGiven.length; i++) {
@@ -3339,7 +3449,7 @@ const updateFactSheet = async (
         type: ans.type,
       });
   }
-  if (!apiKey) return factSheet;
+  if (!providerConfig?.api_key) return factSheet;
   const answerSummary = answersGiven
     .filter((a) => a && a.type !== "country_mapping")
     .map((a) => {
@@ -3352,29 +3462,15 @@ const updateFactSheet = async (
     .join("\n");
   if (!answerSummary.trim()) return factSheet;
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 300,
-        system:
-          "Extract semantic facts from survey answers. Return only JSON with new/updated keys. Return {} if nothing to extract.",
-        messages: [
-          {
-            role: "user",
-            content: `Questions: ${questionsOnPage.join(" | ")}\nAnswers:\n${answerSummary}\nExisting: ${JSON.stringify(factSheet, null, 0).slice(0, 500)}\n\nExtract new/updated facts as snake_case keys. Return only changed/new keys as JSON.`,
-          },
-        ],
-      }),
+    const result = await callAIProvider(providerConfig, {
+      systemPrompt: 'Extract semantic facts from survey answers. Return only JSON with new/updated keys. Return {} if nothing to extract.',
+      staticPart: '',
+      dynamicPart: `Questions: ${questionsOnPage.join(" | ")}\nAnswers:\n${answerSummary}\nExisting: ${JSON.stringify(factSheet, null, 0).slice(0, 500)}\n\nExtract new/updated facts as snake_case keys. Return only changed/new keys as JSON.`,
+      maxTokens: 300,
     });
-    const data = await res.json();
+    const text = typeof result === 'object' ? result?.text : result;
     const newFacts = JSON.parse(
-      (data.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim(),
+      (text || "{}").replace(/```json|```/g, "").trim(),
     );
     for (const [key, value] of Object.entries(newFacts)) {
       if (value === null || value === undefined) continue;
@@ -3917,31 +4013,11 @@ const processSession = async (job) => {
     }
   }
 
-  // Final fallback: Anthropic env key
   if (!providerConfig) {
-    const fallbackKey =
-      readSecret("anthropic_api_key_v1") ||
-      process.env.ANTHROPIC_API_KEY ||
-      null;
-    if (fallbackKey) {
-      providerConfig = {
-        provider_type: "anthropic",
-        api_key: fallbackKey,
-        model: "claude-sonnet-4-6",
-        base_url: null,
-        inputPricePer1m: 3.0,
-        outputPricePer1m: 15.0,
-        _usage: { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 },
-      };
-      console.log("[Worker] AI provider: fallback (anthropic env key)");
-    }
+    console.warn("[Worker] ⚠️ No AI provider resolved — check ai_models table has an active default model with openrouter_synthfield secret configured. AI features disabled for this session.");
   }
 
-  if (!providerConfig)
-    console.warn("⚠️ No AI provider resolved. AI features disabled.");
-
   const useAI = !!providerConfig;
-  const ANTHROPIC_API_KEY = providerConfig?.api_key || null;
 
   if (useAI && persona) {
     try {
@@ -3951,7 +4027,7 @@ const processSession = async (job) => {
         countryLogic,
         projectId,
         proxyCountry,
-        ANTHROPIC_API_KEY,
+        providerConfig,
       );
     } catch (e) {
       console.warn("[Agent] prepareSessionAgent failed:", e.message);
@@ -4386,7 +4462,7 @@ const processSession = async (job) => {
           await page.waitForTimeout(Math.round(hesMs)).catch(() => {});
         }
         // Last-resort fill for anything AI missed
-        await fillRemainingInputs(page);
+        await fillRemainingInputs(page, providerConfig, persona, questionsOnPage);
 
         await page.waitForTimeout(800);
         const pageOptionsAfter = await capturePageOptions(page);
