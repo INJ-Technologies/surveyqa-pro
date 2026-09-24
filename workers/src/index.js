@@ -2352,7 +2352,7 @@ const captureAllPageFields = async (page) => {
   }
 };
 
-const formatFieldsForPrompt = (fields) => {
+const formatFieldsForPrompt = (fields, questionsOnPage = []) => {
   if (!fields || fields.length === 0)
     return "None — this may be an intro or transition page.";
 
@@ -2394,8 +2394,23 @@ const formatFieldsForPrompt = (fields) => {
         const opts = f.options.map((o, idx) => `  [${idx}] ${o.label}`).join("\n");
         return `[${i}] DROPDOWN — "${f.questionLabel || "question"}"\n${opts}`;
       }
-      case "textarea":
-        return `[${i}] OPEN-END TEXT — "${f.questionLabel || f.placeholder || "open response"}"`;
+      case "textarea": {
+        // Use the best available question text — prefer full scraped text over truncated DOM label
+        const fullQuestion = questionsOnPage.length === 1
+          ? questionsOnPage[0]
+          : questionsOnPage.find(q => f.questionLabel && q.toLowerCase().includes(f.questionLabel.toLowerCase().slice(0, 30)))
+            || f.questionLabel
+            || questionsOnPage[0]
+            || f.placeholder
+            || 'open response';
+        return [
+          `[${i}] OPEN-END TEXT`,
+          `    QUESTION: "${fullQuestion}"`,
+          `    → Read the question carefully. Write a natural first-person response that directly`,
+          `      answers THIS specific question as this persona. Do not give generic filler.`,
+          `      Reference the question topic, your industry, role, and prior answers where relevant.`,
+        ].join('\n');
+      }
       case "input": {
         const parts = [];
         if (f.rowLabel)     parts.push(`row: "${f.rowLabel.slice(0, 70)}"`);
@@ -2821,7 +2836,7 @@ ${instructionsOnPage.length > 0 ? `\n⚠ ANSWER INSTRUCTIONS (MANDATORY):\n${ins
 ═══════════════════════════════════════════════
 FIELDS TO FILL
 ═══════════════════════════════════════════════
-${formatFieldsForPrompt(actionableFields)}
+${formatFieldsForPrompt(actionableFields, questionsOnPage)}
 
 ═══════════════════════════════════════════════
 QUESTION TYPE GUIDE — HOW TO ANSWER EACH TYPE
@@ -2876,6 +2891,11 @@ DROPDOWN (select):
 - Never pick the placeholder ("Select one", "--", "Please choose").
 
 OPEN-END TEXT (textarea):
+- FIRST: Read the QUESTION text shown in the field definition above very carefully.
+- THEN: Answer THAT SPECIFIC QUESTION as this persona — not a generic response about the topic.
+- Your response must directly address what the question asks, not what you assume it asks.
+- If the question asks "what challenges do you face with AI governance?" — answer THAT specifically.
+- If the question asks "what would make you switch vendors?" — answer THAT specifically.
 - Write in first person as this specific persona — not generic filler.
 - Response style guide:
   - Conservative / terse: 1–2 sentences, factual, no elaboration.
@@ -4608,7 +4628,9 @@ const processSession = async (job) => {
 
         // ── AI answering ─────────────────────────────────────────────────────────────
         let answersGiven = null;
-        const scenarioStepUsed = "ai";
+        let scenarioStepUsed = "ai";
+
+        
 
         // ── COUNTRY LOGIC: runs AFTER AI so it always has final say ──────────
         if (
@@ -4645,6 +4667,36 @@ const processSession = async (job) => {
             }
           } catch (e) {
             console.warn(`[CountryLogic] Hard-apply failed: ${e.message}`);
+          }
+        }
+
+        // ── Scenario step execution (hard DOM actions — run BEFORE AI) ────────
+        let scenarioHandled = false;
+        if (scenario && scenario.name !== 'Country Logic') {
+          const matchedStep = findMatchingStep(scenario, questionsOnPage, pageCount);
+          if (matchedStep) {
+            console.log(`[Scenario] ✓ Matched step: action="${matchedStep.action}" when="${matchedStep.when_value || matchedStep.when_type}"`);
+            try {
+              const scenarioResult = await executeScenarioAction(page, matchedStep);
+              if (scenarioResult !== null) {
+                answersGiven = scenarioResult || [];
+                scenarioStepUsed = matchedStep.action;  // ← add this line
+                scenarioHandled = true;
+                questionCount++;
+                console.log(`[Scenario] ✓ Step executed — AI will fill remaining fields`);
+
+                // Wait between scenario action and AI fill
+                if (matchedStep.wait_min_s || matchedStep.wait_max_s) {
+                  const wMin = parseInt(matchedStep.wait_min_s) || 0;
+                  const wMax = parseInt(matchedStep.wait_max_s) || wMin;
+                  const waitMs = (wMin + Math.random() * Math.max(0, wMax - wMin)) * 1000;
+                  console.log(`[Scenario] Waiting ${Math.round(waitMs / 1000)}s after action`);
+                  await page.waitForTimeout(waitMs);
+                }
+              }
+            } catch (e) {
+              console.warn(`[Scenario] Step execution failed: ${e.message}`);
+            }
           }
         }
 
