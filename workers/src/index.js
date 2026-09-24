@@ -1217,8 +1217,23 @@ const applyCountryMapping = async (
   if (!countryLogic?.country_mapping) return false;
   const { questionContains, mappings } = countryLogic.country_mapping;
   if (!questionContains || !mappings?.length) return false;
+  // Also match common country question patterns even if exact trigger text differs
+  const countryQuestionPatterns = [
+    questionContains.toLowerCase(),
+    'which country',
+    'what country',
+    'in which country',
+    'country do you',
+    'primary operational',
+    'country of operation',
+    'where is your',
+    'country are you',
+    'where do you operate',
+    'headquarters',
+    'primary market',
+  ];
   const hasCountryQ = questionsOnPage.some((q) =>
-    q.toLowerCase().includes(questionContains.toLowerCase()),
+    countryQuestionPatterns.some(p => q.toLowerCase().includes(p)),
   );
   if (!hasCountryQ) return false;
 
@@ -2812,7 +2827,7 @@ const answerPageWithAI = async (
     const countryFullName = sessionCountry || null;
 
     const sessionCountryNote = countryFullName
-      ? `\n⚠️ SESSION COUNTRY OVERRIDE — ABSOLUTE MANDATORY RULE:\nThis session is configured for: ${countryFullName} (${sessionCountry}).\nFor ANY question about country, location, headquarters, or region:\n→ You MUST select "${countryFullName}" or the closest matching option.\n→ This overrides ALL other reasoning, persona details, or company associations.\n→ Do NOT select Germany, USA, or any other country.\n→ Violation of this rule means session failure.\n`
+      ? `\n⚠️ SESSION COUNTRY OVERRIDE — ABSOLUTE MANDATORY RULE:\nThis session is configured for: ${countryFullName}.\nFor ANY question about:\n→ Country of operation, location, headquarters, region, market, or geography\n→ "In which country...", "Where is your...", "Which country...", "Primary market..."\n→ "Country of residence", "Where do you operate", "Primary operational responsibility"\nYou MUST select "${countryFullName}" or the closest matching option available.\nIf "${countryFullName}" is not listed, pick the closest geographic match.\nThis rule OVERRIDES ALL other reasoning including persona background.\nSelecting any other country is a critical failure.\n`
       : "";
 
     const factSheetLines = [];
@@ -2969,132 +2984,38 @@ FIELDS TO FILL
 ${formatFieldsForPrompt(actionableFields, questionsOnPage, instructionsOnPage)}
 
 ═══════════════════════════════════════════════
-QUESTION TYPE GUIDE — HOW TO ANSWER EACH TYPE
+ANSWERING GUIDE
 ═══════════════════════════════════════════════
+You are a real person completing this survey. Read each question fully, understand what it is asking, then answer honestly as this persona.
 
-RADIO (single select):
-- Select exactly ONE option that best matches this persona.
-- RATING SCALES (Strongly agree → Strongly disagree, or reverse):
-  Read label order carefully — do not assume direction.
-  Satisfied persona: top 2 of 5, or 4 of 5. Neutral: 3 of 5.
-- SATISFACTION / NPS (1–5, 1–7, 0–10):
-  Satisfied = 4–5 of 5, or 7–8 of 10. Neutral = 3 of 5, or 6 of 10. NPS satisfied = 8–9.
-- FREQUENCY (Never/Rarely/Sometimes/Often/Always): match persona's actual habits.
-- AGREEMENT: express this persona's genuine view — do not always pick "Agree".
-- IMPORTANCE: pick what genuinely matters for this persona's role and context.
-- SENIORITY / JOB TITLE: use exact job title from profile — pick closest match.
-- COMPANY SIZE: use stated employee count — pick the band that contains it.
-- REVENUE / BUDGET: use stated revenue — pick the band that contains it.
-- AGE: pick the band that contains the persona's stated age range.
-- GENDER: match stated gender exactly.
-- COUNTRY / REGION: use stated country — match exactly or pick closest.
-- INDUSTRY: use stated industry — match exactly or pick closest sector.
+DEMOGRAPHIC / PROFILE QUESTIONS (age, gender, company size, revenue, job title, country, industry):
+→ Always use your stated profile values. Pick the band or option that contains your value.
+→ Country/location questions: always answer ${countryFullName || 'your stated country'}.
 
-CHECKBOX (multi-select):
-- Read the ANSWER INSTRUCTIONS above first — they set the exact count required.
-- "Select all that apply" → select everything that genuinely applies to this persona.
-- "Please select top 3" / "Select up to 3" → select EXACTLY 3 (or fewer only if fewer apply).
-- "Select at least 2" → select at minimum 2.
-- If no instruction → typical count is 2–4, but vary naturally.
+OPINION / RATING QUESTIONS (agree/disagree, satisfaction, importance, likelihood):
+→ Express this persona's genuine view. Vary your ratings — real people are not always neutral.
+→ Never straight-line (same answer for every row of a grid).
 
-MUTUALLY EXCLUSIVE OPTIONS — NEVER select these unless persona truly cannot answer:
-- "Not sure / Don't know" — a Head of Technology Finance, CXO, or senior professional
-  KNOWS their own company's budget, technology stack, vendors, and strategy.
-  Only select if the question is about something genuinely outside their role.
-- "None of the above" — only if zero listed options apply.
-- "No formal process" — only if the persona's company genuinely has none.
-- "Prefer not to say" — almost never appropriate for a B2B professional survey.
-- "Not applicable" — only if the question category truly doesn't apply.
+AWARENESS / USAGE QUESTIONS (brands, tools, vendors):
+→ Only claim awareness or usage of brands realistic for this company size, budget and industry.
+→ Never select brands this persona would not plausibly know or use.
 
-RULE: If the persona has a senior B2B role (CXO, Head of X, Director, VP) AND the
-question is about their own organization's budget, technology, vendors, strategy,
-or operations — they MUST select substantive answers, not "Don't know".
-Selecting "Don't know" for a budget question when the persona IS the technology
-finance head is a disqualifying inconsistency.
+CHECKBOX QUESTIONS:
+→ Follow the instruction count exactly (select top 3, select all that apply, etc).
+→ Options marked ⚠ MUTUALLY EXCLUSIVE: only select if zero other options apply.
 
-- Never select "None of the above" alongside other options.
-- Never select contradictory options (e.g. "Use daily" AND "Never use").
-- BRAND AWARENESS: only tick brands this persona would realistically know.
+OPEN-END QUESTIONS:
+→ Read the exact question. Answer it directly and specifically as this persona.
+→ 2–3 sentences. Sound like a real professional in this industry and role.
+→ Never use filler phrases ("It's important to note", "As a professional", "Certainly").
 
-DROPDOWN (select):
-- Treat exactly like RADIO — single select, best fit for this persona.
-- Never pick the placeholder ("Select one", "--", "Please choose").
+NUMERIC / BUDGET QUESTIONS:
+→ Use realistic figures consistent with company size and revenue in your profile.
+→ Percentages: 0–100 only. Budgets: consistent with stated company revenue.
 
-OPEN-END TEXT (textarea):
-- FIRST: Read the QUESTION text shown in the field definition above very carefully.
-- THEN: Answer THAT SPECIFIC QUESTION as this persona — not a generic response about the topic.
-- Your response must directly address what the question asks, not what you assume it asks.
-- If the question asks "what challenges do you face with AI governance?" — answer THAT specifically.
-- If the question asks "what would make you switch vendors?" — answer THAT specifically.
-- Write in first person as this specific persona — not generic filler.
-- Response style guide:
-  - Conservative / terse: 1–2 sentences, factual, no elaboration.
-  - Neutral / balanced: 2–3 sentences, measured opinion with brief reason.
-  - Expressive / detailed: 3–5 sentences, specific examples, personal perspective.
-- Length guide by question type:
-  - Short open-end (small box, no instructions): 15–30 words.
-  - Standard open-end: 30–60 words.
-  - Long open-end (clearly expects detail, large box): 60–100 words.
-- Reference industry, role, and prior survey answers naturally — do not repeat verbatim.
-- Never start with "I think" or "I believe" — state it directly.
-- Vary sentence structure. Never use bullet points inside open-end answers.
-- For challenges: name a real, specific challenge for this role and industry.
-- For improvements: be constructive and specific, not generic ("better support" is too vague).
-- For brand questions: name actual brands this persona would use — never invent brand names.
-- Never sound AI-generated. No phrases like "It's important to note", "Certainly", "As an AI".
-
-NUMERIC INPUT:
-- Use committed fact sheet values first — if IT budget is set as 2500000, enter that.
-- Stay within min/max attributes if present.
-- Rounding: annual budgets → nearest 100K, headcounts → nearest 10, percentages → nearest 5.
-- All related percentages across fields on the same page MUST sum to 100%.
-- Sub-values must not exceed their stated parent total.
-- Radio + spec box pattern: select the radio range whose midpoint is closest to your value,
-  then type the exact value in the text box that appears.
-
-MATRIX / GRID (multiple radio rows sharing column headers):
-- Read column headers ONCE — they apply to ALL rows.
-- Treat each row as a completely independent question.
-- Vary your ratings across rows — real people have different opinions on different items.
-- NEVER select the same column for every row — this is "straight-lining" and gets flagged.
-- IMPORTANCE grids: some items matter more than others — distribute ratings meaningfully.
-- AGREEMENT grids: some statements should get disagree, some agree — vary naturally.
-- FREQUENCY grids: different behaviours have different frequencies — be realistic.
-- PERFORMANCE grids: some attributes excel, some are average — not everything is "excellent".
-
-RANKING:
-- Rank 1 = most important / preferred (unless label says otherwise).
-- Base ranking on what this persona genuinely prioritises.
-- Ensure all ranks are used — no duplicates, no gaps.
-
-CONSTANT SUM / ALLOCATION (total must = 100% or stated total):
-- Dominant category: 40–55%. Secondary: 20–30%. Remaining: split the rest.
-- Always verify your mental total equals 100 before submitting.
-- Reflect this persona's real priorities — not an equal split.
-
-SCREENER / QUALIFICATION:
-- Answer honestly as this persona — some sessions should naturally terminate.
-- If a scenario constraint requires qualifying: follow it (scenario takes priority).
-- If no constraint: answer truthfully — let the survey logic decide the outcome.
-
-ATTENTION / TRAP QUESTIONS:
-- Detected by: "Please select option X to continue", "Type the word Y", "For quality control select Z".
-- Follow the literal instruction EXACTLY — ignore all other logic for this field only.
-
-BRAND / AWARENESS:
-- Aided awareness (list): tick only brands this persona would realistically know.
-- Unaided awareness (open text): write real, actual brand names from the relevant industry.
-- Usage: only claim usage of brands consistent with company size, budget, and industry.
-- Never select obscure, unfamiliar, or clearly fake/phantom brand names.
-- B2B software: use brands appropriate to stated company size and budget level.
-
-PIPED / REFERENCE TEXT:
-- If the question shows your previous answer (e.g. "You said you use AWS..."), confirm or build on it.
-- Cross-reference the answer history above to stay fully consistent.
-
-DEMOGRAPHIC QUESTIONS (age, income, education, job level, company size):
-- Always use your stated profile values — never deviate.
-- Pick the band / option that contains your stated value.
+SCREENER QUESTIONS:
+→ Answer honestly. If this persona naturally screens out, that is the correct outcome.
+→ Scenario constraints override honest answering only when explicitly specified.
 
 ═══════════════════════════════════════════════
 RULES — FOLLOW IN THIS EXACT ORDER OF PRIORITY
@@ -4849,45 +4770,6 @@ const processSession = async (job) => {
         let scenarioStepUsed = "ai";
 
         
-
-        // ── COUNTRY LOGIC: runs AFTER AI so it always has final say ──────────
-        if (
-          countryLogic &&
-          !countryLogicApplied &&
-          questionsOnPage.length > 0
-        ) {
-          try {
-            const applied = await applyCountryMapping(
-              page,
-              countryLogic,
-              proxyCountry,
-              questionsOnPage,
-            );
-            if (applied) {
-              countryLogicApplied = true; // prevent re-application on subsequent pages
-              console.log(
-                `[CountryLogic] ✓ Hard-clicked: ${proxyCountry} answer on page ${pageCount}`,
-              );
-              await logSessionEvent(sessionId, "country_logic_applied", {
-                page: pageCount,
-                country: proxyCountry,
-                question: questionsOnPage[0]?.slice(0, 100),
-              });
-              await page.waitForTimeout(500);
-              // Rescan in case CountryLogic click revealed a sub-question
-              await rescanForRevealedContent(
-                page,
-                providerConfig,
-                persona,
-                agentSetup.factSheet,
-                questionsOnPage,
-              );
-            }
-          } catch (e) {
-            console.warn(`[CountryLogic] Hard-apply failed: ${e.message}`);
-          }
-        }
-
         // ── Scenario step execution (hard DOM actions — run BEFORE AI) ────────
         let scenarioHandled = false;
         if (scenario && scenario.name !== 'Country Logic') {
