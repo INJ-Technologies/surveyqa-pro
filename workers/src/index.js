@@ -1675,13 +1675,25 @@ const findMatchingStep = (scenario, questionsOnPage, pageNum) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // PERSONA CONTEXT BUILDER — upgraded with structured lookup and answering rules
 // ══════════════════════════════════════════════════════════════════════════════
-const buildPersonaContext = (persona) => {
+const buildPersonaContext = (persona, sessionCountry = null) => {
   if (!persona) {
     // ── Randomized realistic persona generator ────────────────────────────────
     // Age is the anchor — all other attributes derive from it logically.
     // A 25-year-old analyst cannot run a $5B IT budget.
     const rand = (arr) => arr[Math.floor(Math.random() * arr.length)];
     const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+        // Resolve country display name from ISO code or use as-is
+    const countryDisplayMap = {
+      US: 'United States', IN: 'India', GB: 'United Kingdom', DE: 'Germany',
+      FR: 'France', JP: 'Japan', AU: 'Australia', SG: 'Singapore',
+      AE: 'UAE', CA: 'Canada', NL: 'Netherlands', IT: 'Italy',
+      ES: 'Spain', CN: 'China', BR: 'Brazil', MX: 'Mexico',
+      KR: 'South Korea', ZA: 'South Africa',
+    };
+    const _sessionCountry = sessionCountry
+      ? (countryDisplayMap[sessionCountry.toUpperCase()] || sessionCountry)
+      : null;
 
     // Step 1: Age band determines tier
     const ageBand = rand([
@@ -1968,7 +1980,7 @@ const buildPersonaContext = (persona) => {
       `Industry: ${industry}.`,
       `Company Size: ${companySize}.`,
       `Company Annual Revenue: ${revenue}.`,
-      `Country: India. Language: English.`,
+      `Country: ${_sessionCountry || 'India'}. Language: English.`,
       ``,
       `Professional attitude: ${rand(attitudes)}.`,
       `AI & technology maturity: ${aiMaturity}.`,
@@ -3761,7 +3773,7 @@ const initFactSheet = (persona, country) => {
   };
 };
 
-const resolveQuotaCell = async (persona, projectId, providerConfig) => {
+const resolveQuotaCell = async (persona, projectId, providerConfig, proxyCountry = null) => {
   if (!providerConfig?.api_key || !projectId) return null;
   try {
     const result = await pool.query(
@@ -3786,7 +3798,7 @@ const resolveQuotaCell = async (persona, projectId, providerConfig) => {
     const cellResult = await callAIProvider(providerConfig, {
       systemPrompt: "Map persona to quota dimensions. Return only JSON.",
       staticPart: "",
-      dynamicPart: `Persona:\n${buildPersonaContext(persona)}\n\nDimensions:\n${dimensionsText}\n\nReturn JSON: {"DimensionName": "matched_value"}`,
+      dynamicPart: `Persona:\n${buildPersonaContext(persona, proxyCountry)}\n\nDimensions:\n${dimensionsText}\n\nReturn JSON: {"DimensionName": "matched_value"}`,
       maxTokens: 250,
     });
     const cellText =
@@ -3810,9 +3822,10 @@ const prepareSessionAgent = async (
   projectId,
   proxyCountry,
   providerConfig,
+  prebuiltPersonaBrief = null,   // reuse if already built
 ) => {
   const [quotaCell, intentMap, factSheet] = await Promise.all([
-    resolveQuotaCell(persona, projectId, providerConfig),
+    resolveQuotaCell(persona, projectId, providerConfig, proxyCountry),
     Promise.resolve(buildIntentMap(scenario)),
     Promise.resolve(initFactSheet(persona, proxyCountry)),
   ]);
@@ -3841,7 +3854,7 @@ const prepareSessionAgent = async (
   console.log(
     `[Agent] Ready — cell: ${quotaCellText} | intents: ${intentMap.instructions.length}`,
   );
-  const personaBrief = buildPersonaContext(persona);
+  const personaBrief = prebuiltPersonaBrief || buildPersonaContext(persona, proxyCountry);
   console.log(`[Persona] Profile: ${personaBrief.split('\n').slice(0,4).join(' | ')}`);
   return {
     personaBrief,
@@ -4379,7 +4392,7 @@ const processSession = async (job) => {
   const pages = [];
 
   // Build persona context ONCE — stored and reused across all pages this session
-  const sessionPersonaBrief = buildPersonaContext(persona);
+  const sessionPersonaBrief = buildPersonaContext(persona, proxyCountry);
   console.log(`[Session] Persona brief: ${sessionPersonaBrief.split('\n').slice(0,3).join(' | ')}`);
 
   let agentSetup = {
@@ -4501,6 +4514,7 @@ const processSession = async (job) => {
         projectId,
         proxyCountry,
         providerConfig,
+        sessionPersonaBrief,   // pass the already-built brief — never regenerate
       );
     } catch (e) {
       console.warn("[Agent] prepareSessionAgent failed:", e.message);
