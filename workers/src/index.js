@@ -868,259 +868,196 @@ You MUST respond with ONLY the JSON object below. Do not write any explanation, 
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
+// FILL MISSED FIELDS WITH AI — catches anything answerPageWithAI left empty
+// Only fires for genuinely empty fields — no random filling ever
+// ══════════════════════════════════════════════════════════════════════════════
+const fillMissedFieldsWithAI = async (page, providerConfig, personaBrief, questionsOnPage, factSheet) => {
+  try {
+    // Find any visible empty inputs/textareas that still need filling
+    const emptyInputs = [];
+
+    const allInputs = await page.locator("input[type='text'], input[type='number']").all();
+    for (const inp of allInputs) {
+      if (!await inp.isVisible().catch(() => false)) continue;
+      const val = await inp.inputValue().catch(() => '');
+      if (val && val.trim() !== '') continue;
+
+      // Skip if it's an "Other specify" box with unchecked parent
+      const isOrphan = await inp.evaluate((el) => {
+        let node = el.parentElement;
+        for (let i = 0; i < 8; i++) {
+          if (!node) break;
+          const cb = node.querySelector('input[type="checkbox"]');
+          if (cb) return !cb.checked;
+          const r = node.querySelector('input[type="radio"]');
+          if (r) return !r.checked;
+          node = node.parentElement;
+        }
+        return false;
+      }).catch(() => false);
+      if (isOrphan) continue;
+
+      const ctx = await inp.evaluate((el) => {
+        let node = el.parentElement;
+        for (let i = 0; i < 8; i++) {
+          const t = (node?.innerText || '').trim();
+          if (t.length > 5 && t.length < 300) return t;
+          node = node?.parentElement;
+        }
+        return '';
+      }).catch(() => '');
+
+      const unitLabel = await inp.evaluate((el) => {
+        const parent = el.parentElement;
+        if (!parent) return '';
+        return Array.from(parent.childNodes)
+          .filter(n => n !== el && n.nodeType === 3)
+          .map(n => n.textContent.trim())
+          .filter(t => t.length > 0)
+          .join(' ');
+      }).catch(() => '');
+
+      emptyInputs.push({ inp, ctx, unitLabel });
+    }
+
+    const emptyTextareas = [];
+    const allTas = await page.locator('textarea').all();
+    for (const ta of allTas) {
+      if (!await ta.isVisible().catch(() => false)) continue;
+      const val = await ta.inputValue().catch(() => '');
+      if (val && val.trim() !== '') continue;
+      const ctx = await ta.evaluate((el) => {
+        let node = el.parentElement;
+        for (let i = 0; i < 8; i++) {
+          const t = (node?.innerText || '').trim();
+          if (t.length > 5 && t.length < 300) return t;
+          node = node?.parentElement;
+        }
+        return '';
+      }).catch(() => '');
+      emptyTextareas.push({ ta, ctx });
+    }
+
+    if (emptyInputs.length === 0 && emptyTextareas.length === 0) return;
+
+    console.log(`[AI] Filling ${emptyInputs.length} missed input(s) + ${emptyTextareas.length} missed textarea(s)`);
+
+    // Build a targeted prompt for just the missed fields
+    const missedDesc = [
+      ...emptyInputs.map((f, i) => {
+        const isPct = /%|percent|proportion|share|allocation/i.test(f.ctx + f.unitLabel) || f.unitLabel === '%';
+        return `[INPUT_${i}] Numeric field. Context: "${f.ctx.slice(0,150)}" Unit: "${f.unitLabel}"${isPct ? ' — PERCENTAGE: enter 0–100 only' : ''}`;
+      }),
+      ...emptyTextareas.map((f, i) => {
+        const q = questionsOnPage.find(q => f.ctx && q.toLowerCase().includes(f.ctx.toLowerCase().slice(0,30)))
+          || questionsOnPage[0] || f.ctx;
+        return `[TEXTAREA_${i}] Open-end text. Question: "${q.slice(0,200)}" Context: "${f.ctx.slice(0,100)}"`;
+      }),
+    ].join('\n');
+
+    const prompt = `You are completing a survey as this persona:
+${personaBrief}
+
+Page questions: ${questionsOnPage.join(' | ')}
+
+The following fields were not answered yet and need values:
+${missedDesc}
+
+For NUMERIC fields: provide a realistic number appropriate for this persona and context. For percentage fields: 0–100 only.
+For TEXT fields: write a natural, specific first-person response that directly answers the question. No generic filler.
+
+Return ONLY this JSON:
+{
+  "inputs": [{"index": 0, "value": 25}],
+  "textareas": [{"index": 0, "text": "Natural response here"}]
+}`;
+
+    const result = await callAIProvider(providerConfig, {
+      systemPrompt: 'Fill missed survey fields intelligently. Return only JSON.',
+      staticPart: '',
+      dynamicPart: prompt,
+      maxTokens: 800,
+    });
+
+    const text = typeof result === 'object' ? result?.text : result;
+    if (!text) return;
+
+    const data = JSON.parse(text.replace(/```json|```/g, '').trim());
+
+    for (const item of data.inputs || []) {
+      const field = emptyInputs[item.index];
+      if (!field || item.value === null || item.value === undefined) continue;
+      await field.inp.scrollIntoViewIfNeeded().catch(() => {});
+      await field.inp.fill(String(item.value)).catch(() => {});
+      await field.inp.dispatchEvent('change').catch(() => {});
+      console.log(`[AI] ✓ Filled missed input[${item.index}] → ${item.value}`);
+    }
+
+    for (const item of data.textareas || []) {
+      const field = emptyTextareas[item.index];
+      if (!field || !item.text) continue;
+      await field.ta.fill(item.text).catch(() => {});
+      console.log(`[AI] ✓ Filled missed textarea[${item.index}] → "${item.text.slice(0,60)}"`);
+    }
+
+  } catch (e) {
+    console.warn(`[AI] fillMissedFieldsWithAI error: ${e.message}`);
+  }
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
 // FILL REMAINING INPUTS
 // ══════════════════════════════════════════════════════════════════════════════
 const fillRemainingInputs = async (page, providerConfig = null, persona = null, questionsOnPage = []) => {
+  // This function now ONLY handles dropdowns (selects) that AI missed.
+  // All input/textarea filling is handled by fillMissedFieldsWithAI.
   try {
     let filled = 0;
-    const otherSpecBoxFills = []; // collect "Other specify" boxes for AI fill
-    const inputs = await page
-      .locator("input[type='text'], input[type='number']")
-      .all();
-    for (const input of inputs) {
-      if (!(await input.isVisible().catch(() => false))) continue;
-      const existing = await input.inputValue().catch(() => "");
-      if (existing && existing.trim() !== "") continue;
-      const isOrphanSpecBox = await input
-        .evaluate((el) => {
-          let node = el.parentElement;
-          for (let i = 0; i < 8; i++) {
-            if (!node) break;
-            // Check for unchecked radio
-            const radio = node.querySelector('input[type="radio"]');
-            if (radio) return !radio.checked;
-            // Check for unchecked checkbox — "Other, please specify" pattern
-            const cb = node.querySelector('input[type="checkbox"]');
-            if (cb) return !cb.checked;
-            node = node.parentElement;
-          }
-          return false;
-        })
-        .catch(() => false);
-      if (isOrphanSpecBox) continue;
-
-      // Also skip if the input's label text contains "other" and no adjacent checkbox is checked
-      const isOtherSpecBox = await input
-        .evaluate((el) => {
-          const ctx = (
-            el.closest("td, tr, div, label")?.innerText || ""
-          ).toLowerCase();
-          return /other.*specify|specify.*other/i.test(ctx);
-        })
-        .catch(() => false);
-            if (isOtherSpecBox) {
-        // Only fill if the "Other" checkbox/radio in the same container is checked
-        const otherChecked = await input
-          .evaluate((el) => {
-            let node = el.parentElement;
-            for (let i = 0; i < 8; i++) {
-              if (!node) break;
-              const cb = node.querySelector('input[type="checkbox"]');
-              if (cb) return cb.checked;
-              const r = node.querySelector('input[type="radio"]');
-              if (r) return r.checked;
-              node = node.parentElement;
-            }
-            return false;
-          })
-          .catch(() => false);
-        if (!otherChecked) continue;
-
-        // This is an "Other, please specify" text box — fill with AI-generated
-        // contextual text, NOT a random number
-        const existingVal = await input.inputValue().catch(() => '');
-        if (existingVal && existingVal.trim() !== '') continue; // already filled
-
-        // Get surrounding question context
-        const questionContext = await input.evaluate((el) => {
-          // Walk up to find the question block
-          let node = el.parentElement;
-          for (let i = 0; i < 12; i++) {
-            if (!node || node === document.body) break;
-            const qtext = node.querySelector('.qtext, .question-text, h2, h3, legend');
-            if (qtext) return (qtext.innerText || '').trim().slice(0, 200);
-            node = node.parentElement;
-          }
-          return '';
-        }).catch(() => '');
-
-        // Get what other options were selected on this question (for context)
-        const selectedContext = await input.evaluate((el) => {
-          const selected = [];
-          let node = el.parentElement;
-          for (let i = 0; i < 12; i++) {
-            if (!node || node === document.body) break;
-            // Find checked checkboxes
-            node.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
-              if (cb.id) {
-                const lbl = document.querySelector(`label[for="${cb.id}"]`);
-                if (lbl) selected.push((lbl.innerText || '').trim());
-              }
-            });
-            // Find checked radios (excluding the "Other" one itself)
-            node.querySelectorAll('input[type="radio"]:checked').forEach(r => {
-              if (r.id) {
-                const lbl = document.querySelector(`label[for="${r.id}"]`);
-                const txt = (lbl?.innerText || '').trim();
-                if (txt && !/other|specify/i.test(txt)) selected.push(txt);
-              }
-            });
-            if (selected.length > 0) break;
-            node = node.parentElement;
-          }
-          return selected;
-        }).catch(() => []);
-
-        // Skip numeric fill — this needs AI text
-        otherSpecBoxFills.push({ input, questionContext, selectedContext });
-        continue; // handle after the loop with AI
-      }
-      const attrMin = await input.getAttribute("min").catch(() => null);
-      const attrMax = await input.getAttribute("max").catch(() => null);
-      const numMin =
-        attrMin !== null && attrMin !== "" ? parseFloat(attrMin) : null;
-      const numMax =
-        attrMax !== null && attrMax !== "" ? parseFloat(attrMax) : null;
-      const surroundText = await input
-        .evaluate((el) => {
-          let node = el.parentElement;
-          for (let i = 0; i < 6; i++) {
-            const t = (node?.innerText || "").trim();
-            if (t.length > 5) return t;
-            node = node?.parentElement;
-          }
-          return "";
-        })
-        .catch(() => "");
-      const unit = detectUnit(surroundText);
-      let value;
-      if (numMin !== null && numMax !== null && numMax > numMin) {
-        value = smartRound(
-          numMin + Math.random() * (numMax - numMin),
-          numMin,
-          numMax,
-        );
-      } else if (numMax !== null && numMin === null) {
-        value = valueForUnit(unit, 1, numMax);
-      } else {
-        const parsed = extractRange(
-          surroundText,
-          /\b(million|billion|mn|bn)\b/i.test(surroundText),
-        );
-        if (parsed && parsed.max > parsed.min) {
-          value = smartRound(
-            parsed.min + Math.random() * (parsed.max - parsed.min),
-            parsed.min,
-            parsed.max,
-          );
-        } else {
-          value = valueForUnit(unit, numMin, numMax);
-        }
-      }
-      await input.fill(String(value)).catch(() => {});
-      filled++;
-      console.log(
-        `[Worker] ✓ Filled remaining input: ${value} (unit: ${unit})`,
-      );
-    }
-    const selects = await page.locator("select").all();
+    const selects = await page.locator('select').all();
     for (const sel of selects) {
-      if (!(await sel.isVisible().catch(() => false))) continue;
-      const current = await sel.inputValue().catch(() => "");
-      const selectedText = await sel
-        .evaluate((el) => el.options[el.selectedIndex]?.text || "")
-        .catch(() => "");
-      const isPlaceholder =
-        !current ||
-        current.trim() === "" ||
-        /^(select one|--|please select|choose|select\.\.\.)/i.test(
-          selectedText.trim(),
-        );
+      if (!await sel.isVisible().catch(() => false)) continue;
+      const current = await sel.inputValue().catch(() => '');
+      const selectedText = await sel.evaluate((el) => el.options[el.selectedIndex]?.text || '').catch(() => '');
+      const isPlaceholder = !current || current.trim() === '' ||
+        /^(select one|--|please select|choose|select\.\.\.)/i.test(selectedText.trim());
       if (!isPlaceholder) continue;
-      const optEls = await sel.locator("option").all();
+
+      // Get all valid options
+      const optEls = await sel.locator('option').all();
       const validOpts = [];
       for (const opt of optEls) {
-        const val = await opt.getAttribute("value").catch(() => "");
-        const text = (await opt.textContent().catch(() => "")).trim();
-        if (val && val !== "" && !/^(select one|--|please select)/i.test(text))
-          validOpts.push(val);
+        const val = await opt.getAttribute('value').catch(() => '');
+        const text = (await opt.textContent().catch(() => '')).trim();
+        if (val && val !== '' && !/^(select one|--|please select)/i.test(text))
+          validOpts.push({ val, text });
       }
-      if (validOpts.length > 0) {
-        const chosen = validOpts[Math.floor(Math.random() * validOpts.length)];
-        await sel.selectOption(chosen).catch(() => {});
-        filled++;
-        console.log(`[Worker] ✓ Filled remaining dropdown: "${chosen}"`);
-      }
-    }
-            // ── Fill "Other, please specify" boxes with AI-generated contextual text ──
-    if (otherSpecBoxFills.length > 0 && providerConfig?.api_key) {
-      for (const { input, questionContext, selectedContext } of otherSpecBoxFills) {
+      if (validOpts.length === 0) continue;
+
+      // Ask AI to pick the right option if available, otherwise skip
+      if (providerConfig?.api_key && questionsOnPage.length > 0) {
         try {
-          const personaCtx = persona
-            ? `Job: ${persona.behavioural_attrs?.designation || 'professional'}, Industry: ${persona.behavioural_attrs?.industry || 'technology'}, Country: ${persona.country || 'India'}`
-            : 'Mid-level professional in technology';
-
-          const otherPrompt = `You are completing a survey as this persona: ${personaCtx}
-
-Question: "${questionContext || 'survey question'}"
-Already selected options: ${selectedContext.length > 0 ? selectedContext.join(', ') : 'none'}
-
-The respondent selected "Other, please specify". Write a SHORT, specific, humanized text response (5–15 words max) that:
-- Explains what "other" means for this persona specifically
-- Is relevant to the question topic
-- Sounds like a real person wrote it, not AI
-- Does NOT repeat any already-selected options
-- Is NOT a number or percentage
-
-Return ONLY the text to type, no quotes, no explanation.`;
-
+          const opts = validOpts.map((o, i) => `[${i}] ${o.text}`).join('\n');
           const result = await callAIProvider(providerConfig, {
-            systemPrompt: 'Complete survey open-end fields naturally. Return only the text to type.',
+            systemPrompt: 'Pick the best dropdown option for this survey respondent. Return only JSON.',
             staticPart: '',
-            dynamicPart: otherPrompt,
-            maxTokens: 60,
+            dynamicPart: `Question context: ${questionsOnPage[0]?.slice(0, 200)}\nOptions:\n${opts}\nReturn: {"selectedIndex": 0}`,
+            maxTokens: 100,
           });
-
           const text = typeof result === 'object' ? result?.text : result;
-          const cleaned = (text || '').replace(/^["']|["']$/g, '').trim();
-
-          if (cleaned && cleaned.length > 2 && cleaned.length < 100) {
-            await input.fill(cleaned).catch(() => {});
+          const parsed = JSON.parse((text || '{}').replace(/```json|```/g, '').trim());
+          const chosen = validOpts[parsed.selectedIndex ?? 0];
+          if (chosen) {
+            await sel.selectOption(chosen.val).catch(() => {});
             filled++;
-            console.log(`[Worker] ✓ Other specify filled: "${cleaned}"`);
-          } else {
-            // Fallback to a generic contextual phrase
-            const fallbacks = [
-              'Internal process optimization tools',
-              'Custom vendor-specific solutions',
-              'Proprietary enterprise platforms',
-              'Industry-specific niche tools',
-            ];
-            const fallback = fallbacks[Math.floor(Math.random() * fallbacks.length)];
-            await input.fill(fallback).catch(() => {});
-            filled++;
-            console.log(`[Worker] ✓ Other specify fallback: "${fallback}"`);
+            console.log(`[AI] ✓ Filled missed dropdown: "${chosen.text}"`);
           }
-        } catch (e) {
-          console.warn(`[Worker] Other specify AI fill failed: ${e.message}`);
+        } catch {
+          // If AI fails on dropdown, skip it — do not fill randomly
+          console.warn(`[AI] Could not fill dropdown — leaving blank`);
         }
       }
-    } else if (otherSpecBoxFills.length > 0) {
-      // No AI — use generic contextual fallbacks
-      const fallbacks = [
-        'Other industry-specific tools',
-        'Custom internal solutions',
-        'Proprietary platforms',
-      ];
-      for (const { input } of otherSpecBoxFills) {
-        const fb = fallbacks[Math.floor(Math.random() * fallbacks.length)];
-        await input.fill(fb).catch(() => {});
-        filled++;
-      }
     }
-
-    if (filled > 0)
-      console.log(`[Worker] fillRemainingInputs: filled ${filled} field(s)`);
+    if (filled > 0) console.log(`[Worker] fillRemainingInputs: filled ${filled} dropdown(s)`);
     return filled > 0;
   } catch (e) {
     console.warn(`[Worker] fillRemainingInputs error: ${e.message}`);
@@ -2792,7 +2729,7 @@ const answerPageWithAI = async (
       }
     }
 
-    const systemPrompt = `You are simulating a real human survey respondent with a consistent life story. Your answers must be realistic, internally coherent, and NEVER contradict the session fact sheet. You respond ONLY with valid JSON — no markdown, no explanation outside JSON.`;
+        const systemPrompt = `You are an expert survey respondent simulating a real human. You read every question and every option carefully before answering. You apply your professional knowledge, industry experience, and persona background to select the most accurate and credible answer. You NEVER guess randomly. You NEVER pick "Don't know" when the persona would know the answer. You respond ONLY with valid JSON.`;
 
         // Unique per-session seed to break determinism across identical-context sessions
     const variationSeed = Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -2990,8 +2927,16 @@ RULES — FOLLOW IN THIS EXACT ORDER OF PRIORITY
 
 5. QUESTION TYPE GUIDE — Apply the guide above for the specific field type on this page.
 
-6. PERSONA REALISM — Every answer must be credible for this specific person.
-   Ask: "Would this persona genuinely answer this way given their background?"
+6. KNOWLEDGE-FIRST ANSWERING — Before selecting any answer:
+   a. Read the full question text carefully.
+   b. Read ALL available options before deciding.
+   c. Apply what this persona would genuinely know from their industry, role, and experience.
+   d. Select the answer that a real person in this role would give — not the safest or most generic option.
+   e. For rating scales: consider this persona's actual satisfaction/opinion, not always neutral.
+   f. For awareness/usage questions: only claim what this persona's company size and budget would realistically have.
+   g. For open-ends: write a specific, direct answer to the exact question asked — not a generic paragraph.
+   h. NEVER select an option just because it appears first or because it seems safe.
+   i. Ask: "What would THIS specific person honestly answer, knowing what they know?"
 
 7. NUMERIC CONSISTENCY:
    • PERCENTAGE FIELDS (marked "PERCENTAGE: enter 0–100 only"): ALWAYS enter a number between 0 and 100. Never enter thousands or millions. A "share of budget" is always 0–100%.
@@ -4746,22 +4691,30 @@ const processSession = async (job) => {
               await page.waitForTimeout(waitMs);
             }
           } else {
-            console.warn(
-              `[Worker] Page ${pageCount}: AI returned no answers — falling back to random`,
+            // AI returned no answers — retry once with a simpler prompt
+            console.warn(`[Worker] Page ${pageCount}: AI returned no answers — retrying`);
+            await page.waitForTimeout(2000);
+            answersGiven = await answerPageWithAI(
+              page, persona, scenario, agentSetup.factSheet,
+              agentSetup.intentMap, agentSetup.quotaCellText,
+              questionsOnPage, pageOptionsBefore, providerConfig,
+              proxyCountry, instructionsOnPage, agentSetup.personaBrief,
             );
-            await logSessionEvent(sessionId, "flag_warning", {
-              flag: "AI_FALLBACK_RANDOM",
-              message: `AI failed on page ${pageCount} — random answering used`,
-              page: pageCount,
-            });
-            answersGiven = await answerPage(page, persona, readingSpeed);
+            if (!answersGiven?.length) {
+              console.warn(`[Worker] Page ${pageCount}: AI retry also failed — skipping page answers`);
+              await logSessionEvent(sessionId, 'flag_warning', {
+                flag: 'AI_NO_ANSWER',
+                message: `AI could not answer page ${pageCount} after retry`,
+                page: pageCount,
+              });
+              answersGiven = [];
+            }
             questionCount++;
           }
         } else {
-          console.log(
-            `[Worker] Page ${pageCount}: AI disabled — random answering`,
-          );
-          answersGiven = await answerPage(page, persona, readingSpeed);
+          // AI disabled — log and continue without answering
+          console.warn(`[Worker] Page ${pageCount}: AI disabled — no answers given`);
+          answersGiven = [];
           questionCount++;
         }
 
@@ -4818,8 +4771,11 @@ const processSession = async (job) => {
           else hesMs = 1500 + Math.random() * 2500;
           await page.waitForTimeout(Math.round(hesMs)).catch(() => {});
         }
-        // Last-resort fill for anything AI missed
-        await fillRemainingInputs(page, providerConfig, persona, questionsOnPage);
+        // Last-resort: ask AI to fill anything it missed on this page
+        // Only for fields that are genuinely empty after AI answered
+        if (providerConfig?.api_key && questionsOnPage.length > 0) {
+          await fillMissedFieldsWithAI(page, providerConfig, agentSetup.personaBrief, questionsOnPage, agentSetup.factSheet);
+        }
 
         await page.waitForTimeout(800);
         const pageOptionsAfter = await capturePageOptions(page);
