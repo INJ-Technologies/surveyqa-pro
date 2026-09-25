@@ -30,8 +30,9 @@ const {
 } = require("../../backend/src/services/decipherEngine");
 const { pool } = require("../../backend/src/db/index");
 const { getActiveScenarios } = require("../../backend/src/db/scenarios");
+const { getProviderByIdInternal } = require("../../backend/src/db/ai_providers");
 const { getDefaultModel } = require("../../backend/src/db/ai_models");
-const { buildSurveyMap, getSurveyMap, detectPlatform } = require("./surveyMap");
+const { buildSurveyMap, getSurveyMap } = require("./surveyMap");
 const { checkDuplicateIP, buildResponseFingerprint, checkDuplicateFingerprint, storeResponseFingerprint } = require("./duplicateDetection");
 const { preSessionAnomalyCheck, logAnomaly, detectStraightLine, scoreOpenEnds } = require("./anomalyMonitor");
 
@@ -615,8 +616,14 @@ const fillFollowupInput = async (page, personaBrief = null) => {
             specifyText = 'Senior Manager';
           } else {
             // Generic fallback for other specify fields
+            // Extract country from persona brief if available
+            let countryFallback = 'United States';
+            if (personaBrief) {
+              const cm = personaBrief.match(/Country:\s*([^\n.]+)/i);
+              if (cm) countryFallback = cm[1].trim();
+            }
             specifyText = surroundingText.includes('industry') ? 'Technology Services'
-              : surroundingText.includes('country') ? 'India'
+              : surroundingText.includes('country') ? countryFallback
               : surroundingText.includes('compan') ? 'Enterprise Solutions Ltd'
               : 'Other professional services';
           }
@@ -720,6 +727,7 @@ const rescanForRevealedContent = async (
   persona,
   factSheet,
   questionsOnPage,
+  prebuiltPersonaBrief = null,
 ) => {
   try {
     // Wait for any CSS animations / JS DOM mutations to settle
@@ -825,7 +833,7 @@ const rescanForRevealedContent = async (
         })
         .join("\n\n");
 
-      const personaContext = buildPersonaContext(persona);
+      const personaContext = prebuiltPersonaBrief || buildPersonaContext(persona);
       const prompt = `You are completing a survey as this persona:
 ${personaContext}
 
@@ -2612,6 +2620,30 @@ const captureAllPageFields = async (page) => {
           });
           inpIdx++;
         });
+
+              // ── Slider inputs (input[type="range"]) ───────────────────────────────
+      document.querySelectorAll('input[type="range"]').forEach((slider) => {
+        if (!slider.offsetParent) return;
+        const min = slider.min || '0';
+        const max = slider.max || '100';
+        const step = slider.step || '1';
+        let questionLabel = '';
+        const qblock = slider.closest('.qblock, .question, [class*="qblock"]');
+        if (qblock) {
+          const qt = qblock.querySelector('.qtext, .question-text, legend, h2, h3');
+          if (qt) questionLabel = (qt.innerText || '').trim().slice(0, 150);
+        }
+        fields.push({
+          fieldType: 'slider',
+          sliderId: slider.id || slider.name || `slider_${fields.length}`,
+          questionLabel,
+          min: parseFloat(min),
+          max: parseFloat(max),
+          step: parseFloat(step),
+          currentValue: parseFloat(slider.value || min),
+        });
+      });
+
       // ── Ranking questions ──────────────────────────────────────────────────
       // Decipher renders ranking as a sortable list or numbered selects
       const rankSelects = Array.from(document.querySelectorAll('select')).filter(sel => {
@@ -2729,6 +2761,10 @@ const formatFieldsForPrompt = (fields, questionsOnPage = [], instructionsOnPage 
           `  Row ${ri}: "${r.rowLabel}" → columns: [${r.colCheckboxes?.map((c, ci) => `${ci}="${c.colHeader}"`).join(', ')}]`
         ).join('\n') || '(no rows)';
         return `[${i}] CHECKBOX GRID — columns: ${colHdrs}\n${rowDesc}\nReturn selectedCells: [{row:0,col:0},{row:1,col:1}]`;
+      }
+      case "slider": {
+        const mid = Math.round((f.min + f.max) / 2);
+        return `[${i}] SLIDER — "${f.questionLabel || 'rate this'}"\n    Range: ${f.min}–${f.max} (step: ${f.step}). Current: ${f.currentValue}.\n    ↳ Return {"fieldIndex":${i},"fieldType":"slider","value": <number between ${f.min} and ${f.max}>}`;
       }
       default:
         return `[${i}] UNKNOWN FIELD`;
@@ -2943,7 +2979,7 @@ const answerPageWithAI = async (
     }
     const allFields = await captureAllPageFields(page);
     const actionableFields = allFields.filter((f) =>
-      ["radio", "checkbox", "select", "textarea", "input", "checkboxGrid"].includes(
+      ["radio", "checkbox", "select", "textarea", "input", "checkboxGrid", "slider"].includes(
         f.fieldType,
       ),
     );
@@ -3685,6 +3721,22 @@ JSON RULES:
               aiControlled: true,
               flags,
             });
+            break;
+          }
+                    case 'slider': {
+            const sliderEl = field.sliderId
+              ? page.locator(`input[type="range"]#${field.sliderId}, input[type="range"][name="${field.sliderId}"]`).first()
+              : page.locator('input[type="range"]').first();
+            if (sliderEl && ans.value !== undefined) {
+              const clamped = Math.min(Math.max(ans.value, field.min ?? 0), field.max ?? 100);
+              await sliderEl.evaluate((el, val) => {
+                el.value = val;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+              }, clamped).catch(() => {});
+              answersGiven.push({ type: 'slider', value: clamped, aiControlled: true, flags });
+              console.log(`[AI] ✓ Slider "${field.questionLabel}" → ${clamped}`);
+            }
             break;
           }
           case 'input': {
@@ -4701,15 +4753,10 @@ const processSession = async (job) => {
         timeout: 12000,
       });
       const ipData = await ipRes.json();
-      if (ipData?.ip) {
-        await recordUsedIP(projectId, sessionId, ipData.ip);
-        await logSessionEvent(sessionId, "ip_assigned", {
-          ip: ipData.ip,
-          country: proxyCountry,
-        });
-                console.log(`[Worker] IP: ${ipData.ip} (${proxyCountry})`);
+            if (ipData?.ip) {
+        console.log(`[Worker] IP: ${ipData.ip} (${proxyCountry})`);
 
-        // Duplicate IP check
+        // Duplicate IP check before recording
         const isDuplicateIP = await checkDuplicateIP(projectId, ipData.ip);
         if (isDuplicateIP) {
           console.warn(`[Worker] Duplicate IP detected: ${ipData.ip} — flagging session`);
@@ -4975,6 +5022,51 @@ const processSession = async (job) => {
         let scenarioStepUsed = "ai";
 
         
+        // ── Attention check detection ─────────────────────────────────────────
+        if (useAI && questionsOnPage.length > 0) {
+          const allFieldsForCheck = await captureAllPageFields(page);
+          const attCheck = await detectAttentionCheck(questionsOnPage, allFieldsForCheck, providerConfig);
+          if (attCheck?.isAttentionCheck && attCheck?.confidence === 'high') {
+            console.log(`[AttentionCheck] ✓ Detected — instruction: "${attCheck.instruction}"`);
+            await logSessionEvent(sessionId, 'flag_warning', {
+              flag: 'ATTENTION_CHECK',
+              instruction: attCheck.instruction,
+              page: pageCount,
+            });
+            // If AI provided explicit instruction, execute it directly
+            if (attCheck.instruction) {
+              const instrLower = attCheck.instruction.toLowerCase();
+              // "select option N" → click that radio
+              const optMatch = instrLower.match(/select option (\d+)/);
+              if (optMatch) {
+                const targetIdx = parseInt(optMatch[1]) - 1;
+                const allRadios = await page.locator('input[type="radio"]').all();
+                const visible = [];
+                for (const r of allRadios) {
+                  if (await r.isVisible().catch(() => false)) visible.push(r);
+                }
+                if (visible[targetIdx]) {
+                  await clickRadioOption(page, visible[targetIdx]);
+                  console.log(`[AttentionCheck] ✓ Clicked option ${targetIdx + 1}`);
+                }
+              }
+              // "type X" → fill first textarea/input
+              const typeMatch = instrLower.match(/type[:\s]+["']?([^"']+)["']?/);
+              if (typeMatch) {
+                const textToType = typeMatch[1].trim();
+                const fields = await page.locator('textarea, input[type="text"]').all();
+                for (const f of fields) {
+                  if (await f.isVisible().catch(() => false)) {
+                    await f.fill(textToType).catch(() => {});
+                    console.log(`[AttentionCheck] ✓ Typed: "${textToType}"`);
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+
         // ── Scenario step execution (hard DOM actions — run BEFORE AI) ────────
         let scenarioHandled = false;
         if (scenario && scenario.name !== 'Country Logic') {
@@ -5015,69 +5107,60 @@ const processSession = async (job) => {
         }
 
         // ── AI fills all remaining fields (including any Country Logic missed) ──────
-        if (useAI) {
-          console.log(`[Worker] Page ${pageCount}: AI answering`);
-            answersGiven = await answerPageWithAI(
-              page, persona, scenario, agentSetup.factSheet,
-              agentSetup.intentMap, agentSetup.quotaCellText,
-              questionsOnPage, pageOptionsBefore, providerConfig,
-              resolvedProxyCountry, instructionsOnPage, agentSetup.personaBrief,
-            );
+      if (useAI) {
+        console.log(`[Worker] Page ${pageCount}: AI answering`);
+        answersGiven = await answerPageWithAI(
+          page, persona, scenario, agentSetup.factSheet,
+          agentSetup.intentMap, agentSetup.quotaCellText,
+          questionsOnPage, pageOptionsBefore, providerConfig,
+          resolvedProxyCountry, instructionsOnPage, agentSetup.personaBrief,
+        );
 
-          if (answersGiven?.length > 0) {
-            questionCount++;
-            console.log(
-              `[Worker] Page ${pageCount}: AI answered ${answersGiven.length} field(s)`,
-            );
+        if (answersGiven?.length > 0) {
+          questionCount++;
+          console.log(`[Worker] Page ${pageCount}: AI answered ${answersGiven.length} field(s)`);
 
-            // Apply intent timer if matched
-            const norm = (s) => (s || "").toLowerCase().trim();
-            const pageTextLower = questionsOnPage.map(norm).join(" ");
-            const matchedTimer = (agentSetup.intentMap?.timerRules || []).find(
-              (r) => {
-                if (r.when_type === "always") return true;
-                if (r.when_type === "question_contains")
-                  return pageTextLower.includes(norm(r.when_value));
-                return false;
-              },
-            );
-            if (matchedTimer?.wait_min_s || matchedTimer?.wait_max_s) {
-              const wMin = parseInt(matchedTimer.wait_min_s) || 0;
-              const wMax = parseInt(matchedTimer.wait_max_s) || wMin;
-              const waitMs =
-                (wMin + Math.random() * Math.max(0, wMax - wMin)) * 1000;
-              console.log(
-                `[Worker] Intent timer — waiting ${Math.round(waitMs / 1000)}s`,
-              );
-              await page.waitForTimeout(waitMs);
-            }
-          } else {
-            // AI returned no answers — retry once with a simpler prompt
-            console.warn(`[Worker] Page ${pageCount}: AI returned no answers — retrying`);
-            await page.waitForTimeout(2000);
-            answersGiven = await answerPageWithAI(
-              page, persona, scenario, agentSetup.factSheet,
-              agentSetup.intentMap, agentSetup.quotaCellText,
-              questionsOnPage, pageOptionsBefore, providerConfig,
-              resolvedProxyCountry, instructionsOnPage, agentSetup.personaBrief,
-            );
-            if (!answersGiven?.length) {
-              console.warn(`[Worker] Page ${pageCount}: AI retry also failed — skipping page answers`);
-              await logSessionEvent(sessionId, 'flag_warning', {
-                flag: 'AI_NO_ANSWER',
-                message: `AI could not answer page ${pageCount} after retry`,
-                page: pageCount,
-              });
-              answersGiven = [];
-            }
-            questionCount++;
+          // Apply intent timer if matched
+          const norm = (s) => (s || '').toLowerCase().trim();
+          const pageTextLower = questionsOnPage.map(norm).join(' ');
+          const matchedTimer = (agentSetup.intentMap?.timerRules || []).find(r => {
+            if (r.when_type === 'always') return true;
+            if (r.when_type === 'question_contains') return pageTextLower.includes(norm(r.when_value));
+            return false;
+          });
+          if (matchedTimer?.wait_min_s || matchedTimer?.wait_max_s) {
+            const wMin = parseInt(matchedTimer.wait_min_s) || 0;
+            const wMax = parseInt(matchedTimer.wait_max_s) || wMin;
+            const waitMs = (wMin + Math.random() * Math.max(0, wMax - wMin)) * 1000;
+            console.log(`[Worker] Intent timer — waiting ${Math.round(waitMs / 1000)}s`);
+            await page.waitForTimeout(waitMs);
           }
         } else {
-          // AI disabled — log and continue without answering
-          console.warn(`[Worker] Page ${pageCount}: AI disabled — no answers given`);
-          answersGiven = [];
+          // AI returned no answers — retry once with same full params
+          console.warn(`[Worker] Page ${pageCount}: AI returned no answers — retrying`);
+          await page.waitForTimeout(2000);
+          answersGiven = await answerPageWithAI(
+            page, persona, scenario, agentSetup.factSheet,
+            agentSetup.intentMap, agentSetup.quotaCellText,
+            questionsOnPage, pageOptionsBefore, providerConfig,
+            resolvedProxyCountry, instructionsOnPage, agentSetup.personaBrief,
+          );
+          if (!answersGiven?.length) {
+            console.warn(`[Worker] Page ${pageCount}: AI retry also failed — skipping page answers`);
+            await logSessionEvent(sessionId, 'flag_warning', {
+              flag: 'AI_NO_ANSWER',
+              message: `AI could not answer page ${pageCount} after retry`,
+              page: pageCount,
+            });
+            answersGiven = [];
+          }
           questionCount++;
         }
+      } else {
+        console.warn(`[Worker] Page ${pageCount}: AI disabled — no answers given`);
+        answersGiven = [];
+        questionCount++;
+      }
 
         // Flag web search usage
         if (useAI && answersGiven?.length > 0) {
@@ -5137,6 +5220,17 @@ const processSession = async (job) => {
         if (providerConfig?.api_key && questionsOnPage.length > 0) {
           await fillMissedFieldsWithAI(page, providerConfig, agentSetup.personaBrief, questionsOnPage, agentSetup.factSheet);
         }
+
+        // ── Rescan for revealed sub-questions after all answers ────────────────
+        // Fires after AI answering — catches CXO dropdowns, city lists, etc.
+        await rescanForRevealedContent(
+          page,
+          providerConfig,
+          persona,
+          agentSetup.factSheet,
+          questionsOnPage,
+          agentSetup.personaBrief,
+        );
 
         await page.waitForTimeout(800);
         const pageOptionsAfter = await capturePageOptions(page);
@@ -5379,6 +5473,7 @@ const processSession = async (job) => {
     aiCallsCount: usage.calls,
     aiCostUsd: parseFloat(usage.costUsd.toFixed(8)),
     modelUsed: providerConfig?.model || null,
+    qualityScore,
     straight_line_score: straightLineScore,
     openend_quality_score: openEndScore,
     ...(errorMessage ? { errorLog: errorMessage.slice(0, 2000) } : {}),
