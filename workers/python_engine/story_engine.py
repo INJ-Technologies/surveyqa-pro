@@ -108,14 +108,16 @@ class StoryEngine:
         base_url: Optional[str] = None,
         input_price_per_1m: float = 0.0,
         output_price_per_1m: float = 0.0,
+        is_free: Optional[bool] = None,
     ):
         self.story_state = story_state
         self.model_name = model_name
+        self.is_free = bool(is_free) or (":free" in (model_name or "").lower())
         # Resolve API key
         self.api_key = api_key or get_secret("openrouter_synthfield") or OPENROUTER_API_KEY
         self.base_url = base_url or "https://openrouter.ai/api/v1/chat/completions"
-        self.input_price_per_1m = float(input_price_per_1m or 0.0)
-        self.output_price_per_1m = float(output_price_per_1m or 0.0)
+        self.input_price_per_1m = float(input_price_per_1m or 0.0) if not self.is_free else 0.0
+        self.output_price_per_1m = float(output_price_per_1m or 0.0) if not self.is_free else 0.0
 
         # Real-time token and cost tracking
         self.total_input_tokens = 0
@@ -126,6 +128,13 @@ class StoryEngine:
 
     def _resolve_pricing(self, model: str):
         """Returns (input_price_per_1m, output_price_per_1m) in USD."""
+        m_lower = (model or "").lower()
+
+        # 1. Any free model (:free tag or is_free) is strictly $0.00
+        if ":free" in m_lower or "free" in m_lower.split(":")[-1] or self.is_free:
+            return 0.0, 0.0
+
+        # 2. Configured pricing from database
         if self.input_price_per_1m > 0 or self.output_price_per_1m > 0:
             return self.input_price_per_1m, self.output_price_per_1m
 
@@ -610,12 +619,21 @@ class StoryEngine:
             "X-Title": "SurveyQA Pro Living Story Engine",
         }
 
-        candidate_models = [
-            self.model_name,
-            "meta-llama/llama-3.3-70b-instruct",
-            "mistralai/mistral-small-24b-instruct-2501",
-            "meta-llama/llama-3.1-8b-instruct"
-        ]
+        if self.is_free or ":free" in (self.model_name or "").lower():
+            candidate_models = [
+                self.model_name,
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "qwen/qwen-2.5-72b-instruct:free",
+                "meta-llama/llama-3.1-8b-instruct:free",
+                "mistralai/mistral-7b-instruct:free"
+            ]
+        else:
+            candidate_models = [
+                self.model_name,
+                "meta-llama/llama-3.3-70b-instruct",
+                "mistralai/mistral-small-24b-instruct-2501",
+                "meta-llama/llama-3.1-8b-instruct"
+            ]
         # Remove duplicates preserving order
         seen_models = set()
         candidate_models = [m for m in candidate_models if m and not (m in seen_models or seen_models.add(m))]

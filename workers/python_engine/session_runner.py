@@ -111,8 +111,18 @@ class SurveySessionRunner:
         workspace_id = str(project.get("workspace_id") or session.get("workspace_id"))
         ai_model_record = self.db.get_ai_model(workspace_id, session.get("ai_model_id"))
         model_name = ai_model_record.get("model_id") if ai_model_record else "meta-llama/llama-3.3-70b-instruct"
-        input_price = float(ai_model_record.get("input_price_per_1m") or 0.0) if ai_model_record else 0.0
-        output_price = float(ai_model_record.get("output_price_per_1m") or 0.0) if ai_model_record else 0.0
+        raw_in_price = ai_model_record.get("input_price_per_1m") if ai_model_record else None
+        raw_out_price = ai_model_record.get("output_price_per_1m") if ai_model_record else None
+        input_price = float(raw_in_price) if raw_in_price is not None else 0.0
+        output_price = float(raw_out_price) if raw_out_price is not None else 0.0
+
+        is_free_model = False
+        if ai_model_record and bool(ai_model_record.get("is_free")):
+            is_free_model = True
+        elif ":free" in model_name.lower():
+            is_free_model = True
+        elif ai_model_record and raw_in_price is not None and input_price == 0.0 and output_price == 0.0:
+            is_free_model = True
 
         # 5. Initialize Living Story Engine
         story_state = StoryState(persona=persona, proxy_country=proxy_country)
@@ -121,6 +131,7 @@ class SurveySessionRunner:
             model_name=model_name,
             input_price_per_1m=input_price,
             output_price_per_1m=output_price,
+            is_free=is_free_model,
         )
 
         # 6. Resolve Proxy
