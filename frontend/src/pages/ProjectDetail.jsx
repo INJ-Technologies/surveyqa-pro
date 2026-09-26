@@ -398,25 +398,62 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
     setSelected((prev) => prev.filter((s) => s.code !== code));
   const [distribution, setDistribution] = useState([]);
 
+  // Match survey segment for a country
+  const getSurveySegment = useCallback(
+    (countryCode) => {
+      if (!surveys || surveys.length === 0) return null;
+      if (!countryCode) return surveys.find((s) => s.label === "Main") || surveys[0];
+      const code = countryCode.toUpperCase();
+      return (
+        surveys.find((sv) => {
+          const codes = Array.isArray(sv.countries)
+            ? sv.countries
+            : (sv.countries || "")
+                .split(",")
+                .map((c) => c.trim().toUpperCase())
+                .filter(Boolean);
+          return codes.includes(code);
+        }) ||
+        surveys.find((s) => s.label === "Main") ||
+        surveys[0] ||
+        null
+      );
+    },
+    [surveys],
+  );
+
   // Generate randomized distribution across selected countries
-  const generateDistribution = useCallback((countryList, numSessions) => {
-    if (!countryList || countryList.length === 0) return [];
-    const n = Math.max(1, parseInt(numSessions) || 1);
+  const generateDistribution = useCallback(
+    (countryList, numSessions) => {
+      if (!countryList || countryList.length === 0) return [];
+      const n = Math.max(1, parseInt(numSessions) || 1);
 
-    if (n === 1) {
-      // Randomly pick one country segment from selected
-      const randomIndex = Math.floor(Math.random() * countryList.length);
-      return [countryList[randomIndex]];
-    }
+      const enrich = (item) => {
+        const sv = getSurveySegment(item.code);
+        return {
+          code: item.code,
+          country: item.country || item.code,
+          surveyId: sv?.id || null,
+          segmentLabel: sv?.label || "",
+        };
+      };
 
-    // For multiple sessions: randomly distribute across selected countries
-    const shuffled = [...countryList].sort(() => Math.random() - 0.5);
-    const result = [];
-    for (let i = 0; i < n; i++) {
-      result.push(shuffled[i % shuffled.length]);
-    }
-    return result;
-  }, []);
+      if (n === 1) {
+        // Randomly pick one country segment from selected
+        const randomIndex = Math.floor(Math.random() * countryList.length);
+        return [enrich(countryList[randomIndex])];
+      }
+
+      // For multiple sessions: randomly distribute across selected countries
+      const shuffled = [...countryList].sort(() => Math.random() - 0.5);
+      const result = [];
+      for (let i = 0; i < n; i++) {
+        result.push(enrich(shuffled[i % shuffled.length]));
+      }
+      return result;
+    },
+    [getSurveySegment],
+  );
 
   // Update distribution when selected countries or count changes
   useEffect(() => {
@@ -446,13 +483,22 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
     setError("");
     setLoading(true);
     try {
-      const countryCodes = selected.map((s) => s.code);
-      const targetDistribution = distribution.map((d) => d.code);
+      const targetDistribution = distribution.map((d) => ({
+        code: d.code,
+        country: d.country,
+        surveyId: d.surveyId || null,
+        segmentLabel: d.segmentLabel || null,
+      }));
+      const pickedCountryCodes = [
+        ...new Set(distribution.map((d) => d.code).filter(Boolean)),
+      ];
+
       await api.post("/sessions/trigger", {
         projectId: project.id,
         count: parseInt(count),
-        proxyCountry: countryCodes.length > 0 ? countryCodes : null,
-        targetDistribution: targetDistribution.length > 0 ? targetDistribution : null,
+        proxyCountry: pickedCountryCodes.length > 0 ? pickedCountryCodes : null,
+        targetDistribution:
+          targetDistribution.length > 0 ? targetDistribution : null,
         scenarioIds: selectedScenarios,
         internalTesting: testingMode === "internal",
         aiModelId: selectedModel || null,
@@ -923,22 +969,79 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
                 Shuffle
               </button>
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 180, overflowY: "auto" }}>
               {distribution.map((c, i) => (
-                <span
+                <div
                   key={i}
                   style={{
                     background: "white",
-                    border: "1px solid #e2e8f0",
-                    borderRadius: 6,
-                    padding: "3px 8px",
-                    fontSize: "0.75rem",
-                    fontFamily: FONT,
-                    color: "#475569",
+                    border: "1.5px solid #e2e8f0",
+                    borderRadius: 8,
+                    padding: "6px 10px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
                   }}
                 >
-                  <span style={{ color: "#94a3b8" }}>#{i + 1}</span> {c.code}
-                </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, overflow: "hidden" }}>
+                    <span
+                      style={{
+                        background: "#f1f5f9",
+                        color: "#64748b",
+                        fontSize: "0.7rem",
+                        fontWeight: 700,
+                        padding: "1px 5px",
+                        borderRadius: 4,
+                        fontFamily: "monospace",
+                      }}
+                    >
+                      #{i + 1}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: "0.8rem",
+                        fontWeight: 700,
+                        color: "#1e3a5f",
+                        fontFamily: "monospace",
+                      }}
+                    >
+                      {c.code}
+                    </span>
+                    {c.country && c.country !== c.code && (
+                      <span
+                        style={{
+                          fontSize: "0.78rem",
+                          color: "#475569",
+                          fontFamily: FONT,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        — {c.country}
+                      </span>
+                    )}
+                  </div>
+                  {c.segmentLabel && (
+                    <span
+                      style={{
+                        background: "#eff6ff",
+                        color: "#2563eb",
+                        border: "1px solid #bfdbfe",
+                        borderRadius: 4,
+                        padding: "1px 6px",
+                        fontSize: "0.72rem",
+                        fontWeight: 600,
+                        fontFamily: FONT,
+                        whiteSpace: "nowrap",
+                        flexShrink: 0,
+                      }}
+                    >
+                      Segment: {c.segmentLabel}
+                    </span>
+                  )}
+                </div>
               ))}
             </div>
           </div>

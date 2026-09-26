@@ -199,10 +199,16 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
 
     // Honor exact previewed distribution if provided, otherwise compute quota/random distribution
     let distributedCountries = [];
+    let distributedTargets = [];
     if (Array.isArray(targetDistribution) && targetDistribution.length > 0) {
-      distributedCountries = targetDistribution.slice(0, sessionLimit).map(c => String(c).trim().toUpperCase());
-      while (distributedCountries.length < sessionLimit) {
-        distributedCountries.push(targetDistribution[distributedCountries.length % targetDistribution.length].trim().toUpperCase());
+      for (let i = 0; i < sessionLimit; i++) {
+        const item = targetDistribution[i % targetDistribution.length];
+        const countryCode = typeof item === 'object' && item !== null
+          ? (item.code || item.country || '')
+          : String(item || '');
+        const normCode = countryCode.trim().toUpperCase();
+        distributedCountries.push(normCode);
+        distributedTargets.push(typeof item === 'object' && item !== null ? item : { code: normCode });
       }
       console.log(`[Trigger] Using exact previewed distribution (${distributedCountries.length}): ${distributedCountries.join(', ')}`);
     } else {
@@ -212,9 +218,19 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
     for (let i = 0; i < sessionLimit; i++) {
       const personaId = personaIds.length > 0 ? personaIds[i % personaIds.length] : null;
       const country = distributedCountries[i] || null;
+      const targetItem = distributedTargets[i] || null;
 
-      // Pick the survey URL that matches this country
-      const survey = getSurveyForCountry(surveys, country);
+      // Pick the survey URL that matches this target segment or country
+      let survey = null;
+      if (targetItem?.surveyId) {
+        survey = surveys.find(s => String(s.id) === String(targetItem.surveyId));
+      }
+      if (!survey && targetItem?.segmentLabel) {
+        survey = surveys.find(s => s.label === targetItem.segmentLabel);
+      }
+      if (!survey) {
+        survey = getSurveyForCountry(surveys, country);
+      }
 
       if (!survey?.url) {
         console.warn(`[Sessions] No survey URL found for country ${country} — skipping`);
