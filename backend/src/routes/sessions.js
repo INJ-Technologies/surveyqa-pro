@@ -69,9 +69,10 @@ const buildCountryDistribution = async (countryList, projectId, sessionLimit) =>
     console.warn('[Trigger] Quota distribution failed, using random fallback:', e.message);
   }
 
-  // Fallback: equal-weight random (not round-robin)
-  const fallback = Array.from({ length: sessionLimit }, (_, i) => countryList[i % countryList.length]);
-  return shuffleArray(fallback);
+  // Fallback: equal-weight random across selected countries
+  const shuffledCountries = shuffleArray([...countryList]);
+  const fallback = Array.from({ length: sessionLimit }, (_, i) => shuffledCountries[i % shuffledCountries.length]);
+  return fallback;
 };
 
 const router = express.Router();
@@ -127,7 +128,16 @@ const getSurveyForCountry = (surveys, countryCode) => {
 // ─── POST /api/sessions/trigger ───────────────────────────────────────────────
 router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res) => {
   try {
-    const { projectId, personaIds = [], count = 1, proxyCountry, scenarioIds, internalTesting = false, aiModelId } = req.body;
+    const {
+      projectId,
+      personaIds = [],
+      count = 1,
+      proxyCountry,
+      scenarioIds,
+      internalTesting = false,
+      aiModelId,
+      targetDistribution,
+    } = req.body;
 
     if (!projectId)
       return res.status(400).json({ error: 'projectId is required' });
@@ -187,8 +197,17 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
     const sessionLimit = Math.min(parseInt(count) || 1, 100);
     const created = [];
 
-    // Quota-aware randomised country distribution
-    const distributedCountries = await buildCountryDistribution(countryList, projectId, sessionLimit);
+    // Honor exact previewed distribution if provided, otherwise compute quota/random distribution
+    let distributedCountries = [];
+    if (Array.isArray(targetDistribution) && targetDistribution.length > 0) {
+      distributedCountries = targetDistribution.slice(0, sessionLimit).map(c => String(c).trim().toUpperCase());
+      while (distributedCountries.length < sessionLimit) {
+        distributedCountries.push(targetDistribution[distributedCountries.length % targetDistribution.length].trim().toUpperCase());
+      }
+      console.log(`[Trigger] Using exact previewed distribution (${distributedCountries.length}): ${distributedCountries.join(', ')}`);
+    } else {
+      distributedCountries = await buildCountryDistribution(countryList, projectId, sessionLimit);
+    }
 
     for (let i = 0; i < sessionLimit; i++) {
       const personaId = personaIds.length > 0 ? personaIds[i % personaIds.length] : null;
@@ -215,31 +234,31 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
         surveyLabel:   survey.label,
         responseId,
         proxyCountry:  country,
-        proxyProvider: project.proxy_provider || 'decodo',
+        proxyProvider: internalTesting ? 'none' : (project.proxy_provider || 'decodo'),
         deviceType:    project.device_type    || 'desktop',
         browserType:   'chrome',
         aiStrategy:    project.ai_strategy    || 'persona_true',
-        internalTesting: internalTesting || false,   // ← ADD THIS
+        internalTesting: !!internalTesting,
       });
 
       // Resolve AI model: explicit selection > workspace default AI model
       let resolvedModelId = aiModelId || null;
-        if (!resolvedModelId) {
-          const wsId = req.user.workspace_id || null;
-          const defaultModel = await getDefaultModel(wsId);
-          resolvedModelId = defaultModel?.model_id || null;
-          console.log(`[Trigger] Default AI model: ${defaultModel ? defaultModel.display_name + ' / ' + defaultModel.model_id : 'NONE — env fallback'}`);
-        }
+      if (!resolvedModelId) {
+        const wsId = req.user.workspace_id || null;
+        const defaultModel = await getDefaultModel(wsId);
+        resolvedModelId = defaultModel?.model_id || null;
+        console.log(`[Trigger] Default AI model: ${defaultModel ? defaultModel.display_name + ' / ' + defaultModel.model_id : 'NONE — env fallback'}`);
+      }
 
       await sessionQueue.add('run-session', {
         sessionId:       session.id,
         projectId,
         scenarioIds:     scenarioIds || null,
-        internalTesting: internalTesting || false,
+        internalTesting: !!internalTesting,
         personaId,
         surveyUrl:       finalUrl,
         responseId,
-        proxyProvider:   project.proxy_provider || 'decodo',
+        proxyProvider:   internalTesting ? 'none' : (project.proxy_provider || 'decodo'),
         proxyCountry:    country,
         deviceType:      project.device_type    || 'desktop',
         aiStrategy:      project.ai_strategy    || 'persona_true',

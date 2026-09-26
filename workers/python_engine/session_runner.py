@@ -59,9 +59,10 @@ def calculate_quality_score(
 
 
 class SurveySessionRunner:
-    def __init__(self, session_id: str, survey_url: Optional[str] = None):
+    def __init__(self, session_id: str, survey_url: Optional[str] = None, internal_testing: Optional[bool] = None):
         self.session_id = session_id
         self.survey_url = survey_url
+        self.internal_testing = internal_testing
         self.db = DBClient()
         self.max_pages = 150
 
@@ -78,6 +79,15 @@ class SurveySessionRunner:
         # 1. Update status to in_progress
         self.db.update_session_status(self.session_id, "in_progress")
         start_time = time.time()
+
+        # Check internal testing mode: CLI flag override OR session record OR proxy_provider == 'none'
+        is_internal = False
+        if self.internal_testing is True:
+            is_internal = True
+        elif session.get("internal_testing"):
+            is_internal = True
+        elif str(session.get("proxy_provider") or "").lower() in ["none", "direct", "internal", "local"]:
+            is_internal = True
 
         # 2. Resolve Persona
         proxy_country = session.get("proxy_country") or project.get("proxy_country")
@@ -108,7 +118,9 @@ class SurveySessionRunner:
 
         # 6. Resolve Proxy
         proxy_opts = None
-        if proxy_country and DECODO_USERNAME and DECODO_PASSWORD:
+        if is_internal:
+            print(f"[SessionRunner] Internal testing mode active — proxy disabled (direct connection)")
+        elif proxy_country and DECODO_USERNAME and DECODO_PASSWORD:
             proxy_cfg = self.db.get_proxy_config(proxy_country)
             if proxy_cfg and proxy_cfg.get("endpoint") and proxy_cfg.get("port"):
                 proxy_opts = {
@@ -117,6 +129,10 @@ class SurveySessionRunner:
                     "password": DECODO_PASSWORD,
                 }
                 print(f"[SessionRunner] Decodo proxy active: {proxy_cfg['endpoint']}:{proxy_cfg['port']} ({proxy_country})")
+            else:
+                print(f"[SessionRunner] No proxy endpoint configured for {proxy_country} — using direct connection")
+        else:
+            print(f"[SessionRunner] Direct connection (no proxy configured)")
 
         # 7. Survey URL resolution
         survey_url = self.survey_url or session.get("survey_url")
@@ -189,13 +205,44 @@ class SurveySessionRunner:
             page = context.new_page()
             page.set_default_timeout(30000)
 
+            # Log browser_launched event
+            self.db.log_session_event(
+                session_id=self.session_id,
+                event_type="browser_launched",
+                page_num=0,
+                payload={
+                    "proxy": "internal-testing" if is_internal else (f"decodo-{proxy_country}" if proxy_opts else "direct"),
+                    "responseId": session.get("response_id"),
+                    "surveyUrl": survey_url,
+                    "scenarioName": active_scenario.get("name") if active_scenario else None,
+                }
+            )
+
             scraper = PageScraper(page)
             executor = ActionExecutor(page)
 
             try:
                 print(f"[SessionRunner] Navigating to {survey_url}...")
-                page.goto(survey_url, wait_until="domcontentloaded", timeout=45000)
-                time.sleep(2.0)
+                nav_success = False
+                last_nav_err = None
+                for attempt in range(2):
+                    try:
+                        wait_strat = "domcontentloaded" if attempt == 0 else "commit"
+                        nav_timeout = 60000 if proxy_opts else 30000
+                        print(f"[SessionRunner] Navigation attempt {attempt + 1} (wait_until='{wait_strat}', timeout={nav_timeout}ms)...")
+                        page.goto(survey_url, wait_until=wait_strat, timeout=nav_timeout)
+                        nav_success = True
+                        break
+                    except Exception as goto_err:
+                        last_nav_err = goto_err
+                        print(f"[SessionRunner] Navigation attempt {attempt + 1} encountered error: {goto_err}")
+                        if attempt == 0:
+                            time.sleep(2.0)
+                        else:
+                            raise last_nav_err
+
+                # Allow initial scripts/DOM to settle
+                time.sleep(1.0 if is_internal else 2.5)
 
                 # Page Execution Loop
                 while current_page < self.max_pages:
@@ -204,7 +251,7 @@ class SurveySessionRunner:
                     print(f"\n[SessionRunner] ── Processing Page {current_page} ── ({page.url})")
 
                     # Wait for DOM to stabilize
-                    time.sleep(1.5)
+                    time.sleep(0.5 if is_internal else 1.5)
 
                     # 1. Scrape visible elements and inspect state
                     scrape_data = scraper.scrape_visible_page()

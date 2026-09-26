@@ -396,10 +396,35 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
     });
   const removeCountry = (code) =>
     setSelected((prev) => prev.filter((s) => s.code !== code));
-  const getDistribution = () => {
-    if (selected.length === 0) return [];
-    const n = parseInt(count) || 1;
-    return Array.from({ length: n }, (_, i) => selected[i % selected.length]);
+  const [distribution, setDistribution] = useState([]);
+
+  // Generate randomized distribution across selected countries
+  const generateDistribution = useCallback((countryList, numSessions) => {
+    if (!countryList || countryList.length === 0) return [];
+    const n = Math.max(1, parseInt(numSessions) || 1);
+
+    if (n === 1) {
+      // Randomly pick one country segment from selected
+      const randomIndex = Math.floor(Math.random() * countryList.length);
+      return [countryList[randomIndex]];
+    }
+
+    // For multiple sessions: randomly distribute across selected countries
+    const shuffled = [...countryList].sort(() => Math.random() - 0.5);
+    const result = [];
+    for (let i = 0; i < n; i++) {
+      result.push(shuffled[i % shuffled.length]);
+    }
+    return result;
+  }, []);
+
+  // Update distribution when selected countries or count changes
+  useEffect(() => {
+    setDistribution(generateDistribution(selected, count));
+  }, [selected, count, generateDistribution]);
+
+  const handleShuffleDistribution = () => {
+    setDistribution(generateDistribution(selected, count));
   };
 
   useEffect(() => {
@@ -422,10 +447,12 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
     setLoading(true);
     try {
       const countryCodes = selected.map((s) => s.code);
+      const targetDistribution = distribution.map((d) => d.code);
       await api.post("/sessions/trigger", {
         projectId: project.id,
         count: parseInt(count),
         proxyCountry: countryCodes.length > 0 ? countryCodes : null,
+        targetDistribution: targetDistribution.length > 0 ? targetDistribution : null,
         scenarioIds: selectedScenarios,
         internalTesting: testingMode === "internal",
         aiModelId: selectedModel || null,
@@ -438,7 +465,6 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
     }
   };
 
-  const distribution = getDistribution();
   const n = parseInt(count) || 1;
 
   return (
@@ -857,16 +883,45 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
           >
             <div
               style={{
-                fontSize: "0.72rem",
-                fontWeight: 700,
-                color: "#94a3b8",
-                fontFamily: FONT,
-                textTransform: "uppercase",
-                letterSpacing: 0.5,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
                 marginBottom: 8,
               }}
             >
-              Session Distribution Preview
+              <div
+                style={{
+                  fontSize: "0.72rem",
+                  fontWeight: 700,
+                  color: "#94a3b8",
+                  fontFamily: FONT,
+                  textTransform: "uppercase",
+                  letterSpacing: 0.5,
+                }}
+              >
+                Session Distribution Preview
+              </div>
+              <button
+                type="button"
+                onClick={handleShuffleDistribution}
+                title="Shuffle country segment selection"
+                style={{
+                  background: "white",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 6,
+                  padding: "2px 8px",
+                  fontSize: "0.72rem",
+                  fontFamily: FONT,
+                  color: "#475569",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <RefreshCw size={11} color="#64748b" />
+                Shuffle
+              </button>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {distribution.map((c, i) => (

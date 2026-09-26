@@ -12,17 +12,24 @@ def main():
     parser = argparse.ArgumentParser(description="SurveyQA Pro Python Engine CLI Runner")
     parser.add_argument("--session-id", required=True, help="UUID of the session to execute")
     parser.add_argument("--survey-url", default=None, help="Direct survey URL to test")
+    parser.add_argument("--internal-testing", action="store_true", default=False, help="Force direct execution without proxy for internal testing")
     args = parser.parse_args()
 
     print(f"==================================================")
     print(f"  Starting SurveyQA Pro Python Engine")
     print(f"  Session: {args.session_id}")
+    if args.internal_testing:
+        print(f"  Mode: INTERNAL TESTING (Direct Connection)")
     if args.survey_url:
         print(f"  URL: {args.survey_url[:60]}...")
     print(f"==================================================")
 
     try:
-        runner = SurveySessionRunner(session_id=args.session_id, survey_url=args.survey_url)
+        runner = SurveySessionRunner(
+            session_id=args.session_id,
+            survey_url=args.survey_url,
+            internal_testing=args.internal_testing,
+        )
         result = runner.run()
         print("\nSession Execution Result:")
         print(result)

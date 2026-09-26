@@ -4460,7 +4460,7 @@ const calculateQualityScore = (pages, sessionEvents, pageCount, outcome) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // PYTHON STORY ENGINE RUNNER
 // ══════════════════════════════════════════════════════════════════════════════
-const runPythonSession = (sessionId, surveyUrl = null) => {
+const runPythonSession = (sessionId, surveyUrl = null, internalTesting = false) => {
   return new Promise((resolve, reject) => {
     const pythonBin =
       process.env.PYTHON_BIN ||
@@ -4469,6 +4469,9 @@ const runPythonSession = (sessionId, surveyUrl = null) => {
     const args = ["-m", "python_engine.runner", "--session-id", sessionId];
     if (surveyUrl) {
       args.push("--survey-url", surveyUrl);
+    }
+    if (internalTesting) {
+      args.push("--internal-testing");
     }
 
     console.log(
@@ -4545,7 +4548,7 @@ const processSession = async (job) => {
   const usePythonEngine = process.env.USE_PYTHON_ENGINE !== "false";
   if (usePythonEngine) {
     try {
-      return await runPythonSession(sessionId, surveyUrl);
+      return await runPythonSession(sessionId, surveyUrl, internalTesting);
     } catch (err) {
       console.warn(
         `[Worker] Python engine execution failed: ${err.message}. Retrying via BullMQ...`,
