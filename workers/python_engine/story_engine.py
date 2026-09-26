@@ -11,7 +11,7 @@ from typing import List, Dict, Any, Optional
 import httpx
 
 from .config import get_secret, OPENROUTER_API_KEY
-from .optout_filter import filter_substantive_for_ai, is_optout_option
+from .optout_filter import filter_substantive_for_ai, is_optout_option, is_grid_other_row
 
 
 class StoryState:
@@ -240,9 +240,8 @@ class StoryEngine:
                     substantive_cols = list(range(len(col_headers))) if col_headers else [0]
                 grid_sels = []
                 for ri, row in enumerate(rows):
-                    is_other = row.get("isOther") or bool(re.search(r"other|specify", row.get("rowLabel", ""), re.I))
-                    if is_other:
-                        continue  # Leave Other rows unrated so validation isn't triggered
+                    if is_grid_other_row(row):
+                        continue  # Leave genuine Other rows unrated so validation isn't triggered
                     c_idx = substantive_cols[ri % len(substantive_cols)]
                     grid_sels.append({"rowIndex": ri, "colIndex": c_idx})
                 answers.append({
@@ -539,9 +538,8 @@ class StoryEngine:
                 other_rows = []
                 for ri, r in enumerate(f.get("rows", [])):
                     r_label = r.get("rowLabel", "")
-                    is_other = r.get("isOther") or bool(re.search(r"other|specify|please\s*state|explain|details|write[- ]in|qualify", r_label, re.I))
                     r_info = {"rowIndex": ri, "rowLabel": r_label}
-                    if is_other:
+                    if is_grid_other_row(r):
                         other_rows.append(r_info)
                     else:
                         substantive_rows.append(r_info)

@@ -395,9 +395,10 @@ class PageScraper:
                         rowLabel = cleanText(firstNonRadioCell.innerText || firstNonRadioCell.textContent);
                     }
 
-                    // Check if this row is an Other / Specify row
+                    // Check if this row is an Other / Specify row (must have text input OR explicitly start with Other / contain please specify)
                     const rowInp = tr.querySelector('input[type="text"], input[type="search"], textarea');
-                    const isOtherRow = /other|specify|please\\s*state|explain|details|write[- ]in|qualify/i.test(rowLabel) || !!rowInp;
+                    const isExplicitOtherLabel = /^\\s*other\\b|please\\s*specify|\\(specify\\)|specify\\s*:|write[- ]in|other\\s*\\([^)]*\\)/i.test(rowLabel);
+                    const isOtherRow = !!rowInp || isExplicitOtherLabel;
                     if (rowInp) {
                         claimedSpecifyInputs.add(rowInp);
                     }

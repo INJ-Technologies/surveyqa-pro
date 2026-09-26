@@ -10,7 +10,7 @@ import time
 from typing import List, Dict, Any, Optional
 from playwright.sync_api import Page, Locator
 
-from .optout_filter import is_consent_checkbox, is_optout_option
+from .optout_filter import is_consent_checkbox, is_optout_option, is_grid_other_row
 
 
 def safe_click(locator: Locator):
@@ -195,7 +195,7 @@ class ActionExecutor:
                     grid_sels = [
                         {"rowIndex": ri, "colIndex": sub_cols[ri % len(sub_cols)]}
                         for ri, r in enumerate(rows)
-                        if not (r.get("isOther") or bool(re.search(r"other|specify", r.get("rowLabel", ""), re.I)))
+                        if not is_grid_other_row(r)
                     ]
                     res = self._execute_grid(f, {"gridSelections": grid_sels}, persona)
                     if res: results.append(res)
@@ -900,7 +900,7 @@ class ActionExecutor:
         # Anti-straight-lining for substantive rows only
         substantive_row_indices = [
             ri for ri, r in enumerate(rows)
-            if not (r.get("isOther") or bool(re.search(r"other|specify|please\s*state|explain|details|write[- ]in|qualify", r.get("rowLabel", ""), re.I)))
+            if not is_grid_other_row(r)
         ]
 
         if substantive_row_indices:
@@ -914,7 +914,7 @@ class ActionExecutor:
 
         row_results = []
         for ri, row in enumerate(rows):
-            is_other = row.get("isOther") or bool(re.search(r"other|specify|please\s*state|explain|details|write[- ]in|qualify", row.get("rowLabel", ""), re.I))
+            is_other = is_grid_other_row(row)
             row_label = row.get("rowLabel", "")
             cols = row.get("columns", [])
             row_name = row.get("groupName")

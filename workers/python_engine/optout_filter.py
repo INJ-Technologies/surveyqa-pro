@@ -43,9 +43,13 @@ CONSENT_PATTERNS = [
 
 # Patterns for "Other (please specify)"
 SPECIFY_PATTERNS = [
+    r"^\s*other(\b|\s*\(|\s*:|\s*,|\s*$|\s+please)",
     r"\bother\s*\([^)]*specify[^)]*\)",
     r"\bother\s*\(please\s*state\)",
     r"\bplease\s*specify\b",
+    r"\(specify\)",
+    r"\bspecify\s*:",
+    r"\bwrite[- ]in\b",
     r"^\s*other\s*$",
 ]
 
@@ -72,6 +76,20 @@ def is_specify_option(text: str) -> bool:
         return False
     t = text.strip().lower()
     return any(re.search(p, t, re.IGNORECASE) for p in SPECIFY_PATTERNS)
+
+
+def is_grid_other_row(row: Dict[str, Any]) -> bool:
+    """
+    Returns True if and only if this grid row is genuinely an 'Other / Specify' write-in row.
+    Never matches regular sentences that happen to contain the word 'other'
+    (e.g. 'Introduce or increase other card or account service charges').
+    """
+    if not row:
+        return False
+    if row.get("hasSpecify") or row.get("specifyId") or row.get("specifyName"):
+        return True
+    label = (row.get("rowLabel") or "").strip()
+    return is_specify_option(label)
 
 
 def separate_options(options: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
