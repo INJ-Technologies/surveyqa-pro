@@ -404,6 +404,26 @@ class ActionExecutor:
 
         substantive = [i for i, o in enumerate(options) if not is_optout_option(o.get("label", ""))]
 
+        # If question contains ONLY opt-out options (e.g. 'Don't know' anchor), NEVER check anything!
+        if not substantive:
+            # Explicitly uncheck any opt-outs
+            self.page.evaluate("""() => {
+                document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                    const row = cb.closest('tr, .row, .element, label, [class*="choice"]') || cb.parentElement;
+                    const rowText = (row ? (row.innerText || row.textContent) : '').toLowerCase().replace(/[\u2018\u2019`]/g, "'");
+                    if (cb.classList.contains('no-answer') || /don'?t\\s+know|none\\s+of|no\\s+significant/i.test(rowText)) {
+                        cb.checked = false;
+                        cb.removeAttribute('checked');
+                        const cell = cb.closest('.cell-input, .fir-checkbox, tr, td, label');
+                        if (cell) {
+                            cell.querySelectorAll('.fir-selected, .checked, .selected').forEach(el => el.classList.remove('fir-selected', 'checked', 'selected'));
+                        }
+                        cb.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                });
+            }""")
+            return None
+
         # Guarantee at least min_required substantive selections
         sel_indices = [i for i in sel_indices if i in substantive]
         if len(sel_indices) < min_required and substantive:
@@ -422,13 +442,16 @@ class ActionExecutor:
                     if opt_id:
                         try:
                             loc = locate_by_id(self.page, opt_id)
-                            if loc.count() > 0 and loc.first.is_checked():
+                            if loc.count() > 0:
                                 loc.first.evaluate("""(el) => {
                                     el.checked = false;
-                                    const wrapper = el.closest('.fir-checkbox, .fir-radio, .element, label, [class*="fir-"]');
-                                    if (wrapper) {
-                                        wrapper.classList.remove('fir-selected', 'checked', 'selected');
+                                    el.removeAttribute('checked');
+                                    const cell = el.closest('.cell-input, .fir-checkbox, .fir-radio, .element, label, [class*="fir-"]');
+                                    if (cell) {
+                                        cell.querySelectorAll('.fir-selected, .checked, .selected').forEach(e => e.classList.remove('fir-selected', 'checked', 'selected'));
+                                        cell.classList.remove('fir-selected', 'checked', 'selected');
                                     }
+                                    el.dispatchEvent(new Event('input', { bubbles: true }));
                                     el.dispatchEvent(new Event('change', { bubbles: true }));
                                 }""")
                         except Exception:
@@ -553,15 +576,28 @@ class ActionExecutor:
 
         rank_limit = field.get("rankLimit") or 3
 
-        # Uncheck any opt-out checkboxes in the ranking container (e.g. "Don't know")
-        opt_out_cbs = field.get("optOutCheckboxIds", [])
-        for cb_id in opt_out_cbs:
-            try:
-                loc = locate_by_id(self.page, cb_id)
-                if loc.count() > 0 and loc.first.is_checked():
-                    loc.first.evaluate("el => { el.checked = false; el.dispatchEvent(new Event('change', {bubbles: true})); }")
-            except Exception:
-                pass
+        # Thoroughly uncheck ALL opt-out and ranking checkboxes in this ranking container (DOM & FIR)
+        self.page.evaluate("""() => {
+            document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                const row = cb.closest('tr, .row, .element, label, [class*="choice"]') || cb.parentElement;
+                const rowText = (row ? (row.innerText || row.textContent) : '').toLowerCase().replace(/[\u2018\u2019`]/g, "'");
+                const isOptOut = cb.classList.contains('no-answer') || 
+                                 /don'?t\\s+know|do\\s+not\\s+know|not\\s+sure|unsure|cannot\\s+say|none\\s+of|no\\s+significant|no\\s+clear|have\\s+no\\s+plan/i.test(rowText);
+                const qBlock = cb.closest('.question, .qblock, table');
+                const hasSelects = qBlock && qBlock.querySelectorAll('select').length >= 2;
+                if (isOptOut || hasSelects) {
+                    cb.checked = false;
+                    cb.removeAttribute('checked');
+                    const cell = cb.closest('.cell-input, .fir-checkbox, tr, td, label');
+                    if (cell) {
+                        cell.querySelectorAll('.fir-selected, .checked, .selected').forEach(el => el.classList.remove('fir-selected', 'checked', 'selected'));
+                        cell.classList.remove('fir-selected', 'checked', 'selected');
+                    }
+                    cb.dispatchEvent(new Event('input', { bubbles: true }));
+                    cb.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
+        }""")
 
         rankings = ans.get("rankings", [])
         raw_rank_map = {}
@@ -595,10 +631,15 @@ class ActionExecutor:
             if item_idx in raw_rank_map:
                 desired = raw_rank_map[item_idx]
                 matched_rank = None
+                d_m = re.search(r"\d+", desired)
+                d_num = d_m.group(0) if d_m else ""
                 for opt in item.get("rankOptions", []):
                     o_text = opt.get("text", "")
                     o_val = str(opt.get("value", ""))
-                    if desired.lower() == o_text.lower() or desired == o_val or desired.lower() in o_text.lower():
+                    o_m = re.search(r"\d+", o_text) or re.search(r"\d+", o_val)
+                    o_num = o_m.group(0) if o_m else ""
+                    num_match = d_num and o_num and (d_num == o_num)
+                    if desired.lower() == o_text.lower() or desired == o_val or desired.lower() in o_text.lower() or num_match:
                         if o_text not in assigned_ranks:
                             matched_rank = o_text
                             break
@@ -629,48 +670,57 @@ class ActionExecutor:
             if loc and loc.count() > 0:
                 try:
                     if chosen_rank:
-                        loc.first.evaluate("""(el, targetRank) => {
-                            el.removeAttribute('disabled');
-                            el.disabled = false;
-                            const parentRow = el.closest('tr, .row, .grid-row, .fir-select');
-                            if (parentRow) {
-                                parentRow.classList.remove('disabled', 'fir-disabled');
-                            }
-                            const clean = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-                            const targetClean = clean(targetRank);
-                            const targetNum = (targetRank.match(/\\d+/) || [''])[0];
+                        selected_ok = False
+                        try:
+                            loc.first.select_option(label=chosen_rank, timeout=600)
+                            selected_ok = True
+                        except Exception:
+                            pass
 
-                            for (let opt of el.options) {
-                                const optClean = clean(opt.text);
-                                const optValClean = clean(opt.value);
-                                const optNum = (opt.text.match(/\\d+/) || opt.value.match(/\\d+/) || [''])[0];
+                        if not selected_ok:
+                            loc.first.evaluate("""(el, targetRank) => {
+                                el.removeAttribute('disabled');
+                                el.disabled = false;
+                                const parentRow = el.closest('tr, .row, .grid-row, .fir-select');
+                                if (parentRow) parentRow.classList.remove('disabled', 'fir-disabled');
+                                const clean = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                                const targetClean = clean(targetRank);
+                                const targetNum = (targetRank.match(/\\d+/) || [''])[0];
 
-                                if (optClean === targetClean ||
-                                    optValClean === targetClean ||
-                                    (targetNum && optNum === targetNum) ||
-                                    opt.text.includes(targetRank) ||
-                                    opt.value === targetRank) {
-                                    el.value = opt.value;
-                                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                                    return true;
+                                for (let opt of el.options) {
+                                    const optClean = clean(opt.text);
+                                    const optValClean = clean(opt.value);
+                                    const optNum = (opt.text.match(/\\d+/) || opt.value.match(/\\d+/) || [''])[0];
+
+                                    if (optClean === targetClean ||
+                                        optValClean === targetClean ||
+                                        (targetNum && optNum === targetNum) ||
+                                        opt.text.includes(targetRank) ||
+                                        opt.value === targetRank) {
+                                        el.value = opt.value;
+                                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                                        return true;
+                                    }
                                 }
-                            }
-                            return false;
-                        }""", chosen_rank)
+                                return false;
+                            }""", chosen_rank)
                     else:
-                        loc.first.evaluate("""el => {
-                            el.removeAttribute('disabled');
-                            el.disabled = false;
-                            const emptyOpt = Array.from(el.options).find(o => !o.value || /select|--|choose|^none$|^$/i.test(o.text));
-                            if (emptyOpt) {
-                                el.value = emptyOpt.value;
-                            } else {
-                                el.selectedIndex = 0;
-                            }
-                            el.dispatchEvent(new Event('input', { bubbles: true }));
-                            el.dispatchEvent(new Event('change', { bubbles: true }));
-                        }""")
+                        try:
+                            loc.first.select_option(index=0, timeout=600)
+                        except Exception:
+                            loc.first.evaluate("""el => {
+                                el.removeAttribute('disabled');
+                                el.disabled = false;
+                                const emptyOpt = Array.from(el.options).find(o => !o.value || /select|--|choose|^none$|^$/i.test(o.text));
+                                if (emptyOpt) {
+                                    el.value = emptyOpt.value;
+                                } else {
+                                    el.selectedIndex = 0;
+                                }
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                            }""")
                 except Exception as ex:
                     print(f"[Executor] Ranking select failed for item {i}: {ex}")
 
@@ -721,6 +771,29 @@ class ActionExecutor:
                     "rank": chosen_rank
                 })
             time.sleep(0.1)
+
+        # Final pass: guarantee no opt-out / ranking checkboxes remain checked
+        self.page.evaluate("""() => {
+            document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                const row = cb.closest('tr, .row, .element, label, [class*="choice"]') || cb.parentElement;
+                const rowText = (row ? (row.innerText || row.textContent) : '').toLowerCase().replace(/[\u2018\u2019`]/g, "'");
+                const isOptOut = cb.classList.contains('no-answer') || 
+                                 /don'?t\\s+know|do\\s+not\\s+know|not\\s+sure|unsure|cannot\\s+say|none\\s+of|no\\s+significant|no\\s+clear|have\\s+no\\s+plan/i.test(rowText);
+                const qBlock = cb.closest('.question, .qblock, table');
+                const hasSelects = qBlock && qBlock.querySelectorAll('select').length >= 2;
+                if (isOptOut || hasSelects) {
+                    cb.checked = false;
+                    cb.removeAttribute('checked');
+                    const cell = cb.closest('.cell-input, .fir-checkbox, tr, td, label');
+                    if (cell) {
+                        cell.querySelectorAll('.fir-selected, .checked, .selected').forEach(el => el.classList.remove('fir-selected', 'checked', 'selected'));
+                        cell.classList.remove('fir-selected', 'checked', 'selected');
+                    }
+                    cb.dispatchEvent(new Event('input', { bubbles: true }));
+                    cb.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
+        }""")
 
         return {
             "type": "ranking",

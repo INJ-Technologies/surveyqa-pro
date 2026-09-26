@@ -268,7 +268,8 @@ class PageScraper:
             // ── Helper to find question label and instruction/hint for a control ──
             const isOptOutText = (t) => {
                 if (!t) return false;
-                return /don'?t\\s+know|do\\s+not\\s+know|not\\s+sure|unsure|cannot\\s+say|prefer\\s+not|none\\s+of|^\\s*none\\s*$|not\\s+applicable|^\\s*n\\/?a\\s*$/i.test(t);
+                const clean = t.toLowerCase().replace(/[’‘`]/g, "'");
+                return /don'?t\\s+know|do\\s+not\\s+know|not\\s+sure|unsure|cannot\\s+say|prefer\\s+not|none\\s+of|^\\s*none\\s*$|not\\s+applicable|^\\s*n\\/?a\\s*$|no\\s+significant\\s+constraints?|no\\s+clear\\s+benefits?|no\\s+formal\\s+process|have\\s+no\\s+plans?|we\\s+do\\s+not\\b/i.test(clean);
             };
 
             const getQuestionForControl = (el) => {
@@ -487,15 +488,153 @@ class PageScraper:
                 });
             });
 
-            // ── 3. Checkboxes ──
+            // ── 3. Dropdowns & Ranking Detection ──
+            const selects = Array.from(document.querySelectorAll('select')).filter(isVisible);
+
+            // Group ranking selects (e.g. selects in same table/container where options are ranks 1, 2, 3...)
+            const rankingCandidates = [];
+            const normalSelects = [];
+
+            selects.forEach((sel) => {
+                const optTexts = Array.from(sel.options).map(o => cleanText(o.text));
+                const meaningfulOpts = optTexts.filter(t => !/select|--|choose|^none$|^$/i.test(t));
+                const rankLikeOpts = meaningfulOpts.filter(t => /^(rank\\s*)?[0-9]+(\\w+)?$/i.test(t) || /^(top\\s*)?[0-9]+/i.test(t) || /^[0-9]+(st|nd|rd|th)$/i.test(t) || /^#[0-9]+$/.test(t));
+
+                const container = sel.closest('table, .qblock, .question, [class*="qblock"], fieldset') || sel.parentElement;
+                const containerText = cleanText(container?.innerText || '');
+                const hasRankingContext = /rank|order of importance|order of preference|priority|rank the top|select each answer only once|rate at least/i.test(containerText) ||
+                                          /rank|order|priorit/i.test(sel.name || '') ||
+                                          /rank|order|priorit/i.test(sel.id || '');
+
+                const isRankLike = (meaningfulOpts.length >= 2 && rankLikeOpts.length === meaningfulOpts.length) ||
+                                   (hasRankingContext && meaningfulOpts.length >= 2 && rankLikeOpts.length >= 1);
+
+                if (isRankLike) {
+                    rankingCandidates.push(sel);
+                } else {
+                    normalSelects.push(sel);
+                }
+            });
+
+            if (rankingCandidates.length >= 2) {
+                const container = rankingCandidates[0].closest('.qblock, .question, [class*="qblock"], [class*="question-block"], form, table') || rankingCandidates[0].parentElement;
+                const qInfo = getQuestionForControl(rankingCandidates[0]);
+                // Determine rank limit from question/instruction text ONLY (do not use container.innerText which has 'select one' placeholders)
+                const qPromptText = cleanText((qInfo.fullText || '') + ' ' + (qInfo.hint || '') + ' ' + (questions.join(' ')));
+
+                let detectedRankLimit = null;
+                const matchLimit = qPromptText.match(/(?:rank|rate)\\s+(?:the\\s+)?(?:top\\s+|at\\s+least\\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)/i) ||
+                                   qPromptText.match(/top\\s+(one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)/i) ||
+                                   qPromptText.match(/at\\s+least\\s+(one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)/i);
+                if (matchLimit) {
+                    const wordMap = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+                    const parsed = wordMap[matchLimit[1].toLowerCase()] || parseInt(matchLimit[1], 10);
+                    if (!isNaN(parsed) && parsed > 0) {
+                        detectedRankLimit = parsed;
+                    }
+                }
+
+                // Claim ALL checkboxes in this ranking container (e.g. "Don't know", "No significant constraints")
+                // so they are NEVER emitted or processed as standalone checkbox questions!
+                const optOutCheckboxes = [];
+                if (container) {
+                    container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                        claimedOptOutCbs.add(cb);
+                        if (cb.id) optOutCheckboxes.push(cb.id);
+                        if (cb.name) optOutCheckboxes.push(cb.name);
+                    });
+                }
+
+                const rankItems = rankingCandidates.map((sel, idx) => {
+                    const row = sel.closest('tr, [class*="row"], [class*="item"]');
+                    let rowLabel = '';
+                    let specInput = null;
+
+                    if (row) {
+                        const cells = Array.from(row.querySelectorAll('td, th'));
+                        const firstCell = cells.find(c => !c.querySelector('select, input[type="radio"], input[type="checkbox"]')) || cells[0];
+                        if (firstCell && firstCell !== sel) {
+                            rowLabel = cleanText(firstCell.innerText || firstCell.textContent);
+                        }
+
+                        // Check if this row contains a specify / write-in input box!
+                        const rowInp = row.querySelector('input[type="text"], input[type="search"], textarea');
+                        if (rowInp) {
+                            specInput = rowInp;
+                            claimedSpecifyInputs.add(rowInp);
+                        }
+                    }
+
+                    const validOpts = Array.from(sel.options)
+                        .filter(o => o.value && !/select|--|choose|^$/i.test(o.text))
+                        .map(o => ({ value: o.value, text: cleanText(o.text) }));
+
+                    return {
+                        itemIndex: idx,
+                        id: sel.id || null,
+                        name: sel.name || `rank_sel_${idx}`,
+                        itemLabel: rowLabel || `Item ${idx + 1}`,
+                        selectedValue: sel.value || null,
+                        hasSpecify: !!specInput,
+                        specifyId: specInput ? specInput.id : null,
+                        specifyName: specInput ? specInput.name : null,
+                        rankOptions: validOpts
+                    };
+                });
+
+                const numRankOptions = rankItems[0]?.rankOptions?.length || 3;
+                const effectiveLimit = detectedRankLimit ? Math.min(detectedRankLimit, numRankOptions) : Math.min(rankItems.length, numRankOptions);
+
+                fields.push({
+                    fieldType: 'ranking',
+                    fieldIndex: fields.length,
+                    questionLabel: qInfo.fullText,
+                    questionTitle: qInfo.question,
+                    questionHint: qInfo.hint,
+                    rankLimit: effectiveLimit,
+                    items: rankItems,
+                    optOutCheckboxIds: Array.from(new Set(optOutCheckboxes.filter(Boolean)))
+                });
+            } else {
+                rankingCandidates.forEach(s => normalSelects.push(s));
+            }
+
+            normalSelects.forEach((sel, si) => {
+                const validOpts = Array.from(sel.options)
+                    .filter(o => o.value && !/select one|--|please select/i.test(o.text))
+                    .map(o => ({ value: o.value, label: cleanText(o.text) }));
+
+                const qInfo = getQuestionForControl(sel);
+                fields.push({
+                    fieldType: 'select',
+                    fieldIndex: fields.length,
+                    selectIndex: si,
+                    id: sel.id || null,
+                    name: sel.name || `select_${si}`,
+                    questionLabel: qInfo.fullText,
+                    questionTitle: qInfo.question,
+                    questionHint: qInfo.hint,
+                    selectedValue: sel.value || null,
+                    options: validOpts
+                });
+            });
+
+            // ── 4. Checkboxes ──
             const cbGroups = {};
             const cbOrder = [];
             document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
                 if (!isInputInteractive(cb)) return;
                 if (claimedOptOutCbs.has(cb)) return;
+                if (cb.classList && cb.classList.contains('no-answer')) return;
 
                 // Group checkboxes belonging to the same question block into one multi-option question
                 const qBlock = cb.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], fieldset, table, [role="group"]');
+                // If question block contains ranking selects, skip this checkbox entirely
+                if (qBlock && qBlock.querySelectorAll('select').length >= 2) {
+                    claimedOptOutCbs.add(cb);
+                    return;
+                }
+
                 const qInfo = getQuestionForControl(cb);
                 const qText = qInfo.fullText;
 
@@ -545,6 +684,14 @@ class PageScraper:
                         label = cleanText(sib.innerText || sib.textContent);
                     }
                 }
+                if (!label) {
+                    const row = cb.closest('tr, [class*="row"]');
+                    if (row) {
+                        const cells = Array.from(row.querySelectorAll('td, th'));
+                        const textCell = cells.find(c => !c.querySelector('input, select'));
+                        if (textCell) label = cleanText(textCell.innerText || textCell.textContent);
+                    }
+                }
 
                 const spec = findSpecifyInput(cb, label);
                 cbGroups[groupKey].options.push({
@@ -578,139 +725,6 @@ class PageScraper:
                     questionHint: groupObj.questionHint || '',
                     minSelections: minReq,
                     options: groupObj.options
-                });
-            });
-
-            // ── 4. Dropdowns & Ranking Detection ──
-            const selects = Array.from(document.querySelectorAll('select')).filter(isVisible);
-
-            // Group ranking selects (e.g. selects in same table/container where options are ranks 1, 2, 3...)
-            const rankingCandidates = [];
-            const normalSelects = [];
-
-            selects.forEach((sel) => {
-                const optTexts = Array.from(sel.options).map(o => cleanText(o.text));
-                const meaningfulOpts = optTexts.filter(t => !/select|--|choose|^none$|^$/i.test(t));
-                const rankLikeOpts = meaningfulOpts.filter(t => /^(rank\\s*)?[0-9]+(\\w+)?$/i.test(t) || /^(top\\s*)?[0-9]+/i.test(t) || /^[0-9]+(st|nd|rd|th)$/i.test(t) || /^#[0-9]+$/.test(t));
-
-                const container = sel.closest('table, .qblock, .question, [class*="qblock"], fieldset') || sel.parentElement;
-                const containerText = cleanText(container?.innerText || '');
-                const hasRankingContext = /rank|order of importance|order of preference|priority|rank the top|select each answer only once|rate at least/i.test(containerText) ||
-                                          /rank|order|priorit/i.test(sel.name || '') ||
-                                          /rank|order|priorit/i.test(sel.id || '');
-
-                const isRankLike = (meaningfulOpts.length >= 2 && rankLikeOpts.length === meaningfulOpts.length) ||
-                                   (hasRankingContext && meaningfulOpts.length >= 2 && rankLikeOpts.length >= 1);
-
-                if (isRankLike) {
-                    rankingCandidates.push(sel);
-                } else {
-                    normalSelects.push(sel);
-                }
-            });
-
-            if (rankingCandidates.length >= 2) {
-                // Determine rank limit from container instruction text (e.g. "top three" -> 3)
-                const container = rankingCandidates[0].closest('table, .qblock, .question, [class*="qblock"], fieldset') || rankingCandidates[0].parentElement;
-                const containerText = cleanText(container?.innerText || '') + ' ' + (questions.join(' '));
-
-                let detectedRankLimit = null;
-                const matchLimit = containerText.match(/(?:rank|rate|select|choose)\\s+(?:the\\s+)?(?:top\\s+|at\\s+least\\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)/i) ||
-                                   containerText.match(/at\\s+least\\s+(one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)/i) ||
-                                   containerText.match(/top\\s+(one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)/i);
-                if (matchLimit) {
-                    const wordMap = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
-                    const parsed = wordMap[matchLimit[1].toLowerCase()] || parseInt(matchLimit[1], 10);
-                    if (!isNaN(parsed) && parsed > 0) {
-                        detectedRankLimit = parsed;
-                    }
-                }
-
-                // Check for opt-out checkboxes in this table/container (e.g. "Don't know")
-                const optOutCheckboxes = [];
-                if (container) {
-                    container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                        const row = cb.closest('tr, [class*="row"], label') || cb.parentElement;
-                        const rowText = cleanText(row?.innerText || '');
-                        if (isOptOutText(rowText)) {
-                            claimedOptOutCbs.add(cb);
-                            optOutCheckboxes.push(cb.id || cb.name);
-                        }
-                    });
-                }
-
-                const rankItems = rankingCandidates.map((sel, idx) => {
-                    const row = sel.closest('tr, [class*="row"], [class*="item"]');
-                    let rowLabel = '';
-                    let specInput = null;
-
-                    if (row) {
-                        const cells = Array.from(row.querySelectorAll('td, th'));
-                        const firstCell = cells.find(c => !c.querySelector('select, input[type="radio"], input[type="checkbox"]')) || cells[0];
-                        if (firstCell && firstCell !== sel) {
-                            rowLabel = cleanText(firstCell.innerText || firstCell.textContent);
-                        }
-
-                        // Check if this row contains a specify / write-in input box!
-                        const rowInp = row.querySelector('input[type="text"], input[type="search"], textarea');
-                        if (rowInp) {
-                            specInput = rowInp;
-                            claimedSpecifyInputs.add(rowInp);
-                        }
-                    }
-
-                    const validOpts = Array.from(sel.options)
-                        .filter(o => o.value && !/select|--|choose|^$/i.test(o.text))
-                        .map(o => ({ value: o.value, text: cleanText(o.text) }));
-
-                    return {
-                        itemIndex: idx,
-                        id: sel.id || null,
-                        name: sel.name || `rank_sel_${idx}`,
-                        itemLabel: rowLabel || `Item ${idx + 1}`,
-                        selectedValue: sel.value || null,
-                        hasSpecify: !!specInput,
-                        specifyId: specInput ? specInput.id : null,
-                        specifyName: specInput ? specInput.name : null,
-                        rankOptions: validOpts
-                    };
-                });
-
-                const numRankOptions = rankItems[0]?.rankOptions?.length || 3;
-                const effectiveLimit = detectedRankLimit ? Math.min(detectedRankLimit, numRankOptions) : Math.min(rankItems.length, numRankOptions);
-
-                const qInfo = getQuestionForControl(rankingCandidates[0]);
-                fields.push({
-                    fieldType: 'ranking',
-                    fieldIndex: fields.length,
-                    questionLabel: qInfo.fullText,
-                    questionTitle: qInfo.question,
-                    questionHint: qInfo.hint,
-                    rankLimit: effectiveLimit,
-                    items: rankItems,
-                    optOutCheckboxIds: optOutCheckboxes.filter(Boolean)
-                });
-            } else {
-                rankingCandidates.forEach(s => normalSelects.push(s));
-            }
-
-            normalSelects.forEach((sel, si) => {
-                const validOpts = Array.from(sel.options)
-                    .filter(o => o.value && !/select one|--|please select/i.test(o.text))
-                    .map(o => ({ value: o.value, label: cleanText(o.text) }));
-
-                const qInfo = getQuestionForControl(sel);
-                fields.push({
-                    fieldType: 'select',
-                    fieldIndex: fields.length,
-                    selectIndex: si,
-                    id: sel.id || null,
-                    name: sel.name || `select_${si}`,
-                    questionLabel: qInfo.fullText,
-                    questionTitle: qInfo.question,
-                    questionHint: qInfo.hint,
-                    selectedValue: sel.value || null,
-                    options: validOpts
                 });
             });
 

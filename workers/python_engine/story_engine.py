@@ -195,7 +195,8 @@ class StoryEngine:
                 min_req = f.get("minSelections") or 1
                 chosen = substantive[:max(min_req, 2)] if len(substantive) >= min_req else substantive
                 if not chosen and raw_opts:
-                    chosen = [0]
+                    sub_non_optout = [i for i, o in enumerate(raw_opts) if not is_optout_option(o.get("label", ""))]
+                    chosen = [sub_non_optout[0]] if sub_non_optout else []
                 answers.append({
                     "fieldIndex": f_idx,
                     "fieldType": "checkbox",
@@ -506,8 +507,9 @@ class StoryEngine:
                 field_desc["ranking_items"] = substantive_items
                 field_desc["rankLimit"] = rank_limit
                 field_desc["instruction"] = (
-                    f"CRITICAL: Rank ONLY the top {rank_limit} items using unique ranks (e.g. Rank 1, Rank 2, Rank 3). "
-                    f"Do NOT assign ranks to any other items. Leave remaining items unranked. "
+                    f"CRITICAL: You MUST assign unique ranks to exactly {rank_limit} substantive items "
+                    f"(e.g. Rank 1, Rank 2, Rank 3). Provide exactly {rank_limit} entries in the 'rankings' array. "
+                    f"Never provide fewer than {rank_limit} ranked items. Leave all remaining items unranked. "
                     f"Never rank 'Don't know' or opt-outs. "
                     f"Only supply 'specifyText' if an 'Other (please specify)' item is ranked."
                 )
@@ -553,7 +555,7 @@ class StoryEngine:
             f'      "fieldType": "radio" | "checkbox" | "ranking" | "grid" | "select" | "text" | "numeric",\n'
             f'      "selectedIndex": 0,\n'
             f'      "selectedIndices": [0, 2],\n'
-            f'      "rankings": [{{"itemIndex": 0, "rank": "1"}}],\n'
+            f'      "rankings": [{{"itemIndex": 0, "rank": "Rank 1"}}, {{"itemIndex": 1, "rank": "Rank 2"}}, {{"itemIndex": 2, "rank": "Rank 3"}}],\n'
             f'      "gridSelections": [{{"rowIndex": 0, "colIndex": 2}}],\n'
             f'      "textResponse": "...",\n'
             f'      "numericValue": 75,\n'

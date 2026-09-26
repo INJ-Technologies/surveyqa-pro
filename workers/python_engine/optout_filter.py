@@ -8,7 +8,7 @@ from typing import List, Dict, Tuple, Any
 
 # Regex patterns that indicate opt-out, ignorance, or negative anchor options
 OPTOUT_PATTERNS = [
-    r"\bdon'?t\s+know\b",
+    r"\bdon['’`]?t\s+know\b",
     r"\bdo\s+not\s+know\b",
     r"\bnot\s+sure\b",
     r"\bunsure\b",
@@ -54,7 +54,7 @@ def is_optout_option(text: str) -> bool:
     """Returns True if the text represents an opt-out, 'don't know', or negative anchor."""
     if not text:
         return False
-    t = text.strip().lower()
+    t = text.strip().lower().replace("’", "'").replace("`", "'")
     return any(re.search(p, t, re.IGNORECASE) for p in OPTOUT_PATTERNS)
 
 
