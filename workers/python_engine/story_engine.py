@@ -412,10 +412,13 @@ class StoryEngine:
 
         candidate_models = [
             self.model_name,
-            "google/gemini-2.0-flash-001",
+            "meta-llama/llama-3.3-70b-instruct",
             "mistralai/mistral-small-24b-instruct-2501",
             "meta-llama/llama-3.1-8b-instruct"
         ]
+        # Remove duplicates preserving order
+        seen_models = set()
+        candidate_models = [m for m in candidate_models if m and not (m in seen_models or seen_models.add(m))]
 
         payload = {
             "model": self.model_name,

@@ -92,20 +92,26 @@ class ActionExecutor:
 
         target_el = loc.first
 
-        # 1. Try clicking associated label or custom FIR element first (mirrors human interaction)
-        label_clicked = False
+        # If it is already checked, nothing to do!
+        if target_el.is_checked():
+            return True
+
+        # 1. Try clicking associated label first (mirrors authentic human interaction)
         try:
             if opt_id:
                 clean_id = opt_id.replace('"', '\\"')
                 lbl = self.page.locator(f'label[for="{clean_id}"]')
                 if lbl.count() > 0 and lbl.first.is_visible():
                     safe_click(lbl.first)
-                    label_clicked = True
-            if not label_clicked:
-                parent_lbl = target_el.locator('xpath=ancestor::label[1]')
-                if parent_lbl.count() > 0 and parent_lbl.first.is_visible():
-                    safe_click(parent_lbl.first)
-                    label_clicked = True
+                    time.sleep(0.05)
+                    if target_el.is_checked():
+                        return True
+            parent_lbl = target_el.locator('xpath=ancestor::label[1]')
+            if parent_lbl.count() > 0 and parent_lbl.first.is_visible():
+                safe_click(parent_lbl.first)
+                time.sleep(0.05)
+                if target_el.is_checked():
+                    return True
         except Exception:
             pass
 
@@ -113,10 +119,13 @@ class ActionExecutor:
         try:
             if not target_el.is_checked():
                 safe_click(target_el)
+                time.sleep(0.05)
+                if target_el.is_checked():
+                    return True
         except Exception:
             pass
 
-        # 3. DOM Level State & Decipher FIR Synchronization
+        # 3. DOM Level State & Decipher FIR Synchronization (WITHOUT dispatching click, which toggles checkbox back to false)
         try:
             target_el.evaluate("""(el) => {
                 el.checked = true;
@@ -132,16 +141,13 @@ class ActionExecutor:
                     lbl.classList.add('checked');
                     lbl.classList.add('selected');
                 }
-                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
             }""")
         except Exception:
             pass
 
-        return True
+        return target_el.is_checked()
 
     def execute_decisions(
         self,
