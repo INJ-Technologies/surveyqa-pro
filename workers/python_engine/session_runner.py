@@ -244,6 +244,7 @@ class SurveySessionRunner:
                 # Allow initial scripts/DOM to settle
                 time.sleep(1.0 if is_internal else 2.5)
 
+                consecutive_error_count = 0
                 # Page Execution Loop
                 while current_page < self.max_pages:
                     current_page += 1
@@ -390,9 +391,10 @@ class SurveySessionRunner:
                             time_spent_s=time_taken
                         )
 
-                    # Loop guard: detect if stuck on repeated validation errors for > 4 attempts
-                    if detected_errors and not executed_answers:
-                        consecutive_error_count = consecutive_error_count + 1 if 'consecutive_error_count' in locals() else 1
+                    # Loop guard: detect if stuck on repeated validation errors for >= 5 attempts
+                    if detected_errors:
+                        consecutive_error_count += 1
+                        print(f"[SessionRunner] Active validation errors (attempt {consecutive_error_count}/5): {detected_errors}")
                         if consecutive_error_count >= 5:
                             print(f"[SessionRunner] Stalled on page errors for 5 consecutive attempts. Stopping loop.")
                             outcome = "error"

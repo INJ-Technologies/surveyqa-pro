@@ -4,13 +4,14 @@ Maintains the respondent's Persona, Established Facts, and evolving Cumulative S
 Constructs story-focused LLM prompts and communicates with OpenRouter/OpenAI.
 """
 import json
+import random
 import re
 import time
 from typing import List, Dict, Any, Optional
 import httpx
 
 from .config import get_secret, OPENROUTER_API_KEY
-from .optout_filter import filter_substantive_for_ai
+from .optout_filter import filter_substantive_for_ai, is_optout_option
 
 
 class StoryState:
@@ -101,6 +102,85 @@ class StoryEngine:
         self.api_key = api_key or get_secret("openrouter_synthfield") or OPENROUTER_API_KEY
         self.base_url = base_url or "https://openrouter.ai/api/v1/chat/completions"
 
+    def _generate_fallback_answers(
+        self,
+        fields: List[Dict[str, Any]],
+        scenario_directives: List[Dict[str, Any]],
+        error_banners: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Generates robust, realistic substantive fallback answers when the LLM
+        is rate-limited (429) or unavailable, strictly avoiding opt-outs.
+        """
+        answers = []
+        for f in fields:
+            f_idx = f.get("fieldIndex", 0)
+            f_type = f.get("fieldType")
+            raw_opts = f.get("options", [])
+
+            if f_type == "radio":
+                substantive = [i for i, o in enumerate(raw_opts) if not is_optout_option(o.get("label", ""))]
+                chosen = substantive[0] if substantive else 0
+                answers.append({
+                    "fieldIndex": f_idx,
+                    "fieldType": "radio",
+                    "selectedIndex": chosen
+                })
+            elif f_type == "checkbox":
+                substantive = [i for i, o in enumerate(raw_opts) if not is_optout_option(o.get("label", ""))]
+                chosen = substantive[:2] if len(substantive) >= 2 else (substantive[:1] if substantive else [0])
+                answers.append({
+                    "fieldIndex": f_idx,
+                    "fieldType": "checkbox",
+                    "selectedIndices": chosen
+                })
+            elif f_type == "ranking":
+                items = f.get("items", [])
+                rankings = [{"itemIndex": i, "rank": str(i + 1)} for i in range(len(items))]
+                answers.append({
+                    "fieldIndex": f_idx,
+                    "fieldType": "ranking",
+                    "rankings": rankings
+                })
+            elif f_type == "grid":
+                rows = f.get("rows", [])
+                col_headers = f.get("colHeaders", [])
+                num_cols = len(col_headers) if col_headers else 3
+                grid_sels = []
+                for ri in range(len(rows)):
+                    c_idx = (ri % (num_cols - 1)) if num_cols > 1 else 0
+                    grid_sels.append({"rowIndex": ri, "colIndex": c_idx})
+                answers.append({
+                    "fieldIndex": f_idx,
+                    "fieldType": "grid",
+                    "gridSelections": grid_sels
+                })
+            elif f_type == "select":
+                substantive = [i for i, o in enumerate(raw_opts) if not is_optout_option(o.get("label", "")) and not re.search(r"select|choose|--", o.get("label", ""), re.I)]
+                chosen = substantive[0] if substantive else (1 if len(raw_opts) > 1 else 0)
+                answers.append({
+                    "fieldIndex": f_idx,
+                    "fieldType": "select",
+                    "selectedIndex": chosen
+                })
+            elif f_type in ("text", "textarea"):
+                role = self.story_state.established_facts.get("job_title") or "Senior Specialist"
+                answers.append({
+                    "fieldIndex": f_idx,
+                    "fieldType": f_type,
+                    "textResponse": f"In our organization, as {role}, we prioritize robust operational standards and risk mitigation."
+                })
+            elif f_type == "numeric":
+                min_v = f.get("min") or 10
+                max_v = f.get("max") or 100
+                answers.append({
+                    "fieldIndex": f_idx,
+                    "fieldType": "numeric",
+                    "numericValue": min(max(50, int(min_v)), int(max_v))
+                })
+
+        return answers
+
     def decide_page_actions(
         self,
         page_number: int,
@@ -130,16 +210,31 @@ class StoryEngine:
         raw_response = self._call_llm(system_instruction, prompt)
         parsed = self._parse_json_response(raw_response)
 
-        # Update StoryState
+        answers = parsed.get("answers", [])
         story_update = parsed.get("story_update", "").strip()
         new_facts = parsed.get("new_facts", {})
         qa_rationale = parsed.get("qa_rationale", "").strip()
 
+        # If LLM returned empty answers despite visible fields (e.g. rate limit 429), apply intelligent fallback
+        if not answers and fields:
+            print(f"[StoryEngine] LLM returned no answers for {len(fields)} fields. Applying heuristic fallback.")
+            answers = self._generate_fallback_answers(fields, scenario_directives, error_banners)
+            if not qa_rationale:
+                qa_rationale = "Heuristic answers applied to ensure continuous survey progression."
+
+        # Ensure any field omitted by the LLM is covered
+        answered_f_indices = {a.get("fieldIndex") for a in answers if isinstance(a, dict)}
+        missing_fields = [f for f in fields if f.get("fieldIndex") not in answered_f_indices]
+        if missing_fields:
+            fallback_for_missing = self._generate_fallback_answers(missing_fields, scenario_directives, error_banners)
+            answers.extend(fallback_for_missing)
+
+        # Update StoryState
         self.story_state.update_story(story_update, new_facts)
-        self.story_state.record_page_decision(page_number, parsed.get("answers", []), qa_rationale)
+        self.story_state.record_page_decision(page_number, answers, qa_rationale)
 
         return {
-            "answers": parsed.get("answers", []),
+            "answers": answers,
             "story_update": story_update,
             "qa_rationale": qa_rationale,
             "cumulative_story": self.story_state.cumulative_story,
@@ -223,12 +318,22 @@ class StoryEngine:
 
             if f_type in ("radio", "checkbox"):
                 raw_opts = f.get("options", [])
-                # Strip out 'Don't know', 'None of the above'
-                eligible_opts = filter_substantive_for_ai(raw_opts, allow_optout=allow_optout)
-                field_desc["options"] = [
-                    {"index": i, "label": opt.get("label", ""), "hasSpecify": opt.get("hasSpecify", False)}
-                    for i, opt in enumerate(eligible_opts)
-                ]
+                opts_for_ai = []
+                for orig_idx, opt in enumerate(raw_opts):
+                    lbl = opt.get("label", "")
+                    if not allow_optout and is_optout_option(lbl):
+                        continue
+                    opts_for_ai.append({
+                        "index": orig_idx,
+                        "label": lbl,
+                        "hasSpecify": opt.get("hasSpecify", False)
+                    })
+                if not opts_for_ai:
+                    opts_for_ai = [
+                        {"index": orig_idx, "label": opt.get("label", ""), "hasSpecify": opt.get("hasSpecify", False)}
+                        for orig_idx, opt in enumerate(raw_opts)
+                    ]
+                field_desc["options"] = opts_for_ai
             elif f_type == "ranking":
                 field_desc["ranking_items"] = [
                     {
@@ -293,15 +398,10 @@ class StoryEngine:
         return user_content
 
     def _call_llm(self, system_instruction: str, user_prompt: str) -> str:
-        """Calls OpenRouter with retries and rate limit handling."""
+        """Calls OpenRouter with retries, model failover, and jittered rate limit handling."""
         if not self.api_key:
             print("[StoryEngine] Warning: No OpenRouter API key found. Using rule-based fallback decisions.")
-            return json.dumps({
-                "answers": [],
-                "story_update": "",
-                "qa_rationale": "Default rule-based selection applied.",
-                "new_facts": {}
-            })
+            return "{}"
 
         headers = {
             "Content-Type": "application/json",
@@ -309,6 +409,13 @@ class StoryEngine:
             "HTTP-Referer": "https://surveyqa.pro",
             "X-Title": "SurveyQA Pro Living Story Engine",
         }
+
+        candidate_models = [
+            self.model_name,
+            "google/gemini-2.0-flash-001",
+            "mistralai/mistral-small-24b-instruct-2501",
+            "meta-llama/llama-3.1-8b-instruct"
+        ]
 
         payload = {
             "model": self.model_name,
@@ -320,24 +427,27 @@ class StoryEngine:
             "max_tokens": 500,
         }
 
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
+        max_retries = 4
+        for attempt in range(max_retries):
+            current_model = candidate_models[min(attempt, len(candidate_models) - 1)] if attempt > 0 else self.model_name
+            payload["model"] = current_model
+
             try:
-                with httpx.Client(timeout=45.0) as client:
+                with httpx.Client(timeout=30.0) as client:
                     resp = client.post(self.base_url, headers=headers, json=payload)
                     if resp.status_code == 200:
                         data = resp.json()
                         return data["choices"][0]["message"]["content"]
                     elif resp.status_code == 429:
-                        wait_s = 2 ** attempt
-                        print(f"[StoryEngine] Rate limited (429). Retrying in {wait_s}s...")
+                        wait_s = (1.5 ** (attempt + 1)) + random.uniform(0.5, 2.5)
+                        print(f"[StoryEngine] Rate limited (429) on {current_model}. Retrying in {wait_s:.1f}s...")
                         time.sleep(wait_s)
                     else:
-                        print(f"[StoryEngine] LLM Error {resp.status_code}: {resp.text}")
-                        time.sleep(1)
+                        print(f"[StoryEngine] LLM Error {resp.status_code} on {current_model}: {resp.text[:120]}")
+                        time.sleep(1.0)
             except Exception as e:
-                print(f"[StoryEngine] Request exception: {e}")
-                time.sleep(1)
+                print(f"[StoryEngine] Request exception on {current_model}: {e}")
+                time.sleep(1.0)
 
         return "{}"
 

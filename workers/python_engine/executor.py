@@ -9,7 +9,7 @@ import time
 from typing import List, Dict, Any, Optional
 from playwright.sync_api import Page, Locator
 
-from .optout_filter import is_consent_checkbox
+from .optout_filter import is_consent_checkbox, is_optout_option
 
 
 def safe_click(locator: Locator):
@@ -66,6 +66,83 @@ class ActionExecutor:
             print(f"[Executor] Consent check exception: {e}")
         return ticked
 
+    def _check_input_element(
+        self,
+        opt_id: Optional[str],
+        opt_name: Optional[str] = None,
+        opt_val: Optional[str] = None,
+        is_radio: bool = False
+    ) -> bool:
+        """
+        Robustly clicks and checks a radio or checkbox across any survey platform
+        (Decipher FIR, Qualtrics, Confirmit, SurveyMonkey, Vanilla HTML).
+        """
+        input_type = "radio" if is_radio else "checkbox"
+        loc = None
+
+        if opt_id:
+            loc = locate_by_id(self.page, opt_id)
+        if (not loc or loc.count() == 0) and opt_name and opt_val:
+            loc = self.page.locator(f'input[type="{input_type}"][name="{opt_name}"][value="{opt_val}"]')
+        if (not loc or loc.count() == 0) and opt_name:
+            loc = self.page.locator(f'input[type="{input_type}"][name="{opt_name}"]')
+
+        if not loc or loc.count() == 0:
+            return False
+
+        target_el = loc.first
+
+        # 1. Try clicking associated label or custom FIR element first (mirrors human interaction)
+        label_clicked = False
+        try:
+            if opt_id:
+                clean_id = opt_id.replace('"', '\\"')
+                lbl = self.page.locator(f'label[for="{clean_id}"]')
+                if lbl.count() > 0 and lbl.first.is_visible():
+                    safe_click(lbl.first)
+                    label_clicked = True
+            if not label_clicked:
+                parent_lbl = target_el.locator('xpath=ancestor::label[1]')
+                if parent_lbl.count() > 0 and parent_lbl.first.is_visible():
+                    safe_click(parent_lbl.first)
+                    label_clicked = True
+        except Exception:
+            pass
+
+        # 2. If not checked, click target element directly
+        try:
+            if not target_el.is_checked():
+                safe_click(target_el)
+        except Exception:
+            pass
+
+        # 3. DOM Level State & Decipher FIR Synchronization
+        try:
+            target_el.evaluate("""(el) => {
+                el.checked = true;
+                const wrapper = el.closest('.fir-checkbox, .fir-radio, .element, label, [class*="fir-"]');
+                if (wrapper) {
+                    wrapper.classList.add('fir-selected');
+                    wrapper.classList.add('checked');
+                    wrapper.classList.add('selected');
+                }
+                const lbl = el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : el.closest('label');
+                if (lbl) {
+                    lbl.classList.add('fir-selected');
+                    lbl.classList.add('checked');
+                    lbl.classList.add('selected');
+                }
+                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }""")
+        except Exception:
+            pass
+
+        return True
+
     def execute_decisions(
         self,
         fields: List[Dict[str, Any]],
@@ -81,6 +158,43 @@ class ActionExecutor:
 
         results = []
         field_map = {f.get("fieldIndex"): f for f in fields}
+
+        # Safety Fallback: If AI returned no answers but fields are present, execute substantive defaults
+        if not answers and fields:
+            print(f"[Executor] No answers provided for {len(fields)} fields; applying safety fallback execution.")
+            for f in fields:
+                f_idx = f.get("fieldIndex", 0)
+                f_type = f.get("fieldType")
+                opts = f.get("options", [])
+                substantive = [i for i, o in enumerate(opts) if not is_optout_option(o.get("label", ""))]
+                chosen_idx = substantive[0] if substantive else 0
+
+                if f_type == "radio":
+                    res = self._execute_radio(f, {"selectedIndex": chosen_idx}, persona)
+                    if res: results.append(res)
+                elif f_type == "checkbox":
+                    chosen_indices = substantive[:2] if len(substantive) >= 2 else ([chosen_idx])
+                    res = self._execute_checkbox(f, {"selectedIndices": chosen_indices}, persona)
+                    if res: results.append(res)
+                elif f_type == "ranking":
+                    res = self._execute_ranking(f, {"rankings": [{"itemIndex": i, "rank": str(i + 1)} for i in range(len(f.get("items", [])))]})
+                    if res: results.append(res)
+                elif f_type == "grid":
+                    rows = f.get("rows", [])
+                    cols = f.get("colHeaders", [])
+                    grid_sels = [{"rowIndex": ri, "colIndex": (ri % max(1, len(cols) - 1))} for ri in range(len(rows))]
+                    res = self._execute_grid(f, {"gridSelections": grid_sels})
+                    if res: results.append(res)
+                elif f_type == "select":
+                    res = self._execute_select(f, {"selectedIndex": chosen_idx})
+                    if res: results.append(res)
+                elif f_type in ("textarea", "text"):
+                    res = self._execute_text(f, {"textResponse": "We maintain high compliance and operational standards across all units."}, persona)
+                    if res: results.append(res)
+                elif f_type == "numeric":
+                    res = self._execute_numeric(f, {"numericValue": 50})
+                    if res: results.append(res)
+            return results
 
         for ans in answers:
             f_idx = ans.get("fieldIndex")
@@ -138,50 +252,22 @@ class ActionExecutor:
 
         # Clamp index
         if sel_idx < 0 or sel_idx >= len(options):
-            sel_idx = 0
+            substantive = [i for i, o in enumerate(options) if not is_optout_option(o.get("label", ""))]
+            sel_idx = substantive[0] if substantive else 0
 
         target_opt = options[sel_idx]
         opt_id = target_opt.get("id")
+        opt_name = target_opt.get("name") or group_name
         opt_val = target_opt.get("value")
         opt_label = target_opt.get("label", "")
 
-        # Click radio
-        clicked = False
-        if opt_id:
-            loc = locate_by_id(self.page, opt_id)
-            if loc.count() > 0:
-                safe_click(loc)
-                clicked = True
-                try:
-                    if not loc.is_checked():
-                        clean_id = opt_id.replace('"', '\\"')
-                        lbl = self.page.locator(f'label[for="{clean_id}"]')
-                        if lbl.count() > 0:
-                            safe_click(lbl)
-                        if not loc.is_checked():
-                            loc.evaluate("el => { el.checked = true; el.dispatchEvent(new Event('change', {bubbles: true})); }")
-                except Exception:
-                    pass
-
-        if not clicked and group_name:
-            if opt_val:
-                loc = self.page.locator(f'input[type="radio"][name="{group_name}"][value="{opt_val}"]')
-                if loc.count() > 0:
-                    safe_click(loc)
-                    clicked = True
-            if not clicked:
-                all_radios = self.page.locator(f'input[type="radio"][name="{group_name}"]').all()
-                if sel_idx < len(all_radios):
-                    safe_click(all_radios[sel_idx])
-                    clicked = True
-
-        time.sleep(0.2)
+        self._check_input_element(opt_id=opt_id, opt_name=opt_name, opt_val=opt_val, is_radio=True)
+        time.sleep(0.15)
 
         # Handle follow-up specify box if present
         spec_text = ans.get("specifyText")
         if target_opt.get("hasSpecify") or spec_text:
             if not spec_text:
-                # Fallback to realistic persona role/title rather than random numbers
                 role = (persona or {}).get("job_title") or (persona or {}).get("role") or "Strategy & Operations"
                 spec_text = role
 
@@ -191,7 +277,6 @@ class ActionExecutor:
                 if loc.count() > 0 and loc.is_visible():
                     loc.fill(spec_text)
             else:
-                # Find input near radio
                 self.page.evaluate("""(data) => {
                     const r = document.querySelector(`input[type="radio"][name="${data.groupName}"]:checked`);
                     if (!r) return;
@@ -207,7 +292,7 @@ class ActionExecutor:
                         }
                         node = node.parentElement;
                     }
-                }""", {"groupName": group_name, "text": spec_text})
+                }""", {"groupName": opt_name or group_name, "text": spec_text})
 
         return {
             "type": "radio",
@@ -229,12 +314,37 @@ class ActionExecutor:
         sel_indices = ans.get("selectedIndices")
 
         if sel_indices is None:
-            # Fallback if AI returned single selectedIndex
             single = ans.get("selectedIndex")
-            sel_indices = [single] if single is not None else [0]
+            sel_indices = [single] if single is not None else []
 
         if not options:
             return None
+
+        # Guarantee at least 1 substantive selection to satisfy Decipher validation rules
+        if not sel_indices:
+            substantive = [i for i, o in enumerate(options) if not is_optout_option(o.get("label", ""))]
+            sel_indices = [substantive[0]] if substantive else [0]
+
+        # Uncheck any opt-outs if substantive options are selected
+        has_substantive = any(not is_optout_option(options[i].get("label", "")) for i in sel_indices if 0 <= i < len(options))
+        if has_substantive:
+            for opt in options:
+                if is_optout_option(opt.get("label", "")):
+                    opt_id = opt.get("id")
+                    if opt_id:
+                        try:
+                            loc = locate_by_id(self.page, opt_id)
+                            if loc.count() > 0 and loc.first.is_checked():
+                                loc.first.evaluate("""(el) => {
+                                    el.checked = false;
+                                    const wrapper = el.closest('.fir-checkbox, .fir-radio, .element, label, [class*="fir-"]');
+                                    if (wrapper) {
+                                        wrapper.classList.remove('fir-selected', 'checked', 'selected');
+                                    }
+                                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                                }""")
+                        except Exception:
+                            pass
 
         selected_labels = []
         for idx in sel_indices:
@@ -242,40 +352,26 @@ class ActionExecutor:
                 continue
             opt = options[idx]
             opt_id = opt.get("id")
+            opt_name = opt.get("name") or group_name
             opt_val = opt.get("value")
             opt_label = opt.get("label", "")
 
-            clicked = False
-            if opt_id:
-                loc = locate_by_id(self.page, opt_id)
-                if loc.count() > 0:
-                    safe_click(loc)
-                    clicked = True
-                    try:
-                        if not loc.is_checked():
-                            clean_id = opt_id.replace('"', '\\"')
-                            lbl = self.page.locator(f'label[for="{clean_id}"]')
-                            if lbl.count() > 0:
-                                safe_click(lbl)
-                            if not loc.is_checked():
-                                loc.evaluate("el => { el.checked = true; el.dispatchEvent(new Event('change', {bubbles: true})); }")
-                    except Exception:
-                        pass
-
-            if not clicked and group_name:
-                if opt_val:
-                    loc = self.page.locator(f'input[type="checkbox"][name="{group_name}"][value="{opt_val}"]')
-                    if loc.count() > 0:
-                        safe_click(loc)
-                        clicked = True
-                if not clicked:
-                    all_cbs = self.page.locator(f'input[type="checkbox"][name="{group_name}"]').all()
-                    if idx < len(all_cbs):
-                        safe_click(all_cbs[idx])
-                        clicked = True
-
+            self._check_input_element(opt_id=opt_id, opt_name=opt_name, opt_val=opt_val, is_radio=False)
             selected_labels.append(opt_label)
-            time.sleep(0.15)
+
+            # Handle specify if present
+            spec_text = ans.get("specifyText")
+            if opt.get("hasSpecify") or spec_text:
+                if not spec_text:
+                    role = (persona or {}).get("job_title") or (persona or {}).get("role") or "Strategy & Operations"
+                    spec_text = role
+                spec_id = opt.get("specifyId")
+                if spec_id:
+                    loc = locate_by_id(self.page, spec_id)
+                    if loc.count() > 0 and loc.is_visible():
+                        loc.fill(spec_text)
+
+            time.sleep(0.1)
 
         return {
             "type": "checkbox",

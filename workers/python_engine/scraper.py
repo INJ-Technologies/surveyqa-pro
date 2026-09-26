@@ -162,6 +162,30 @@ class PageScraper:
                 return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
             };
 
+            const isInputInteractive = (el) => {
+                if (!el) return false;
+                if (isVisible(el)) return true;
+                if (el.type === 'radio' || el.type === 'checkbox') {
+                    // Check if enclosed in display:none container
+                    let p = el.parentElement;
+                    while (p && p !== document.body) {
+                        const style = window.getComputedStyle(p);
+                        if (style.display === 'none' || style.visibility === 'hidden') return false;
+                        p = p.parentElement;
+                    }
+                    // Check associated label
+                    let lbl = null;
+                    if (el.id) {
+                        try { lbl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`); } catch(e) {}
+                    }
+                    if (!lbl) lbl = el.closest('label');
+                    if (lbl && isVisible(lbl)) return true;
+                    // Check parent element (e.g. .element, .fir-checkbox)
+                    if (el.parentElement && isVisible(el.parentElement)) return true;
+                }
+                return false;
+            };
+
             const cleanText = (t) => (t || '').replace(/\\s+/g, ' ').trim();
 
             const questions = [];
@@ -304,7 +328,7 @@ class PageScraper:
             const radioGroups = {};
             const radioOrder = [];
             document.querySelectorAll('input[type="radio"]').forEach(r => {
-                if (!isVisible(r) || !r.name || gridProcessedRadios.has(r)) return;
+                if (!isInputInteractive(r) || !r.name || gridProcessedRadios.has(r)) return;
                 if (!radioGroups[r.name]) {
                     radioGroups[r.name] = [];
                     radioOrder.push(r.name);
@@ -312,8 +336,10 @@ class PageScraper:
 
                 let label = '';
                 if (r.id) {
-                    const lbl = document.querySelector(`label[for="${r.id}"]`);
-                    if (lbl) label = cleanText(lbl.innerText || lbl.textContent);
+                    try {
+                        const lbl = document.querySelector(`label[for="${CSS.escape(r.id)}"]`);
+                        if (lbl) label = cleanText(lbl.innerText || lbl.textContent);
+                    } catch(e) {}
                 }
                 if (!label) {
                     const pl = r.closest('label');
@@ -356,17 +382,41 @@ class PageScraper:
             const cbGroups = {};
             const cbOrder = [];
             document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                if (!isVisible(cb)) return;
-                const name = cb.name || cb.closest('fieldset')?.id || 'checkbox_group';
-                if (!cbGroups[name]) {
-                    cbGroups[name] = [];
-                    cbOrder.push(name);
+                if (!isInputInteractive(cb)) return;
+
+                // Group checkboxes belonging to the same question block into one multi-option question
+                const qBlock = cb.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], fieldset, table, [role="group"]');
+                const qText = getQuestionForControl(cb);
+
+                // Strip trailing option index/suffix (e.g. ans2214.0.0 -> ans2214.0)
+                let baseName = (cb.name || '').replace(/([._\\[])\\d+\\]?$/, '');
+
+                let groupKey = '';
+                if (qBlock && (qBlock.id || qBlock.getAttribute('name'))) {
+                    groupKey = qBlock.id || qBlock.getAttribute('name');
+                } else if (baseName) {
+                    groupKey = baseName;
+                } else if (qText) {
+                    groupKey = qText;
+                } else {
+                    groupKey = cb.name || 'checkbox_group';
+                }
+
+                if (!cbGroups[groupKey]) {
+                    cbGroups[groupKey] = {
+                        name: cb.name || groupKey,
+                        questionLabel: qText,
+                        options: []
+                    };
+                    cbOrder.push(groupKey);
                 }
 
                 let label = '';
                 if (cb.id) {
-                    const lbl = document.querySelector(`label[for="${cb.id}"]`);
-                    if (lbl) label = cleanText(lbl.innerText || lbl.textContent);
+                    try {
+                        const lbl = document.querySelector(`label[for="${CSS.escape(cb.id)}"]`);
+                        if (lbl) label = cleanText(lbl.innerText || lbl.textContent);
+                    } catch(e) {}
                 }
                 if (!label) {
                     const pl = cb.closest('label');
@@ -384,7 +434,8 @@ class PageScraper:
                 }
 
                 const spec = findSpecifyInput(cb);
-                cbGroups[name].push({
+                cbGroups[groupKey].options.push({
+                    name: cb.name || '',
                     value: cb.value || '',
                     id: cb.id || '',
                     label: label || cb.value || 'Option',
@@ -395,16 +446,15 @@ class PageScraper:
                 });
             });
 
-            cbOrder.forEach((name, gi) => {
-                const opts = cbGroups[name];
-                const firstCb = document.querySelector(`input[type="checkbox"][name="${name}"]`);
+            cbOrder.forEach((groupKey, gi) => {
+                const groupObj = cbGroups[groupKey];
                 fields.push({
                     fieldType: 'checkbox',
                     fieldIndex: fields.length,
-                    groupName: name,
+                    groupName: groupObj.name,
                     groupIndex: gi,
-                    questionLabel: firstCb ? getQuestionForControl(firstCb) : questions[0] || '',
-                    options: opts
+                    questionLabel: groupObj.questionLabel || questions[0] || '',
+                    options: groupObj.options
                 });
             });
 
