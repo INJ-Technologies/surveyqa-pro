@@ -20,8 +20,19 @@ class StoryState:
         self.proxy_country = proxy_country
         self.established_facts: Dict[str, Any] = {}
         self.cumulative_story: str = ""
+        self.survey_background: str = ""
+        self.current_section: str = ""
         self.page_history: List[Dict[str, Any]] = []
         self._init_initial_story()
+
+    def calibrate_with_survey_background(self, topic: str, section: str = ""):
+        if topic and topic.strip():
+            self.survey_background = topic.strip()
+            if "Professional respondent" in self.cumulative_story or not self.established_facts.get("job_title"):
+                country = self.established_facts.get("country") or self.proxy_country or "Singapore"
+                self.cumulative_story = f"Industry professional based in {country} participating in {topic.strip()}."
+        if section and section.strip():
+            self.current_section = section.strip()
 
     def _init_initial_story(self):
         """Construct the foundational story narrative from the persona."""
@@ -256,14 +267,32 @@ class StoryEngine:
         questions: List[str],
         fields: List[Dict[str, Any]],
         scenario_directives: List[Dict[str, Any]],
-        error_banners: Optional[List[str]] = None
+        error_banners: Optional[List[str]] = None,
+        page_content: Optional[str] = None,
+        is_intro_page: bool = False
     ) -> Dict[str, Any]:
         """
         Formulates decisions for all visible fields on the page based on the
         Persona, Living Story, Scenario Constraints, and Anti-Optout ground rules.
         """
-        # Fast path: if no form fields to answer and no error banners to resolve, skip LLM call entirely
+        # Fast path: if no form fields to answer and no error banners to resolve
         if not fields and not error_banners:
+            clean_content = (page_content or "").strip()
+            if clean_content and (is_intro_page or not self.story_state.survey_background or len(clean_content) > 40):
+                analysis = self._absorb_survey_background(clean_content, questions)
+                story_update = analysis.get("story_update", "Absorbed survey background and scope.")
+                qa_rationale = analysis.get("qa_rationale", "Understood study objectives; calibrated persona.")
+                self.story_state.update_story(story_update)
+                self.story_state.record_page_decision(page_number, [], qa_rationale)
+                return {
+                    "answers": [],
+                    "story_update": story_update,
+                    "qa_rationale": qa_rationale,
+                    "cumulative_story": self.story_state.cumulative_story,
+                    "new_facts": {},
+                    "raw_response": json.dumps(analysis)
+                }
+
             return {
                 "answers": [],
                 "story_update": "",
@@ -311,6 +340,48 @@ class StoryEngine:
             "raw_response": raw_response
         }
 
+    def _absorb_survey_background(self, page_content: str, questions: List[str]) -> Dict[str, str]:
+        """
+        Extracts study scope, industry domain, and section objectives from intro/briefing pages.
+        Updates self.story_state.survey_background and calibrates the persona.
+        """
+        content_snippet = page_content[:1500].strip()
+        system_instruction = (
+            "You are an expert Survey QA Story Engine. "
+            "Analyze this survey introduction, study briefing, or section definition. "
+            "Extract the core survey topic and target respondent domain. "
+            "Calibrate the respondent persona's focus so future questions are answered with domain knowledge. "
+            "Respond in strict JSON with:\n"
+            "{\n"
+            '  "survey_topic": "1 short sentence (<15 words) defining the survey topic/domain",\n'
+            '  "qa_rationale": "1 short sentence (<12 words) describing what background was absorbed",\n'
+            '  "story_update": "1 short sentence (<12 words) describing how persona was calibrated"\n'
+            "}"
+        )
+        prompt = f"Page Headings/Questions:\n{questions}\n\nPage Content:\n{content_snippet}"
+        try:
+            raw = self._call_llm(system_instruction, prompt)
+            parsed = self._parse_json_response(raw)
+            topic = parsed.get("survey_topic", "").strip()
+            rationale = parsed.get("qa_rationale", "").strip()
+            update = parsed.get("story_update", "").strip()
+            if topic:
+                self.story_state.calibrate_with_survey_background(topic)
+            if not rationale:
+                rationale = "Absorbed survey background and domain definitions."
+            if not update:
+                update = "Oriented respondent persona towards study domain."
+            return {"qa_rationale": rationale, "story_update": update, "survey_topic": topic}
+        except Exception as e:
+            print(f"[StoryEngine] Background absorption exception: {e}")
+            first_line = content_snippet.split('\n')[0][:120].strip()
+            self.story_state.calibrate_with_survey_background(first_line)
+            return {
+                "qa_rationale": "Absorbed survey briefing and topic context.",
+                "story_update": "Grounded persona in survey domain.",
+                "survey_topic": first_line
+            }
+
     def _build_system_instruction(self) -> str:
         return (
             "You are an authentic, highly consistent respondent completing a survey for QA validation.\n"
@@ -353,6 +424,10 @@ class StoryEngine:
             f"Story: \"{self.story_state.cumulative_story}\"\n"
             f"Confirmed Facts: {json.dumps(compact_facts)}\n"
         )
+        if self.story_state.survey_background:
+            story_summary += f"\n=== SURVEY BACKGROUND & DOMAIN ===\n{self.story_state.survey_background}\n"
+        if self.story_state.current_section:
+            story_summary += f"Current Section: {self.story_state.current_section}\n"
 
         # 2. Page Questions
         questions_str = "\n".join([f"Q{i+1}: {q}" for i, q in enumerate(questions)]) if questions else "Questions not explicitly labeled."

@@ -335,7 +335,9 @@ class SurveySessionRunner:
                         questions=visible_questions,
                         fields=visible_fields,
                         scenario_directives=scenario_directives,
-                        error_banners=detected_errors
+                        error_banners=detected_errors,
+                        page_content=scrape_data.get("pageContent", ""),
+                        is_intro_page=scrape_data.get("isIntroPage", False)
                     )
 
                     answers = decisions_result.get("answers", [])
@@ -397,6 +399,10 @@ class SurveySessionRunner:
                             "options": final_options,
                             "gridAnswers": grid_answers,
                             "answers": executed_answers,
+                            "page_content": scrape_data.get("pageContent", ""),
+                            "is_intro_page": scrape_data.get("isIntroPage", False),
+                            "survey_background": story_engine.story_state.survey_background,
+                            "current_section": story_engine.story_state.current_section,
                             "story_update": story_update,
                             "qa_rationale": qa_rationale,
                             "cumulative_story": cumulative_story,

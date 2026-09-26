@@ -738,7 +738,48 @@ class PageScraper:
                 });
             });
 
-            return { questions, fields };
+            // ── 7. Page Content / Intro / Background / Section Briefing Text ──
+            const contentParagraphs = [];
+            const pageHeadings = [];
+
+            // Extract headings
+            document.querySelectorAll('h1, h2, h3, h4, .title, .section-title, .page-title, legend').forEach(el => {
+                if (!isVisible(el) || el.closest('button, .button, footer, nav, script, style')) return;
+                const txt = cleanText(el.innerText || el.textContent);
+                if (txt && txt.length >= 4 && !pageHeadings.includes(txt)) {
+                    pageHeadings.push(txt);
+                }
+            });
+
+            // Extract visible descriptive paragraphs, bullet points, and definitions
+            const textContainers = document.querySelectorAll(
+                'p, li, .desc, .description, .intro, .intro-text, .section-text, .help-text, .qcomment, .note, article, blockquote, [class*="intro"], [class*="desc"]'
+            );
+            const seenParagraphs = new Set();
+            textContainers.forEach(el => {
+                if (!isVisible(el)) return;
+                if (el.closest('button, .button, footer, nav, script, style, .fir-icon, .cell-input')) return;
+                if (el.querySelector('input, select, textarea')) return;
+                const txt = cleanText(el.innerText || el.textContent);
+                if (txt && txt.length >= 15 && !seenParagraphs.has(txt)) {
+                    seenParagraphs.add(txt);
+                    contentParagraphs.push(txt);
+                }
+            });
+
+            // If questions array is empty (e.g. intro/transition page):
+            if (questions.length === 0) {
+                if (pageHeadings.length > 0) {
+                    questions.push(...pageHeadings.slice(0, 2));
+                } else if (contentParagraphs.length > 0) {
+                    questions.push(contentParagraphs[0]);
+                }
+            }
+
+            const pageContent = contentParagraphs.join('\\n\\n') || pageHeadings.join('\\n\\n');
+            const isIntroPage = (fields.length === 0 && (contentParagraphs.length > 0 || pageHeadings.length > 0));
+
+            return { questions, fields, pageContent, pageHeadings, isIntroPage };
         }""")
 
         return {
@@ -748,6 +789,9 @@ class PageScraper:
             "timer": timer,
             "questions": dom_data.get("questions", []),
             "fields": dom_data.get("fields", []),
+            "pageContent": dom_data.get("pageContent", ""),
+            "pageHeadings": dom_data.get("pageHeadings", []),
+            "isIntroPage": dom_data.get("isIntroPage", False),
         }
 
     def capture_page_options(self) -> List[Dict[str, Any]]:

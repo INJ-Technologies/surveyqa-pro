@@ -5,6 +5,7 @@ Handles custom radio/checkbox controls, ranking dropdowns, anti-straight-lining 
 text specify boxes, timer waiting, and next-button clicking with validation retry.
 """
 import random
+import re
 import time
 from typing import List, Dict, Any, Optional
 from playwright.sync_api import Page, Locator

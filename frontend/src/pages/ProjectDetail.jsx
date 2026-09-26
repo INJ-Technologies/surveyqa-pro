@@ -3674,6 +3674,13 @@ function SessionReportModal({
           </div>`;
         }
 
+        if (payload.page_content) {
+          html += `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:14px;">
+            <div style="font-size:0.72rem;font-weight:700;color:#475569;text-transform:uppercase;margin-bottom:6px;">📄 Page Content & Survey Background</div>
+            <div style="font-size:0.83rem;color:#334155;line-height:1.5;white-space:pre-line;">${payload.page_content}</div>
+          </div>`;
+        }
+
         html += `<div style="margin-bottom:16px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
         <div style="padding:6px 10px;background:#f8fafc;font-size:0.72rem;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Screenshot</div>
         <img src="${API_BASE}/sessions/${session.id}/screenshot/page_${i + 1}.png" style="width:100%;display:block;" onerror="this.parentElement.style.display='none'" />
@@ -4519,6 +4526,54 @@ function SessionReportModal({
                     </div>
                   )}
                 </div>
+
+                {/* Page Content / Survey Background / Section Briefing */}
+                {activePage.payload?.page_content && (
+                  <div
+                    style={{
+                      background: "#f8fafc",
+                      border: "1.5px solid #e2e8f0",
+                      borderRadius: 10,
+                      padding: "14px 18px",
+                      marginBottom: 16,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        marginBottom: 8,
+                      }}
+                    >
+                      <FileText size={15} color="#475569" />
+                      <span
+                        style={{
+                          fontSize: "0.75rem",
+                          fontWeight: 700,
+                          color: "#475569",
+                          fontFamily: FONT,
+                          textTransform: "uppercase",
+                          letterSpacing: 0.5,
+                        }}
+                      >
+                        Page Content & Survey Background
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "0.85rem",
+                        color: "#334155",
+                        lineHeight: 1.6,
+                        fontFamily: FONT,
+                        whiteSpace: "pre-line",
+                      }}
+                    >
+                      {activePage.payload.page_content}
+                    </div>
+                  </div>
+                )}
+
                 {activePage.payload?.questions?.length > 0 && (
                   <div style={{ marginBottom: 16 }}>
                     <div
