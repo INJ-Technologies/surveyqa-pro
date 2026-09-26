@@ -111,10 +111,17 @@ class SurveySessionRunner:
         workspace_id = str(project.get("workspace_id") or session.get("workspace_id"))
         ai_model_record = self.db.get_ai_model(workspace_id, session.get("ai_model_id"))
         model_name = ai_model_record.get("model_id") if ai_model_record else "meta-llama/llama-3.3-70b-instruct"
+        input_price = float(ai_model_record.get("input_price_per_1m") or 0.0) if ai_model_record else 0.0
+        output_price = float(ai_model_record.get("output_price_per_1m") or 0.0) if ai_model_record else 0.0
 
         # 5. Initialize Living Story Engine
         story_state = StoryState(persona=persona, proxy_country=proxy_country)
-        story_engine = StoryEngine(story_state=story_state, model_name=model_name)
+        story_engine = StoryEngine(
+            story_state=story_state,
+            model_name=model_name,
+            input_price_per_1m=input_price,
+            output_price_per_1m=output_price,
+        )
 
         # 6. Resolve Proxy
         proxy_opts = None
@@ -291,10 +298,16 @@ class SurveySessionRunner:
                                 "story_snapshot": story_state.cumulative_story,
                             }
                         )
+                        usage = story_engine.get_usage_summary()
                         self.db.update_session_progress(
                             session_id=self.session_id,
                             question_count=current_page,
-                            total_duration_s=int(time.time() - start_time)
+                            total_duration_s=int(time.time() - start_time),
+                            ai_calls_count=usage["calls"],
+                            input_tokens_total=usage["input_tokens"],
+                            output_tokens_total=usage["output_tokens"],
+                            ai_cost_usd=usage["cost_usd"],
+                            model_used=usage["model_used"],
                         )
                         break
 
@@ -379,11 +392,17 @@ class SurveySessionRunner:
                         }
                     )
 
-                    # Real-time progress update to sessions table
+                    # Real-time progress and cost update to sessions table
+                    usage = story_engine.get_usage_summary()
                     self.db.update_session_progress(
                         session_id=self.session_id,
                         question_count=current_page,
-                        total_duration_s=int(time.time() - start_time)
+                        total_duration_s=int(time.time() - start_time),
+                        ai_calls_count=usage["calls"],
+                        input_tokens_total=usage["input_tokens"],
+                        output_tokens_total=usage["output_tokens"],
+                        ai_cost_usd=usage["cost_usd"],
+                        model_used=usage["model_used"],
                     )
 
                     # Log each answer to session_answers table
@@ -431,7 +450,17 @@ class SurveySessionRunner:
             except Exception as e:
                 print(f"[SessionRunner] Fatal error during session run: {e}")
                 outcome = "error"
-                self.db.update_session_status(self.session_id, "error", error_log=str(e))
+                usage = story_engine.get_usage_summary() if 'story_engine' in locals() else {}
+                self.db.update_session_status(
+                    self.session_id,
+                    "error",
+                    error_log=str(e),
+                    ai_calls_count=usage.get("calls", 0),
+                    input_tokens_total=usage.get("input_tokens", 0),
+                    output_tokens_total=usage.get("output_tokens", 0),
+                    ai_cost_usd=usage.get("cost_usd", 0.0),
+                    model_used=usage.get("model_used", model_name),
+                )
             finally:
                 browser.close()
 
@@ -452,6 +481,7 @@ class SurveySessionRunner:
         print(f"  Final Living Story: \"{story_state.cumulative_story}\"")
 
         # Update final session state in PostgreSQL
+        usage = story_engine.get_usage_summary()
         self.db.update_session_status(
             self.session_id,
             outcome,
@@ -459,7 +489,11 @@ class SurveySessionRunner:
             quality_score=quality_score,
             total_duration_s=total_duration,
             question_count=current_page,
-            model_used=model_name,
+            model_used=usage["model_used"],
+            ai_calls_count=usage["calls"],
+            input_tokens_total=usage["input_tokens"],
+            output_tokens_total=usage["output_tokens"],
+            ai_cost_usd=usage["cost_usd"],
         )
 
         return {

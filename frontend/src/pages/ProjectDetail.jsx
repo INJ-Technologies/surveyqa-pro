@@ -6553,6 +6553,31 @@ function SessionsTab({
                             </div>
                           )}
                         </div>
+                      ) : session.ai_calls_count > 0 ? (
+                        <div style={{ textAlign: "right" }}>
+                          <div
+                            style={{
+                              fontSize: "0.82rem",
+                              fontWeight: 700,
+                              color: "#1e3a5f",
+                              fontFamily: FONT,
+                            }}
+                          >
+                            $0.000000
+                          </div>
+                          <div
+                            style={{
+                              fontSize: "0.68rem",
+                              color: "#94a3b8",
+                              fontFamily: FONT,
+                            }}
+                          >
+                            {new Intl.NumberFormat("en-IN").format(
+                              session.ai_calls_count,
+                            )}{" "}
+                            calls
+                          </div>
+                        </div>
                       ) : (
                         <span style={{ color: "#94a3b8", fontSize: "0.75rem" }}>
                           —

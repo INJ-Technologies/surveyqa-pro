@@ -286,7 +286,25 @@ class DBClient:
     ):
         conn = self.get_connection()
         cols = ["question_count = %s", "total_duration_s = %s", "updated_at = NOW()"]
-        vals = [question_count, total_duration_s, session_id]
+        vals = [question_count, total_duration_s]
+
+        field_map = {
+            "ai_calls_count": "ai_calls_count",
+            "input_tokens_total": "input_tokens_total",
+            "output_tokens_total": "output_tokens_total",
+            "ai_cost_usd": "ai_cost_usd",
+            "model_used": "model_used",
+            "quality_score": "quality_score",
+            "outcome": "outcome",
+            "error_log": "error_log",
+        }
+
+        for k, v in kwargs.items():
+            if k in field_map and v is not None:
+                cols.append(f"{field_map[k]} = %s")
+                vals.append(v)
+
+        vals.append(session_id)
         sql = f"UPDATE sessions SET {', '.join(cols)} WHERE id = %s"
         try:
             with conn.cursor() as cur:

@@ -94,13 +94,66 @@ class StoryEngine:
         story_state: StoryState,
         model_name: str = "meta-llama/llama-3.3-70b-instruct",
         api_key: Optional[str] = None,
-        base_url: Optional[str] = None
+        base_url: Optional[str] = None,
+        input_price_per_1m: float = 0.0,
+        output_price_per_1m: float = 0.0,
     ):
         self.story_state = story_state
         self.model_name = model_name
         # Resolve API key
         self.api_key = api_key or get_secret("openrouter_synthfield") or OPENROUTER_API_KEY
         self.base_url = base_url or "https://openrouter.ai/api/v1/chat/completions"
+        self.input_price_per_1m = float(input_price_per_1m or 0.0)
+        self.output_price_per_1m = float(output_price_per_1m or 0.0)
+
+        # Real-time token and cost tracking
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_calls = 0
+        self.total_cost_usd = 0.0
+        self.last_model_used = model_name
+
+    def _resolve_pricing(self, model: str):
+        """Returns (input_price_per_1m, output_price_per_1m) in USD."""
+        if self.input_price_per_1m > 0 or self.output_price_per_1m > 0:
+            return self.input_price_per_1m, self.output_price_per_1m
+
+        m_lower = (model or "").lower()
+        pricing_defaults = {
+            "llama-3.3-70b": (0.40, 0.40),
+            "llama-3.1-70b": (0.40, 0.40),
+            "llama-3.1-8b": (0.05, 0.05),
+            "llama-3-70b": (0.50, 0.50),
+            "mistral-small": (0.20, 0.20),
+            "mistral-large": (2.00, 6.00),
+            "qwen-2.5-72b": (0.35, 0.40),
+            "gemini-2.0-flash": (0.10, 0.40),
+            "gemini-1.5-flash": (0.075, 0.30),
+            "gemini-1.5-pro": (1.25, 5.00),
+            "gemma-2-27b": (0.20, 0.20),
+            "gemma-2-9b": (0.06, 0.06),
+            "gemma-4": (0.15, 0.15),
+            "claude-3-5-sonnet": (3.00, 15.00),
+            "claude-3-haiku": (0.25, 1.25),
+            "gpt-4o-mini": (0.15, 0.60),
+            "gpt-4o": (2.50, 10.00),
+            "deepseek-chat": (0.14, 0.28),
+        }
+        for k, (inp, outp) in pricing_defaults.items():
+            if k in m_lower:
+                return inp, outp
+
+        return 0.30, 0.30
+
+    def get_usage_summary(self) -> Dict[str, Any]:
+        """Returns live cumulative token usage and cost for the session."""
+        return {
+            "calls": self.total_calls,
+            "input_tokens": self.total_input_tokens,
+            "output_tokens": self.total_output_tokens,
+            "cost_usd": round(self.total_cost_usd, 6),
+            "model_used": self.last_model_used or self.model_name,
+        }
 
     def _generate_fallback_answers(
         self,
@@ -440,6 +493,23 @@ class StoryEngine:
                     resp = client.post(self.base_url, headers=headers, json=payload)
                     if resp.status_code == 200:
                         data = resp.json()
+                        usage = data.get("usage") or {}
+                        in_tok = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+                        out_tok = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+
+                        actual_model = data.get("model") or current_model
+                        self.last_model_used = actual_model
+
+                        in_price, out_price = self._resolve_pricing(actual_model)
+                        call_cost = (in_tok / 1_000_000.0) * in_price + (out_tok / 1_000_000.0) * out_price
+
+                        self.total_input_tokens += in_tok
+                        self.total_output_tokens += out_tok
+                        self.total_calls += 1
+                        self.total_cost_usd += call_cost
+
+                        print(f"[StoryEngine] Call #{self.total_calls} ({actual_model}): {in_tok} in + {out_tok} out tokens | cost: ${call_cost:.6f} | total session cost: ${self.total_cost_usd:.6f}")
+
                         return data["choices"][0]["message"]["content"]
                     elif resp.status_code == 429:
                         wait_s = (1.5 ** (attempt + 1)) + random.uniform(0.5, 2.5)
