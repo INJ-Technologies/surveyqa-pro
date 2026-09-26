@@ -26,12 +26,11 @@ class StoryState:
         """Construct the foundational story narrative from the persona."""
         if not self.persona:
             country_str = f" in {self.proxy_country}" if self.proxy_country else ""
-            self.cumulative_story = f"I am a qualified professional respondent{country_str} completing this survey."
+            self.cumulative_story = f"Professional respondent{country_str} completing this survey."
             if self.proxy_country:
                 self.established_facts["country"] = self.proxy_country
             return
 
-        name = self.persona.get("name", "Respondent")
         job = self.persona.get("job_title") or self.persona.get("role") or "Professional"
         industry = self.persona.get("industry") or "Technology"
         company_size = self.persona.get("company_size") or "Mid-size"
@@ -43,35 +42,35 @@ class StoryState:
         self.established_facts["company_size"] = company_size
 
         attrs = self.persona.get("behavioural_attrs") or {}
-        tech_profile = self.persona.get("tech_profile") or {}
         demographics = self.persona.get("demographics") or {}
-
-        story_parts = [
-            f"I am {name}, working as {job} in the {industry} sector.",
-            f"My organization employs approximately {company_size} people and is located in {country}."
-        ]
-
         if attrs.get("seniority"):
-            story_parts.append(f"I hold a {attrs['seniority']} position with budgetary and strategic oversight.")
             self.established_facts["seniority"] = attrs["seniority"]
-
-        if tech_profile.get("primary_tools"):
-            tools = ", ".join(tech_profile["primary_tools"][:4])
-            story_parts.append(f"Our operations regularly utilize {tools}.")
-
         if demographics.get("years_experience"):
-            story_parts.append(f"I have over {demographics['years_experience']} years of relevant experience.")
+            self.established_facts["years_experience"] = demographics["years_experience"]
 
-        self.cumulative_story = " ".join(story_parts)
+        # Ultra-crisp foundational story (1 concise sentence)
+        self.cumulative_story = f"{job} in {industry} ({company_size} org), based in {country}."
 
     def update_story(self, story_update: str, new_facts: Optional[Dict[str, Any]] = None):
-        """Appends new narrative developments and merges newly confirmed facts."""
+        """Appends new narrative developments and merges newly confirmed facts concisely."""
         if story_update and story_update.strip():
             clean_update = story_update.strip()
-            if not self.cumulative_story:
-                self.cumulative_story = clean_update
-            else:
-                self.cumulative_story += f" {clean_update}"
+            # Filter boilerplate / filler phrases
+            boilerplate = (
+                "professional respondent", "completing this survey", "diligently",
+                "valuable feedback", "ongoing engagement", "no questions",
+                "ready to", "straightforward", "standard response", "participating in",
+                "ensure data quality", "meets the required standards", "robust",
+            )
+            is_filler = any(b in clean_update.lower() for b in boilerplate)
+            if not is_filler and len(clean_update) > 5:
+                # Keep cumulative story bounded (at most ~40-50 words / 2-3 concise clauses)
+                sentences = [s.strip() for s in re.split(r'[.!?]+', self.cumulative_story) if s.strip()]
+                new_clause = clean_update.rstrip('.!?;')
+                if len(sentences) >= 3:
+                    self.cumulative_story = f"{sentences[0]}. {sentences[-1]}. {new_clause}."
+                else:
+                    self.cumulative_story = f"{self.cumulative_story.rstrip('.')} {new_clause}."
 
         if new_facts and isinstance(new_facts, dict):
             for k, v in new_facts.items():
@@ -114,6 +113,17 @@ class StoryEngine:
         Formulates decisions for all visible fields on the page based on the
         Persona, Living Story, Scenario Constraints, and Anti-Optout ground rules.
         """
+        # Fast path: if no form fields to answer and no error banners to resolve, skip LLM call entirely
+        if not fields and not error_banners:
+            return {
+                "answers": [],
+                "story_update": "",
+                "qa_rationale": "Page transition — no actionable questions.",
+                "cumulative_story": self.story_state.cumulative_story,
+                "new_facts": {},
+                "raw_response": "{}"
+            }
+
         prompt = self._build_prompt(page_number, questions, fields, scenario_directives, error_banners)
         system_instruction = self._build_system_instruction()
 
@@ -121,9 +131,9 @@ class StoryEngine:
         parsed = self._parse_json_response(raw_response)
 
         # Update StoryState
-        story_update = parsed.get("story_update", "")
+        story_update = parsed.get("story_update", "").strip()
         new_facts = parsed.get("new_facts", {})
-        qa_rationale = parsed.get("qa_rationale", "")
+        qa_rationale = parsed.get("qa_rationale", "").strip()
 
         self.story_state.update_story(story_update, new_facts)
         self.story_state.record_page_decision(page_number, parsed.get("answers", []), qa_rationale)
@@ -140,17 +150,20 @@ class StoryEngine:
     def _build_system_instruction(self) -> str:
         return (
             "You are an authentic, highly consistent respondent completing a survey for QA validation.\n"
-            "You MUST embody the provided Persona and maintain an evolving, cohesive 'Living Story'.\n\n"
+            "Embody the Persona and maintain a cohesive Living Story.\n\n"
             "STRICT GROUND RULES:\n"
             "1. NO OPT-OUTS: Strictly NEVER choose 'Don't know', 'None of the above', 'N/A', or opt-out anchors.\n"
             "   Always make substantive, knowledgeable selections appropriate for your role.\n"
-            "2. UNIQUE RANKINGS: In ranking questions, you MUST assign unique ranks (1, 2, 3...) to each distinct item without duplicate numbers.\n"
+            "2. UNIQUE RANKINGS: In ranking questions, assign distinct ranks (1, 2, 3...) with no duplicates.\n"
             "3. NO STRAIGHT-LINING ON GRIDS: In rating grids/matrixes, express realistic nuanced opinions across rows.\n"
             "   Do not pick the exact same scale column for all rows.\n"
-            "4. SCENARIO DIRECTIVES: If any 'Scenario Requirement' is given for a question, it is a MANDATORY QA test condition and you MUST follow it.\n"
-            "5. NO ILLOGICAL TEXT: For text/specify fields, write realistic professional sentences or titles matching your persona.\n"
-            "   Never enter random single digits like '0' or '2'.\n"
-            "6. OUTPUT FORMAT: Respond ONLY with valid, raw JSON matching the requested schema. No markdown formatting, no conversational text."
+            "4. SCENARIO DIRECTIVES: Mandatory QA test conditions. You MUST follow them.\n"
+            "5. NO ILLOGICAL TEXT: Write realistic answers matching persona. Never enter random digits like '0'.\n"
+            "6. TOKEN CONSERVATION & CRISPNESS (CRITICAL):\n"
+            "   - story_update: Maximum 1 short sentence (<12 words) describing ONLY concrete new facts established (or \"\" if none).\n"
+            "   - qa_rationale: Maximum 1 crisp sentence (<12 words) stating the decision rationale (e.g. 'Selected senior IT role; avoided opt-out.').\n"
+            "   - NEVER use filler like 'As a professional respondent...' or restate questions.\n"
+            "7. OUTPUT FORMAT: Respond ONLY with valid, raw JSON matching the requested schema. No markdown formatting, no conversational text."
         )
 
     def _build_prompt(
@@ -161,11 +174,12 @@ class StoryEngine:
         scenario_directives: List[Dict[str, Any]],
         error_banners: Optional[List[str]] = None
     ) -> str:
-        # 1. Respondent Story & Facts
+        # 1. Compact Respondent Story & Facts
+        compact_facts = {k: v for k, v in self.story_state.established_facts.items() if v}
         story_summary = (
-            f"=== RESPONDENT IDENTITY & LIVING STORY ===\n"
-            f"Current Story:\n\"{self.story_state.cumulative_story}\"\n\n"
-            f"Established Factual Context:\n{json.dumps(self.story_state.established_facts, indent=2)}\n"
+            f"=== RESPONDENT IDENTITY ===\n"
+            f"Story: \"{self.story_state.cumulative_story}\"\n"
+            f"Confirmed Facts: {json.dumps(compact_facts)}\n"
         )
 
         # 2. Page Questions
@@ -262,26 +276,18 @@ class StoryEngine:
             f'    {{\n'
             f'      "fieldIndex": 0,\n'
             f'      "fieldType": "radio" | "checkbox" | "ranking" | "grid" | "select" | "text" | "numeric",\n'
-            f'      "selectedIndex": 0, // For radio or select\n'
-            f'      "selectedIndices": [0, 2], // For checkbox\n'
-            f'      "rankings": [ // For ranking fields: distinct rank per item\n'
-            f'        {{"itemIndex": 0, "rank": "1"}},\n'
-            f'        {{"itemIndex": 1, "rank": "2"}}\n'
-            f'      ],\n'
-            f'      "gridSelections": [ // For grid fields: one column index per row\n'
-            f'        {{"rowIndex": 0, "colIndex": 2}},\n'
-            f'        {{"rowIndex": 1, "colIndex": 3}}\n'
-            f'      ],\n'
-            f'      "textResponse": "...", // For text/textarea\n'
-            f'      "numericValue": 75, // For numeric\n'
-            f'      "specifyText": "..." // If a selected option requires specify/text\n'
+            f'      "selectedIndex": 0,\n'
+            f'      "selectedIndices": [0, 2],\n'
+            f'      "rankings": [{{"itemIndex": 0, "rank": "1"}}],\n'
+            f'      "gridSelections": [{{"rowIndex": 0, "colIndex": 2}}],\n'
+            f'      "textResponse": "...",\n'
+            f'      "numericValue": 75,\n'
+            f'      "specifyText": "..."\n'
             f'    }}\n'
             f'  ],\n'
-            f'  "new_facts": {{\n'
-            f'    "key": "value" // Any new factual details established by these answers\n'
-            f'  }},\n'
-            f'  "story_update": "1-3 sentences in 1st person narrating how this fits into your respondent life/job...",\n'
-            f'  "qa_rationale": "1-2 sentences explaining why these answers were chosen for QA audit."\n'
+            f'  "new_facts": {{"key": "value"}},\n'
+            f'  "story_update": "Max 1 short sentence (<12 words) of new fact, or empty string",\n'
+            f'  "qa_rationale": "Max 1 crisp sentence (<12 words) QA reason"\n'
             f"}}"
         )
         return user_content
@@ -292,7 +298,7 @@ class StoryEngine:
             print("[StoryEngine] Warning: No OpenRouter API key found. Using rule-based fallback decisions.")
             return json.dumps({
                 "answers": [],
-                "story_update": "Answered standard survey questions consistent with professional background.",
+                "story_update": "",
                 "qa_rationale": "Default rule-based selection applied.",
                 "new_facts": {}
             })
@@ -310,8 +316,8 @@ class StoryEngine:
                 {"role": "system", "content": system_instruction},
                 {"role": "user", "content": user_prompt},
             ],
-            "temperature": 0.4,
-            "max_tokens": 1500,
+            "temperature": 0.3,
+            "max_tokens": 500,
         }
 
         max_retries = 3
