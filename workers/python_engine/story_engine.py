@@ -189,7 +189,20 @@ class StoryEngine:
                 })
             elif f_type == "ranking":
                 items = f.get("items", [])
-                rankings = [{"itemIndex": i, "rank": str(i + 1)} for i in range(len(items))]
+                rank_limit = f.get("rankLimit") or 3
+                # Strictly filter out opt-outs
+                substantive_items = [
+                    item for item in items
+                    if not is_optout_option(item.get("itemLabel", ""))
+                ]
+                rankings = []
+                for r_idx, item in enumerate(substantive_items[:rank_limit]):
+                    available = item.get("rankOptions", [])
+                    rank_val = available[r_idx]["text"] if r_idx < len(available) else f"Rank {r_idx + 1}"
+                    rankings.append({
+                        "itemIndex": item.get("itemIndex"),
+                        "rank": rank_val
+                    })
                 answers.append({
                     "fieldIndex": f_idx,
                     "fieldType": "ranking",
@@ -302,16 +315,24 @@ class StoryEngine:
             "STRICT GROUND RULES:\n"
             "1. NO OPT-OUTS: Strictly NEVER choose 'Don't know', 'None of the above', 'N/A', or opt-out anchors.\n"
             "   Always make substantive, knowledgeable selections appropriate for your role.\n"
-            "2. UNIQUE RANKINGS: In ranking questions, assign distinct ranks (1, 2, 3...) with no duplicates.\n"
+            "2. RANKING QUESTIONS:\n"
+            "   - Read the question and any instruction/hint text carefully (e.g. 'Please rank the top three in order of importance').\n"
+            "   - If asked to rank top N (e.g. top 3), rank ONLY those N items (e.g. Rank 1, Rank 2, Rank 3).\n"
+            "   - Assign strictly UNIQUE ranks. No two items may share the same rank.\n"
+            "   - Leave ALL other remaining items unranked (do not include them in the rankings list).\n"
+            "   - NEVER rank 'Don't know', 'None of the above', or any opt-out anchor.\n"
             "3. NO STRAIGHT-LINING ON GRIDS: In rating grids/matrixes, express realistic nuanced opinions across rows.\n"
             "   Do not pick the exact same scale column for all rows.\n"
             "4. SCENARIO DIRECTIVES: Mandatory QA test conditions. You MUST follow them.\n"
-            "5. NO ILLOGICAL TEXT: Write realistic answers matching persona. Never enter random digits like '0'.\n"
-            "6. TOKEN CONSERVATION & CRISPNESS (CRITICAL):\n"
+            "5. CONDITIONAL SPECIFY / WRITE-IN:\n"
+            "   - Only provide specifyText IF you actually selected 'Other (please specify)' or an option with hasSpecify=true.\n"
+            "   - If you did NOT select an option requiring specification, set specifyText to null.\n"
+            "6. NO ILLOGICAL TEXT: Write realistic answers matching persona. Never enter random digits like '0'.\n"
+            "7. TOKEN CONSERVATION & CRISPNESS (CRITICAL):\n"
             "   - story_update: Maximum 1 short sentence (<12 words) describing ONLY concrete new facts established (or \"\" if none).\n"
             "   - qa_rationale: Maximum 1 crisp sentence (<12 words) stating the decision rationale (e.g. 'Selected senior IT role; avoided opt-out.').\n"
             "   - NEVER use filler like 'As a professional respondent...' or restate questions.\n"
-            "7. OUTPUT FORMAT: Respond ONLY with valid, raw JSON matching the requested schema. No markdown formatting, no conversational text."
+            "8. OUTPUT FORMAT: Respond ONLY with valid, raw JSON matching the requested schema. No markdown formatting, no conversational text."
         )
 
     def _build_prompt(
@@ -388,15 +409,25 @@ class StoryEngine:
                     ]
                 field_desc["options"] = opts_for_ai
             elif f_type == "ranking":
-                field_desc["ranking_items"] = [
+                rank_limit = f.get("rankLimit") or 3
+                substantive_items = [
                     {
                         "itemIndex": item.get("itemIndex"),
                         "itemLabel": item.get("itemLabel"),
+                        "hasSpecify": item.get("hasSpecify", False),
                         "availableRanks": [o.get("text") for o in item.get("rankOptions", [])]
                     }
                     for item in f.get("items", [])
+                    if not is_optout_option(item.get("itemLabel", ""))
                 ]
-                field_desc["instruction"] = "Assign a UNIQUE rank to each item (1 = highest priority). No two items can share the same rank!"
+                field_desc["ranking_items"] = substantive_items
+                field_desc["rankLimit"] = rank_limit
+                field_desc["instruction"] = (
+                    f"CRITICAL: Rank ONLY the top {rank_limit} items using unique ranks (e.g. Rank 1, Rank 2, Rank 3). "
+                    f"Do NOT assign ranks to any other items. Leave remaining items unranked. "
+                    f"Never rank 'Don't know' or opt-outs. "
+                    f"Only supply 'specifyText' if an 'Other (please specify)' item is ranked."
+                )
             elif f_type == "grid":
                 field_desc["columnHeaders"] = f.get("colHeaders", [])
                 field_desc["rows"] = [
@@ -408,7 +439,10 @@ class StoryEngine:
                 field_desc["options"] = [
                     {"index": i, "label": o.get("label")}
                     for i, o in enumerate(f.get("options", []))
+                    if not is_optout_option(o.get("label", ""))
                 ]
+                if not field_desc["options"]:
+                    field_desc["options"] = [{"index": i, "label": o.get("label")} for i, o in enumerate(f.get("options", []))]
             elif f_type in ("textarea", "text"):
                 field_desc["placeholder"] = f.get("placeholder", "")
                 field_desc["instruction"] = "Provide a 1-2 sentence thoughtful answer in 1st person consistent with your persona."

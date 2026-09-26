@@ -231,6 +231,25 @@ class DBClient:
                 (project_id, session_id, ip_address, country),
             )
 
+    def is_session_cancelled(self, session_id: str) -> bool:
+        """Checks if session was cancelled, stopped, or terminated by the user from frontend."""
+        try:
+            conn = self.get_connection()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status, error_log FROM sessions WHERE id = %s",
+                    (session_id,)
+                )
+                row = cur.fetchone()
+                if row:
+                    status = (row[0] or "").lower()
+                    error_log = (row[1] or "").lower()
+                    if status in ("terminated", "cancelled", "stopped") or "manually stopped" in error_log:
+                        return True
+        except Exception:
+            pass
+        return False
+
     def update_session_status(self, session_id: str, status: str, **kwargs):
         conn = self.get_connection()
         cols = ["status = %s", "updated_at = NOW()"]

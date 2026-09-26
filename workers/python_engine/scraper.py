@@ -265,15 +265,35 @@ class PageScraper:
                 });
             });
 
-            // ── Helper to find question label for a control ──
-            const getQuestionForControl = (el) => {
-                const block = el.closest('.qblock, .question, [class*="qblock"], fieldset, tr');
-                if (block) {
-                    const qt = block.querySelector('.qtext, .question-text, legend, h2, h3');
-                    if (qt && isVisible(qt)) return cleanText(qt.innerText || qt.textContent);
-                }
-                return questions[0] || '';
+            // ── Helper to find question label and instruction/hint for a control ──
+            const isOptOutText = (t) => {
+                if (!t) return false;
+                return /don'?t\s+know|do\s+not\s+know|not\s+sure|unsure|cannot\s+say|prefer\s+not|none\s+of|^\s*none\s*$|not\s+applicable|^\s*n\/?a\s*$/i.test(t);
             };
+
+            const getQuestionForControl = (el) => {
+                const block = el.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], fieldset, form, table') || el.closest('table')?.parentElement;
+                let qText = '';
+                let hintText = '';
+                if (block) {
+                    const qt = block.querySelector('.qtext, .question-text, legend, h2, h3, h4, [class*="qtitle"], [class*="question-title"]');
+                    if (qt && isVisible(qt)) qText = cleanText(qt.innerText || qt.textContent);
+
+                    const ht = block.querySelector('.instruction, .hint, .subtext, .sub-text, .qcomment, .comment, [class*="instruction"], [class*="comment"], [class*="hint"], [class*="subtext"], .fir-instruction, .fir-comment, em, small');
+                    if (ht && isVisible(ht) && ht !== qt) {
+                        hintText = cleanText(ht.innerText || ht.textContent);
+                    }
+                }
+                if (!qText) qText = questions[0] || '';
+                return {
+                    question: qText,
+                    hint: hintText,
+                    fullText: hintText && !qText.includes(hintText) ? `${qText} (${hintText})` : qText
+                };
+            };
+
+            const claimedSpecifyInputs = new Set();
+            const claimedOptOutCbs = new Set();
 
             // ── Helper to find specify/other input near a radio/checkbox ──
             const findSpecifyInput = (inputEl) => {
@@ -282,6 +302,7 @@ class PageScraper:
                     if (!node) break;
                     const textInp = node.querySelector('input[type="text"], input[type="search"], textarea');
                     if (textInp && textInp !== inputEl) {
+                        claimedSpecifyInputs.add(textInp);
                         return {
                             found: true,
                             id: textInp.id || null,
@@ -354,10 +375,13 @@ class PageScraper:
                 });
 
                 if (gridRows.length > 0) {
+                    const qInfo = getQuestionForControl(table);
                     fields.push({
                         fieldType: 'grid',
                         fieldIndex: fields.length,
-                        questionLabel: getQuestionForControl(table),
+                        questionLabel: qInfo.fullText,
+                        questionTitle: qInfo.question,
+                        questionHint: qInfo.hint,
                         colHeaders: colHeaders,
                         rows: gridRows
                     });
@@ -408,12 +432,15 @@ class PageScraper:
             radioOrder.forEach((name, gi) => {
                 const opts = radioGroups[name];
                 const firstRadio = document.querySelector(`input[type="radio"][name="${name}"]`);
+                const qInfo = firstRadio ? getQuestionForControl(firstRadio) : { fullText: questions[0] || '', question: questions[0] || '', hint: '' };
                 fields.push({
                     fieldType: 'radio',
                     fieldIndex: fields.length,
                     groupName: name,
                     groupIndex: gi,
-                    questionLabel: firstRadio ? getQuestionForControl(firstRadio) : questions[0] || '',
+                    questionLabel: qInfo.fullText,
+                    questionTitle: qInfo.question,
+                    questionHint: qInfo.hint,
                     options: opts
                 });
             });
@@ -423,10 +450,12 @@ class PageScraper:
             const cbOrder = [];
             document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
                 if (!isInputInteractive(cb)) return;
+                if (claimedOptOutCbs.has(cb)) return;
 
                 // Group checkboxes belonging to the same question block into one multi-option question
                 const qBlock = cb.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], fieldset, table, [role="group"]');
-                const qText = getQuestionForControl(cb);
+                const qInfo = getQuestionForControl(cb);
+                const qText = qInfo.fullText;
 
                 // Strip trailing option index/suffix (e.g. ans2214.0.0 -> ans2214.0)
                 let baseName = (cb.name || '').replace(/([._\\[])\\d+\\]?$/, '');
@@ -445,7 +474,9 @@ class PageScraper:
                 if (!cbGroups[groupKey]) {
                     cbGroups[groupKey] = {
                         name: cb.name || groupKey,
-                        questionLabel: qText,
+                        questionLabel: qInfo.fullText,
+                        questionTitle: qInfo.question,
+                        questionHint: qInfo.hint,
                         options: []
                     };
                     cbOrder.push(groupKey);
@@ -494,6 +525,8 @@ class PageScraper:
                     groupName: groupObj.name,
                     groupIndex: gi,
                     questionLabel: groupObj.questionLabel || questions[0] || '',
+                    questionTitle: groupObj.questionTitle || questions[0] || '',
+                    questionHint: groupObj.questionHint || '',
                     options: groupObj.options
                 });
             });
@@ -501,15 +534,23 @@ class PageScraper:
             // ── 4. Dropdowns & Ranking Detection ──
             const selects = Array.from(document.querySelectorAll('select')).filter(isVisible);
 
-            // Group ranking selects (e.g. 3-8 selects in same table/container each having ranks 1, 2, 3...)
+            // Group ranking selects (e.g. selects in same table/container where options are ranks 1, 2, 3...)
             const rankingCandidates = [];
             const normalSelects = [];
 
             selects.forEach((sel) => {
                 const optTexts = Array.from(sel.options).map(o => cleanText(o.text));
-                const numericOpts = optTexts.filter(t => /^[0-9]+$/.test(t));
-                const isRankLike = (numericOpts.length >= 2 && numericOpts.length === optTexts.filter(t => !/select|--|choose/i.test(t)).length)
-                    || /rank|order|priorit/i.test(sel.name || '');
+                const meaningfulOpts = optTexts.filter(t => !/select|--|choose|^none$|^$/i.test(t));
+                const rankLikeOpts = meaningfulOpts.filter(t => /^(rank\s*)?[0-9]+(\w+)?$/i.test(t) || /^(top\s*)?[0-9]+/i.test(t) || /^[0-9]+(st|nd|rd|th)$/i.test(t) || /^#[0-9]+$/.test(t));
+
+                const container = sel.closest('table, .qblock, .question, [class*="qblock"], fieldset') || sel.parentElement;
+                const containerText = cleanText(container?.innerText || '');
+                const hasRankingContext = /rank|order of importance|order of preference|priority|rank the top|select each answer only once/i.test(containerText) ||
+                                          /rank|order|priorit/i.test(sel.name || '') ||
+                                          /rank|order|priorit/i.test(sel.id || '');
+
+                const isRankLike = (meaningfulOpts.length >= 2 && rankLikeOpts.length === meaningfulOpts.length) ||
+                                   (hasRankingContext && meaningfulOpts.length >= 2 && rankLikeOpts.length >= 1);
 
                 if (isRankLike) {
                     rankingCandidates.push(sel);
@@ -519,18 +560,55 @@ class PageScraper:
             });
 
             if (rankingCandidates.length >= 2) {
-                // Treated as a RANKING question set
+                // Determine rank limit from container instruction text (e.g. "top three" -> 3)
+                const container = rankingCandidates[0].closest('table, .qblock, .question, [class*="qblock"], fieldset') || rankingCandidates[0].parentElement;
+                const containerText = cleanText(container?.innerText || '') + ' ' + (questions.join(' '));
+
+                let detectedRankLimit = null;
+                const matchLimit = containerText.match(/(?:rank|select)\s+(?:the\s+)?(?:top\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)/i);
+                if (matchLimit) {
+                    const wordMap = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+                    const parsed = wordMap[matchLimit[1].toLowerCase()] || parseInt(matchLimit[1], 10);
+                    if (!isNaN(parsed) && parsed > 0) {
+                        detectedRankLimit = parsed;
+                    }
+                }
+
+                // Check for opt-out checkboxes in this table/container (e.g. "Don't know")
+                const optOutCheckboxes = [];
+                if (container) {
+                    container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                        const row = cb.closest('tr, [class*="row"], label') || cb.parentElement;
+                        const rowText = cleanText(row?.innerText || '');
+                        if (isOptOutText(rowText)) {
+                            claimedOptOutCbs.add(cb);
+                            optOutCheckboxes.push(cb.id || cb.name);
+                        }
+                    });
+                }
+
                 const rankItems = rankingCandidates.map((sel, idx) => {
                     const row = sel.closest('tr, [class*="row"], [class*="item"]');
                     let rowLabel = '';
+                    let specInput = null;
+
                     if (row) {
-                        const firstCell = row.querySelector('td:first-child, th:first-child, label, span');
+                        const cells = Array.from(row.querySelectorAll('td, th'));
+                        const firstCell = cells.find(c => !c.querySelector('select, input[type="radio"], input[type="checkbox"]')) || cells[0];
                         if (firstCell && firstCell !== sel) {
                             rowLabel = cleanText(firstCell.innerText || firstCell.textContent);
                         }
+
+                        // Check if this row contains a specify / write-in input box!
+                        const rowInp = row.querySelector('input[type="text"], input[type="search"], textarea');
+                        if (rowInp) {
+                            specInput = rowInp;
+                            claimedSpecifyInputs.add(rowInp);
+                        }
                     }
+
                     const validOpts = Array.from(sel.options)
-                        .filter(o => o.value && !/select|--|choose/i.test(o.text))
+                        .filter(o => o.value && !/select|--|choose|^$/i.test(o.text))
                         .map(o => ({ value: o.value, text: cleanText(o.text) }));
 
                     return {
@@ -539,15 +617,26 @@ class PageScraper:
                         name: sel.name || `rank_sel_${idx}`,
                         itemLabel: rowLabel || `Item ${idx + 1}`,
                         selectedValue: sel.value || null,
+                        hasSpecify: !!specInput,
+                        specifyId: specInput ? specInput.id : null,
+                        specifyName: specInput ? specInput.name : null,
                         rankOptions: validOpts
                     };
                 });
 
+                const numRankOptions = rankItems[0]?.rankOptions?.length || 3;
+                const effectiveLimit = detectedRankLimit ? Math.min(detectedRankLimit, numRankOptions) : Math.min(rankItems.length, numRankOptions);
+
+                const qInfo = getQuestionForControl(rankingCandidates[0]);
                 fields.push({
                     fieldType: 'ranking',
                     fieldIndex: fields.length,
-                    questionLabel: getQuestionForControl(rankingCandidates[0]),
-                    items: rankItems
+                    questionLabel: qInfo.fullText,
+                    questionTitle: qInfo.question,
+                    questionHint: qInfo.hint,
+                    rankLimit: effectiveLimit,
+                    items: rankItems,
+                    optOutCheckboxIds: optOutCheckboxes.filter(Boolean)
                 });
             } else {
                 rankingCandidates.forEach(s => normalSelects.push(s));
@@ -558,13 +647,16 @@ class PageScraper:
                     .filter(o => o.value && !/select one|--|please select/i.test(o.text))
                     .map(o => ({ value: o.value, label: cleanText(o.text) }));
 
+                const qInfo = getQuestionForControl(sel);
                 fields.push({
                     fieldType: 'select',
                     fieldIndex: fields.length,
                     selectIndex: si,
                     id: sel.id || null,
                     name: sel.name || `select_${si}`,
-                    questionLabel: getQuestionForControl(sel),
+                    questionLabel: qInfo.fullText,
+                    questionTitle: qInfo.question,
+                    questionHint: qInfo.hint,
                     selectedValue: sel.value || null,
                     options: validOpts
                 });
@@ -573,13 +665,17 @@ class PageScraper:
             // ── 5. Text Areas & Open-Ends ──
             document.querySelectorAll('textarea').forEach((ta, ti) => {
                 if (!isVisible(ta)) return;
+                if (claimedSpecifyInputs.has(ta)) return;
+                const qInfo = getQuestionForControl(ta);
                 fields.push({
                     fieldType: 'textarea',
                     fieldIndex: fields.length,
                     textareaIndex: ti,
                     id: ta.id || null,
                     name: ta.name || `textarea_${ti}`,
-                    questionLabel: getQuestionForControl(ta),
+                    questionLabel: qInfo.fullText,
+                    questionTitle: qInfo.question,
+                    questionHint: qInfo.hint,
                     placeholder: ta.placeholder || '',
                     currentValue: ta.value || ''
                 });
@@ -588,8 +684,19 @@ class PageScraper:
             // ── 6. Numeric & Text Inputs ──
             document.querySelectorAll('input[type="text"], input[type="number"]').forEach((inp, ii) => {
                 if (!isVisible(inp)) return;
-                // Exclude if already attached to radio/checkbox as specify input
-                const isSpecify = inp.closest('.other, [class*="other"], .specify, [class*="specify"]');
+                // Exclude if already attached to radio/checkbox/ranking as specify input
+                if (claimedSpecifyInputs.has(inp)) return;
+
+                // Exclude if inside an "other" or "specify" row/container or if name/id indicates specify
+                const row = inp.closest('tr, [class*="row"], .other, [class*="other"], .specify, [class*="specify"]');
+                const rowText = row ? cleanText(row.innerText || '') : '';
+                if (/other\s*\(|please\s*specify|^other$/i.test(rowText) ||
+                    /specify|other/i.test(inp.name || '') ||
+                    /specify|other/i.test(inp.id || '')) {
+                    claimedSpecifyInputs.add(inp);
+                    return;
+                }
+
                 const fieldType = inp.type === 'number' || /percent|amount|allocation|count|revenue|budget/i.test(inp.name || inp.id || '') ? 'numeric' : 'text';
 
                 // Look for unit suffix like %, $, USD
@@ -603,13 +710,16 @@ class PageScraper:
                     }
                 }
 
+                const qInfo = getQuestionForControl(inp);
                 fields.push({
                     fieldType: fieldType,
                     fieldIndex: fields.length,
                     inputIndex: ii,
                     id: inp.id || null,
                     name: inp.name || `input_${ii}`,
-                    questionLabel: getQuestionForControl(inp),
+                    questionLabel: qInfo.fullText,
+                    questionTitle: qInfo.question,
+                    questionHint: qInfo.hint,
                     placeholder: inp.placeholder || '',
                     min: inp.min || null,
                     max: inp.max || null,

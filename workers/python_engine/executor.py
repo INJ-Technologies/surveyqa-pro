@@ -219,7 +219,7 @@ class ActionExecutor:
                     if res:
                         results.append(res)
                 elif f_type == "ranking":
-                    res = self._execute_ranking(field, ans)
+                    res = self._execute_ranking(field, ans, persona)
                     if res:
                         results.append(res)
                 elif f_type == "grid":
@@ -387,63 +387,140 @@ class ActionExecutor:
             "options": [o.get("label") for o in options]
         }
 
-    def _execute_ranking(self, field: Dict[str, Any], ans: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _execute_ranking(
+        self,
+        field: Dict[str, Any],
+        ans: Dict[str, Any],
+        persona: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Executes ranking dropdown selections.
-        CRITICAL: Guarantees unique rank assignment (1, 2, 3...) across items,
-        avoiding red Decipher validation banners!
+        CRITICAL RULES:
+        1. Reads ranking limit (e.g. top 3): ONLY assigns ranks to top N items.
+        2. Assigns STRICTLY UNIQUE ranks (Rank 1, Rank 2, Rank 3) - no duplicates across rows/columns.
+        3. All remaining rows are explicitly DESELECTED / set to blank/default.
+        4. NEVER selects opt-out options like "Don't know" or "None of the above".
+        5. Unchecks any opt-out checkboxes in the ranking table.
+        6. Open-ended specify text is ONLY filled if the ranked item is "Other (please specify)".
         """
         items = field.get("items", [])
         if not items:
             return None
 
+        rank_limit = field.get("rankLimit") or 3
+
+        # Uncheck any opt-out checkboxes in the ranking container (e.g. "Don't know")
+        opt_out_cbs = field.get("optOutCheckboxIds", [])
+        for cb_id in opt_out_cbs:
+            try:
+                loc = locate_by_id(self.page, cb_id)
+                if loc.count() > 0 and loc.first.is_checked():
+                    loc.first.evaluate("el => { el.checked = false; el.dispatchEvent(new Event('change', {bubbles: true})); }")
+            except Exception:
+                pass
+
         rankings = ans.get("rankings", [])
-        rank_map = {}
+        raw_rank_map = {}
         for r in rankings:
             item_idx = r.get("itemIndex")
             rank_val = str(r.get("rank", "")).strip()
             if item_idx is not None and rank_val:
-                rank_map[item_idx] = rank_val
+                raw_rank_map[item_idx] = rank_val
 
-        # Ensure distinct ranks (1..N) without duplicates
+        # Substantive items only (filter out opt-outs)
+        substantive_items = [
+            (i, item) for i, item in enumerate(items)
+            if not is_optout_option(item.get("itemLabel", ""))
+        ]
+
+        # Available ranks from first item's rankOptions
+        available_ranks = []
+        if items and items[0].get("rankOptions"):
+            available_ranks = [o.get("text") for o in items[0]["rankOptions"] if o.get("text")]
+        if not available_ranks:
+            available_ranks = [f"Rank {r+1}" for r in range(rank_limit)]
+
+        # Determine which items get which ranks (at most rank_limit items!)
         assigned_ranks = set()
+        final_rank_map = {}
+
+        # First pass: map ranks from AI decision for valid substantive items
+        for item_idx, item in substantive_items:
+            if len(final_rank_map) >= rank_limit:
+                break
+            if item_idx in raw_rank_map:
+                desired = raw_rank_map[item_idx]
+                matched_rank = None
+                for opt in item.get("rankOptions", []):
+                    o_text = opt.get("text", "")
+                    o_val = str(opt.get("value", ""))
+                    if desired.lower() == o_text.lower() or desired == o_val or desired.lower() in o_text.lower():
+                        if o_text not in assigned_ranks:
+                            matched_rank = o_text
+                            break
+                if matched_rank:
+                    final_rank_map[item_idx] = matched_rank
+                    assigned_ranks.add(matched_rank)
+
+        # Second pass: ensure we have up to rank_limit unique ranks assigned
+        unassigned_ranks = [r for r in available_ranks[:rank_limit] if r not in assigned_ranks]
+        for item_idx, item in substantive_items:
+            if len(final_rank_map) >= rank_limit or not unassigned_ranks:
+                break
+            if item_idx not in final_rank_map:
+                rank_to_give = unassigned_ranks.pop(0)
+                final_rank_map[item_idx] = rank_to_give
+                assigned_ranks.add(rank_to_give)
+
         final_assignments = []
 
+        # Execute DOM actions for each item in the table
         for i, item in enumerate(items):
-            chosen_rank = rank_map.get(i)
-            valid_opts = [o.get("text") for o in item.get("rankOptions", [])]
-
-            if not chosen_rank or chosen_rank in assigned_ranks or chosen_rank not in valid_opts:
-                # Pick next available rank
-                for opt in valid_opts:
-                    if opt not in assigned_ranks and re.match(r"^[0-9]+$", opt):
-                        chosen_rank = opt
-                        break
-
-            if not chosen_rank and valid_opts:
-                chosen_rank = valid_opts[0]
-
-            assigned_ranks.add(chosen_rank)
-            final_assignments.append({
-                "itemLabel": item.get("itemLabel"),
-                "rank": chosen_rank
-            })
-
-            # Apply to DOM
             sel_id = item.get("id")
             sel_name = item.get("name")
-            try:
-                if sel_id:
-                    loc = locate_by_id(self.page, sel_id)
-                    if loc.count() > 0 and loc.is_visible():
+            chosen_rank = final_rank_map.get(i)
+
+            loc = locate_by_id(self.page, sel_id) if sel_id else (self.page.locator(f'select[name="{sel_name}"]') if sel_name else None)
+
+            if loc and loc.count() > 0:
+                try:
+                    if chosen_rank:
                         loc.select_option(label=chosen_rank)
-                elif sel_name:
-                    loc = self.page.locator(f'select[name="{sel_name}"]')
-                    if loc.count() > 0 and loc.is_visible():
-                        loc.select_option(label=chosen_rank)
-            except Exception:
-                pass
-            time.sleep(0.15)
+                    else:
+                        loc.evaluate("""el => {
+                            const emptyOpt = Array.from(el.options).find(o => !o.value || /select|--|choose|^none$|^$/i.test(o.text));
+                            if (emptyOpt) {
+                                el.value = emptyOpt.value;
+                            } else {
+                                el.selectedIndex = 0;
+                            }
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                        }""")
+                except Exception as ex:
+                    print(f"[Executor] Ranking select failed for item {i}: {ex}")
+
+            # Handle specify input for this row (e.g. "Other (Please specify)")
+            spec_id = item.get("specifyId")
+            spec_name = item.get("specifyName")
+            if spec_id or spec_name:
+                spec_loc = locate_by_id(self.page, spec_id) if spec_id else self.page.locator(f'[name="{spec_name}"]')
+                if spec_loc.count() > 0:
+                    if chosen_rank:
+                        spec_text = ans.get("specifyText")
+                        if not spec_text:
+                            role = (persona or {}).get("job_title") or (persona or {}).get("role") or "Strategy & Operations"
+                            spec_text = role
+                        spec_loc.first.fill(spec_text)
+                    else:
+                        spec_loc.first.fill("")
+
+            if chosen_rank:
+                final_assignments.append({
+                    "itemLabel": item.get("itemLabel"),
+                    "rank": chosen_rank
+                })
+            time.sleep(0.1)
 
         return {
             "type": "ranking",
@@ -529,6 +606,11 @@ class ActionExecutor:
         sel_idx = ans.get("selectedIndex", 0)
         if not options:
             return None
+
+        # Exclude opt-out anchors
+        substantive = [i for i, o in enumerate(options) if not is_optout_option(o.get("label", ""))]
+        if sel_idx not in substantive and substantive:
+            sel_idx = substantive[0]
 
         sel_idx = max(0, min(sel_idx, len(options) - 1))
         chosen = options[sel_idx]

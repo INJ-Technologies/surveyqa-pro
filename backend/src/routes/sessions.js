@@ -467,8 +467,7 @@ router.post('/project/:projectId/stop', requireRole('admin', 'project_manager'),
 
     // Drain all waiting jobs from the queue for this project
     try {
-      const { queue } = require('../queues/index');
-      const waiting = await queue.getJobs(['waiting', 'delayed']);
+      const waiting = await sessionQueue.getJobs(['waiting', 'delayed']);
       let drained = 0;
       for (const job of waiting) {
         if (job.data?.projectId === projectId) {
@@ -481,6 +480,16 @@ router.post('/project/:projectId/stop', requireRole('admin', 'project_manager'),
       console.warn('[Stop] Could not drain queue jobs:', qErr.message);
     }
 
+    // Broadcast abort signal to workers via Redis
+    try {
+      const client = await sessionQueue.client;
+      if (client) {
+        await client.publish('surveyqa:session_abort', JSON.stringify({ projectId, sessionIds: stoppedIds }));
+      }
+    } catch (pubErr) {
+      console.warn('[Stop] Redis project abort broadcast error:', pubErr.message);
+    }
+
     res.json({ stopped: stoppedIds.length, message: `${stoppedIds.length} session(s) stopped` });
   } catch (err) {
     console.error('Stop sessions error:', err);
@@ -491,12 +500,36 @@ router.post('/project/:projectId/stop', requireRole('admin', 'project_manager'),
 // ─── POST /api/sessions/:id/stop — terminate single session ──────────────────
 router.post('/:id/stop', requireAuth, async (req, res) => {
   try {
+    const sessionId = req.params.id;
     await pool.query(
-      `UPDATE sessions SET status = 'error', outcome = 'error',
-       error_log = 'Manually stopped by user', completed_at = NOW()
+      `UPDATE sessions SET status = 'terminated', outcome = 'error',
+       error_log = 'Manually stopped by user', completed_at = NOW(), updated_at = NOW()
        WHERE id = $1`,
-      [req.params.id]
+      [sessionId]
     );
+
+    // Drain from queue if still waiting
+    try {
+      const waiting = await sessionQueue.getJobs(['waiting', 'delayed']);
+      for (const job of waiting) {
+        if (job.data?.sessionId === sessionId) {
+          await job.remove().catch(() => {});
+        }
+      }
+    } catch (qErr) {
+      console.warn('[Stop] Could not drain queue job:', qErr.message);
+    }
+
+    // Broadcast abort to workers via Redis
+    try {
+      const client = await sessionQueue.client;
+      if (client) {
+        await client.publish('surveyqa:session_abort', JSON.stringify({ sessionId }));
+      }
+    } catch (pubErr) {
+      console.warn('[Stop] Redis abort broadcast error:', pubErr.message);
+    }
+
     res.json({ message: 'Session stopped' });
   } catch (err) {
     console.error('Stop session error:', err.message);

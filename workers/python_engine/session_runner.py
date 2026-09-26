@@ -254,6 +254,12 @@ class SurveySessionRunner:
                 consecutive_error_count = 0
                 # Page Execution Loop
                 while current_page < self.max_pages:
+                    # Check if session was stopped or terminated by user from frontend
+                    if self.db.is_session_cancelled(self.session_id):
+                        print(f"[SessionRunner] Session {self.session_id} was stopped/terminated by user. Halting execution.")
+                        outcome = "terminated"
+                        break
+
                     current_page += 1
                     page_start_time = time.time()
                     print(f"\n[SessionRunner] ── Processing Page {current_page} ── ({page.url})")
@@ -319,6 +325,11 @@ class SurveySessionRunner:
                         print(f"[SessionRunner] Matched {len(scenario_directives)} scenario directives on page {current_page}")
 
                     # 4. Formulate AI decisions via StoryEngine
+                    if self.db.is_session_cancelled(self.session_id):
+                        print(f"[SessionRunner] Session {self.session_id} was stopped by user before AI call. Halting.")
+                        outcome = "terminated"
+                        break
+
                     decisions_result = story_engine.decide_page_actions(
                         page_number=current_page,
                         questions=visible_questions,
@@ -482,19 +493,35 @@ class SurveySessionRunner:
 
         # Update final session state in PostgreSQL
         usage = story_engine.get_usage_summary()
-        self.db.update_session_status(
-            self.session_id,
-            outcome,
-            outcome=outcome,
-            quality_score=quality_score,
-            total_duration_s=total_duration,
-            question_count=current_page,
-            model_used=usage["model_used"],
-            ai_calls_count=usage["calls"],
-            input_tokens_total=usage["input_tokens"],
-            output_tokens_total=usage["output_tokens"],
-            ai_cost_usd=usage["cost_usd"],
-        )
+        if outcome == "terminated":
+            self.db.update_session_status(
+                self.session_id,
+                "terminated",
+                outcome="error",
+                error_log="Manually stopped by user",
+                quality_score=0,
+                total_duration_s=total_duration,
+                question_count=current_page,
+                model_used=usage["model_used"],
+                ai_calls_count=usage["calls"],
+                input_tokens_total=usage["input_tokens"],
+                output_tokens_total=usage["output_tokens"],
+                ai_cost_usd=usage["cost_usd"],
+            )
+        else:
+            self.db.update_session_status(
+                self.session_id,
+                outcome,
+                outcome=outcome,
+                quality_score=quality_score,
+                total_duration_s=total_duration,
+                question_count=current_page,
+                model_used=usage["model_used"],
+                ai_calls_count=usage["calls"],
+                input_tokens_total=usage["input_tokens"],
+                output_tokens_total=usage["output_tokens"],
+                ai_cost_usd=usage["cost_usd"],
+            )
 
         return {
             "session_id": self.session_id,
