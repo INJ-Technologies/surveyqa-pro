@@ -4458,9 +4458,49 @@ const calculateQualityScore = (pages, sessionEvents, pageCount, outcome) => {
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
-// PYTHON STORY ENGINE RUNNER
+// PYTHON STORY ENGINE RUNNER & CANCELLATION HANDLER
 // ══════════════════════════════════════════════════════════════════════════════
-const runPythonSession = (sessionId, surveyUrl = null, internalTesting = false) => {
+const activePythonSessions = new Map(); // sessionId -> { child, projectId, kill }
+
+// Redis cross-container abort broadcast subscriber
+try {
+  const Redis = require("ioredis");
+  const subRedis = new Redis(connection);
+  subRedis.subscribe("surveyqa:session_abort", (err) => {
+    if (!err) console.log("[Worker] Subscribed to Redis abort channel: surveyqa:session_abort");
+  });
+  subRedis.on("message", (channel, message) => {
+    if (channel === "surveyqa:session_abort") {
+      try {
+        const payload = JSON.parse(message);
+        if (payload.sessionId && activePythonSessions.has(payload.sessionId)) {
+          console.log(`[Worker] Received Redis abort signal for session ${payload.sessionId}`);
+          activePythonSessions.get(payload.sessionId).kill("Redis abort signal");
+        }
+        if (payload.projectId) {
+          for (const [sId, sess] of activePythonSessions.entries()) {
+            if (sess.projectId === payload.projectId) {
+              console.log(`[Worker] Received Redis project abort signal for session ${sId}`);
+              sess.kill("Redis project abort signal");
+            }
+          }
+        }
+        if (payload.sessionIds && Array.isArray(payload.sessionIds)) {
+          for (const sId of payload.sessionIds) {
+            if (activePythonSessions.has(sId)) {
+              console.log(`[Worker] Received Redis batch abort signal for session ${sId}`);
+              activePythonSessions.get(sId).kill("Redis batch abort signal");
+            }
+          }
+        }
+      } catch (e) {}
+    }
+  });
+} catch (redisSubErr) {
+  console.warn("[Worker] Could not initialize Redis abort subscriber:", redisSubErr.message);
+}
+
+const runPythonSession = (sessionId, surveyUrl = null, internalTesting = false, projectId = null) => {
   return new Promise((resolve, reject) => {
     const pythonBin =
       process.env.PYTHON_BIN ||
@@ -4487,6 +4527,53 @@ const runPythonSession = (sessionId, surveyUrl = null, internalTesting = false) 
       },
     });
 
+    let isTerminatedByUser = false;
+    let pollInterval = null;
+
+    const cleanup = () => {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+      activePythonSessions.delete(sessionId);
+    };
+
+    const killProcess = (reason = "Terminated by user") => {
+      if (isTerminatedByUser) return;
+      isTerminatedByUser = true;
+      console.log(`[Worker] Session ${sessionId} — killing Python process (PID: ${child.pid}) [${reason}]`);
+      cleanup();
+      try {
+        child.kill("SIGTERM");
+      } catch (e) {}
+      setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch (e) {}
+      }, 2000);
+      resolve({ sessionId, outcome: "terminated", manuallyStopped: true });
+    };
+
+    // Poll DB every 1.5 seconds to detect if the session was terminated from frontend
+    pollInterval = setInterval(async () => {
+      try {
+        const check = await pool.query(
+          "SELECT status, error_log FROM sessions WHERE id = $1",
+          [sessionId]
+        );
+        const row = check.rows[0];
+        if (row) {
+          const status = (row.status || "").toLowerCase();
+          const errLog = (row.error_log || "").toLowerCase();
+          if (["terminated", "cancelled", "stopped"].includes(status) || errLog.includes("manually stopped")) {
+            killProcess("DB status is " + status);
+          }
+        }
+      } catch (e) {}
+    }, 1500);
+
+    activePythonSessions.set(sessionId, { child, projectId, kill: killProcess });
+
     child.stdout.on("data", (data) => {
       process.stdout.write(data);
     });
@@ -4496,6 +4583,12 @@ const runPythonSession = (sessionId, surveyUrl = null, internalTesting = false) 
     });
 
     child.on("close", (code) => {
+      cleanup();
+      if (isTerminatedByUser) {
+        console.log(`[Worker] Session ${sessionId} cleanly terminated after user stop request.`);
+        resolve({ sessionId, outcome: "terminated", manuallyStopped: true });
+        return;
+      }
       if (code === 0) {
         console.log(
           `[Worker] ✓ Python Story Engine session ${sessionId} finished successfully.`,
@@ -4510,6 +4603,11 @@ const runPythonSession = (sessionId, surveyUrl = null, internalTesting = false) 
     });
 
     child.on("error", (err) => {
+      cleanup();
+      if (isTerminatedByUser) {
+        resolve({ sessionId, outcome: "terminated", manuallyStopped: true });
+        return;
+      }
       console.error(
         `[Worker] ✗ Failed to spawn Python process: ${err.message}`,
       );
@@ -4548,8 +4646,30 @@ const processSession = async (job) => {
   const usePythonEngine = process.env.USE_PYTHON_ENGINE !== "false";
   if (usePythonEngine) {
     try {
-      return await runPythonSession(sessionId, surveyUrl, internalTesting);
+      const res = await runPythonSession(sessionId, surveyUrl, internalTesting, projectId);
+      if (res?.outcome === "terminated" || res?.manuallyStopped) {
+        console.log(`[Worker] Session ${sessionId} stopped as requested.`);
+        return res;
+      }
+      return res;
     } catch (err) {
+      // Check if session was stopped in DB before throwing retry error
+      try {
+        const check = await pool.query(
+          "SELECT status, error_log FROM sessions WHERE id = $1",
+          [sessionId]
+        );
+        const row = check.rows[0];
+        if (
+          row &&
+          (["terminated", "cancelled", "stopped"].includes((row.status || "").toLowerCase()) ||
+            (row.error_log || "").toLowerCase().includes("manually stopped"))
+        ) {
+          console.log(`[Worker] Session ${sessionId} error suppressed because session was stopped by user.`);
+          return { sessionId, outcome: "terminated" };
+        }
+      } catch (e) {}
+
       console.warn(
         `[Worker] Python engine execution failed: ${err.message}. Retrying via BullMQ...`,
       );
