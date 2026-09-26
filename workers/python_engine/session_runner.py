@@ -350,6 +350,15 @@ class SurveySessionRunner:
                         else:
                             flat_options.append(ea)
 
+                    # Capture rich live DOM options (all available options + selected state)
+                    try:
+                        captured_page_options = scraper.capture_page_options()
+                    except Exception as e:
+                        print(f"[SessionRunner] capture_page_options exception: {e}")
+                        captured_page_options = []
+
+                    final_options = captured_page_options if captured_page_options else flat_options
+
                     time_taken = int(time.time() - page_start_time)
                     self.db.log_session_event(
                         session_id=self.session_id,
@@ -361,7 +370,7 @@ class SurveySessionRunner:
                             "timeTaken": time_taken,
                             "screenshot": page_screenshot_name,
                             "questions": visible_questions,
-                            "options": flat_options,
+                            "options": final_options,
                             "gridAnswers": grid_answers,
                             "answers": executed_answers,
                             "story_update": story_update,

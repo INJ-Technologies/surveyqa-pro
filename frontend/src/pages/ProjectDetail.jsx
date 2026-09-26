@@ -3710,9 +3710,22 @@ function SessionReportModal({
             ) {
               html += `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:4px;padding:8px 12px;font-size:0.85rem;color:#166534;">${optGroup.selected}</div>`;
             }
+            if (optGroup.specText) {
+              html += `<div style="margin-top:6px;background:#f0fdf4;border:1px solid #86efac;border-radius:4px;padding:6px 10px;font-size:0.8rem;color:#166534;"><strong>Specified text:</strong> ${optGroup.specText}</div>`;
+            }
             html += `</div>`;
           });
           html += `</div>`;
+        }
+
+        if (payload.gridAnswers && payload.gridAnswers.length > 0) {
+          html += `<div style="margin-bottom:12px;"><div style="font-size:0.72rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:8px;">Grid Answers — Row &rarr; Selection</div>
+          <table style="width:100%;border-collapse:collapse;font-size:0.83rem;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;">
+            <thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;text-align:left;"><th style="padding:6px 10px;color:#64748b;">Row Item</th><th style="padding:6px 10px;color:#64748b;">Selected Answer</th></tr></thead>
+            <tbody>
+            ${payload.gridAnswers.map(ga => `<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:6px 10px;color:#334155;">${ga.rowLabel || ga.rowName || 'Row'}</td><td style="padding:6px 10px;color:#166534;font-weight:600;">${ga.selected || ''}</td></tr>`).join('')}
+            </tbody>
+          </table></div>`;
         }
 
         html += `</div>`;
@@ -4748,6 +4761,22 @@ function SessionReportModal({
                                 {optGroup.selected}
                               </div>
                             )}
+                          {optGroup.specText && (
+                            <div
+                              style={{
+                                marginTop: 8,
+                                background: "#f0fdf4",
+                                border: "1px solid #86efac",
+                                borderRadius: 6,
+                                padding: "6px 12px",
+                                fontSize: "0.8rem",
+                                color: "#166534",
+                                fontFamily: FONT,
+                              }}
+                            >
+                              <strong>Specified:</strong> {optGroup.specText}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>

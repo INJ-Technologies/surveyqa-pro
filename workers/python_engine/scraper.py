@@ -191,7 +191,7 @@ class PageScraper:
             const questions = [];
             const fields = [];
 
-            // ── Find Question Titles ──
+            // ── Find Question Titles, Subtitles, Instructions & Hints ──
             const qTitleSelectors = [
                 '.qtext', '.question-text', '.qtitle', '[class*="qtext"]',
                 '[class*="question-title"]', '[class*="questionText"]',
@@ -203,27 +203,67 @@ class PageScraper:
                 document.querySelectorAll(sel).forEach(el => {
                     if (!isVisible(el)) return;
                     const txt = cleanText(el.innerText || el.textContent);
-                    if (txt && txt.length >= 8 && txt.length <= 600 && !seenTitles.has(txt)) {
+                    if (txt && txt.length >= 6 && txt.length <= 600 && !seenTitles.has(txt)) {
                         seenTitles.add(txt);
                         questions.push(txt);
                     }
                 });
             }
 
-            // Fallback for headings inside visible question blocks
+            // Headings inside visible question blocks
             if (questions.length === 0) {
                 document.querySelectorAll('.qblock, .question, [class*="qblock"], [class*="question-block"], fieldset').forEach(b => {
                     if (!isVisible(b)) return;
                     const h = b.querySelector('h2, h3, h4');
                     if (h && isVisible(h)) {
                         const txt = cleanText(h.innerText || h.textContent);
-                        if (txt && txt.length >= 8 && txt.length <= 600 && !seenTitles.has(txt)) {
+                        if (txt && txt.length >= 6 && txt.length <= 600 && !seenTitles.has(txt)) {
                             seenTitles.add(txt);
                             questions.push(txt);
                         }
                     }
                 });
             }
+
+            // Extract question instructions, hints, and specify prompts
+            const instructionSelectors = [
+                '.instruction', '.hint', '.subtext', '.sub-text', '.qcomment',
+                '[class*="instruction"]', '[class*="hint"]', '[class*="subtext"]',
+                '.help-text', '[class*="help-text"]', '.specify', '[class*="specify"]',
+                'label[for*="specify"]', 'label[for*="other"]', '.fir-specify'
+            ];
+            for (const sel of instructionSelectors) {
+                document.querySelectorAll(sel).forEach(el => {
+                    if (!isVisible(el)) return;
+                    if (el.querySelector('input[type="radio"], input[type="checkbox"]')) return;
+                    const t = cleanText(el.innerText || el.textContent);
+                    if (t && t.length >= 4 && t.length <= 300 && !seenTitles.has(t)) {
+                        seenTitles.add(t);
+                        questions.push(t);
+                    }
+                });
+            }
+
+            // Scan for small/em/p instruction hints inside question blocks
+            document.querySelectorAll('.qblock, .question, [class*="qblock"]').forEach(block => {
+                if (!isVisible(block)) return;
+                block.querySelectorAll('em, small, .note, p').forEach(el => {
+                    if (!isVisible(el) || el.querySelector('input, select, textarea, label')) return;
+                    const t = cleanText(el.innerText || el.textContent);
+                    if (!seenTitles.has(t) && t.length >= 4 && t.length <= 250) {
+                        if (/select (all|up to|at least|top|exactly|one|two|three|[0-9]+)/i.test(t) ||
+                            /check (all|up to|at least|[0-9]+)/i.test(t) ||
+                            /choose (all|up to|at least|[0-9]+)/i.test(t) ||
+                            /please (select|check|choose|tick|specify|indicate)/i.test(t) ||
+                            /enter a (number|value|percentage)/i.test(t) ||
+                            /between [0-9]+ and [0-9]+/i.test(t) ||
+                            /specify (the exact|your)/i.test(t)) {
+                            seenTitles.add(t);
+                            questions.push(t);
+                        }
+                    }
+                });
+            });
 
             // ── Helper to find question label for a control ──
             const getQuestionForControl = (el) => {
@@ -589,3 +629,219 @@ class PageScraper:
             "questions": dom_data.get("questions", []),
             "fields": dom_data.get("fields", []),
         }
+
+    def capture_page_options(self) -> List[Dict[str, Any]]:
+        """
+        Captures all interactive controls, their full option lists, and current selection
+        states from the live page DOM after execution.
+        Matches the exact schema expected by frontend ProjectDetail.jsx and PDF report:
+        [
+            { "type": "radio", "options": ["USA", "Japan", ...], "selected": "USA", "specText": "..." },
+            { "type": "checkbox", "options": ["0% - No increase", ...], "selected": ["0% - No increase"] },
+            { "type": "select", "options": ["1%", "2%", ...], "selected": "24%" },
+            { "type": "open-end", "options": [], "selected": "10400" },
+            { "type": "numeric", "options": [], "selected": "50" }
+        ]
+        """
+        try:
+            return self.page.evaluate("""() => {
+                const result = [];
+                const cleanText = (t) => (t || '').replace(/\\s+/g, ' ').trim();
+
+                const isVisible = (el) => {
+                    if (!el) return false;
+                    if (el.offsetParent) return true;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                };
+
+                const getSpecText = (checkedInput) => {
+                    if (!checkedInput) return null;
+                    let node = checkedInput.parentElement;
+                    for (let i = 0; i < 8; i++) {
+                        if (!node || node === document.body) break;
+                        const specInput = node.querySelector('input[type="text"], input[type="search"], textarea');
+                        if (specInput && specInput !== checkedInput) {
+                            const val = (specInput.value || '').trim();
+                            if (val.length > 0) return val;
+                        }
+                        if (node.querySelectorAll('input[type="radio"], input[type="checkbox"]').length > 1) break;
+                        node = node.parentElement;
+                    }
+                    return null;
+                };
+
+                // 1. Radio groups
+                const radioGroups = {};
+                document.querySelectorAll('input[type="radio"]').forEach(radio => {
+                    const hiddenAncestor = radio.closest('[hidden], [style*="display: none"], [style*="display:none"]');
+                    if (hiddenAncestor) return;
+
+                    const name = radio.name || 'radio_group';
+                    if (!radioGroups[name]) {
+                        radioGroups[name] = { options: [], selected: null, specText: null };
+                    }
+
+                    let labelText = '';
+                    if (radio.id) {
+                        try {
+                            const lbl = document.querySelector(`label[for="${CSS.escape(radio.id)}"]`);
+                            if (lbl) labelText = cleanText(lbl.innerText || lbl.textContent);
+                        } catch(e) {}
+                    }
+                    if (!labelText) {
+                        const pl = radio.closest('label');
+                        if (pl) {
+                            const clone = pl.cloneNode(true);
+                            clone.querySelectorAll('input').forEach(n => n.remove());
+                            labelText = cleanText(clone.innerText || clone.textContent);
+                        }
+                    }
+                    if (!labelText && radio.parentElement) {
+                        labelText = cleanText(radio.parentElement.innerText || '');
+                    }
+                    if (!labelText) labelText = radio.value || 'Option';
+
+                    if (!radioGroups[name].options.includes(labelText)) {
+                        radioGroups[name].options.push(labelText);
+                    }
+
+                    if (radio.checked) {
+                        radioGroups[name].selected = labelText;
+                        const spec = getSpecText(radio);
+                        if (spec) radioGroups[name].specText = spec;
+                    }
+                });
+
+                Object.values(radioGroups).forEach(group => {
+                    if (group.options.length > 0) {
+                        result.push({
+                            type: 'radio',
+                            options: group.options,
+                            selected: group.selected,
+                            specText: group.specText || null
+                        });
+                    }
+                });
+
+                // 2. Checkbox groups
+                const cbGroups = {};
+                document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                    const hiddenAncestor = cb.closest('[hidden], [style*="display: none"], [style*="display:none"]');
+                    if (hiddenAncestor) return;
+
+                    const qBlock = cb.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], fieldset, table');
+                    let baseName = (cb.name || '').replace(/([._\\[])\\d+\\]?$/, '');
+                    let gKey = (qBlock && (qBlock.id || qBlock.getAttribute('name'))) || baseName || cb.name || 'checkbox_group';
+
+                    if (!cbGroups[gKey]) {
+                        cbGroups[gKey] = { options: [], selected: [] };
+                    }
+
+                    let labelText = '';
+                    if (cb.id) {
+                        try {
+                            const lbl = document.querySelector(`label[for="${CSS.escape(cb.id)}"]`);
+                            if (lbl) labelText = cleanText(lbl.innerText || lbl.textContent);
+                        } catch(e) {}
+                    }
+                    if (!labelText) {
+                        const pl = cb.closest('label');
+                        if (pl) {
+                            const clone = pl.cloneNode(true);
+                            clone.querySelectorAll('input').forEach(n => n.remove());
+                            labelText = cleanText(clone.innerText || clone.textContent);
+                        }
+                    }
+                    if (!labelText && cb.parentElement) {
+                        labelText = cleanText(cb.parentElement.innerText || '');
+                    }
+                    if (!labelText) labelText = cb.value || 'Option';
+
+                    if (!cbGroups[gKey].options.includes(labelText)) {
+                        cbGroups[gKey].options.push(labelText);
+                    }
+
+                    if (cb.checked) {
+                        cbGroups[gKey].selected.push(labelText);
+                        const spec = getSpecText(cb);
+                        if (spec) {
+                            if (!cbGroups[gKey].specText) cbGroups[gKey].specText = spec;
+                            else cbGroups[gKey].specText += `, ${spec}`;
+                        }
+                    }
+                });
+
+                Object.values(cbGroups).forEach(group => {
+                    if (group.options.length > 0) {
+                        result.push({
+                            type: 'checkbox',
+                            options: group.options,
+                            selected: group.selected,
+                            specText: group.specText || null
+                        });
+                    }
+                });
+
+                // 3. Dropdowns (select elements)
+                document.querySelectorAll('select').forEach(select => {
+                    if (!isVisible(select)) return;
+                    const options = Array.from(select.options)
+                        .filter(o => {
+                            const val = (o.value || '').trim();
+                            const text = cleanText(o.innerText || o.textContent);
+                            if (!val || val === '0') return false;
+                            if (/^(--|select|choose|please select|please choose|pick one|none selected)/i.test(text)) return false;
+                            return true;
+                        })
+                        .map(o => cleanText(o.innerText || o.value));
+
+                    const selectedEl = select.options[select.selectedIndex];
+                    const selected = selectedEl ? cleanText(selectedEl.innerText || selectedEl.value) : null;
+                    if (options.length > 0) {
+                        result.push({
+                            type: 'select',
+                            options: options,
+                            selected: selected
+                        });
+                    }
+                });
+
+                // 4. Standalone textareas and text inputs (open-end / numeric)
+                const textFields = Array.from(document.querySelectorAll('textarea, input[type="text"], input[type="number"], input[type="search"]'));
+                textFields.forEach(field => {
+                    const val = (field.value || '').trim();
+                    if (!val) return;
+
+                    const hiddenAncestor = field.closest('[hidden], [style*="display: none"], [style*="display:none"]');
+                    if (hiddenAncestor) return;
+
+                    // Skip if attached to a checked radio/checkbox as specify box
+                    let isAttachedSpecBox = false;
+                    let p = field.parentElement;
+                    for (let i = 0; i < 8; i++) {
+                        if (!p || p === document.body) break;
+                        const checkedInputs = p.querySelectorAll('input[type="radio"]:checked, input[type="checkbox"]:checked');
+                        if (checkedInputs.length === 1) {
+                            isAttachedSpecBox = true;
+                            break;
+                        }
+                        if (p.querySelectorAll('input[type="radio"], input[type="checkbox"]').length > 1) break;
+                        p = p.parentElement;
+                    }
+
+                    if (!isAttachedSpecBox) {
+                        const isNumeric = field.type === 'number' || /^[0-9.,$€£% ]+$/.test(val);
+                        result.push({
+                            type: isNumeric ? 'numeric' : 'open-end',
+                            options: [],
+                            selected: val
+                        });
+                    }
+                });
+
+                return result;
+            }""")
+        except Exception as e:
+            print(f"[PageScraper] capture_page_options exception: {e}")
+            return []
