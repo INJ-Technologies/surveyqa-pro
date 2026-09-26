@@ -59,8 +59,9 @@ def calculate_quality_score(
 
 
 class SurveySessionRunner:
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, survey_url: Optional[str] = None):
         self.session_id = session_id
+        self.survey_url = survey_url
         self.db = DBClient()
         self.max_pages = 150
 
@@ -117,10 +118,36 @@ class SurveySessionRunner:
                 }
                 print(f"[SessionRunner] Decodo proxy active: {proxy_cfg['endpoint']}:{proxy_cfg['port']} ({proxy_country})")
 
-        # 7. Survey URL
-        survey_url = project.get("survey_url")
+        # 7. Survey URL resolution
+        survey_url = self.survey_url or session.get("survey_url")
         if not survey_url:
-            raise ValueError(f"Project {project_id} has no survey_url configured.")
+            surveys = self.db.get_project_surveys(project_id)
+            if surveys:
+                matched_survey = None
+                if proxy_country:
+                    for s in surveys:
+                        c_data = s.get("countries") or []
+                        if isinstance(c_data, str):
+                            try:
+                                import json
+                                c_data = json.loads(c_data)
+                            except Exception:
+                                c_data = [c_data]
+                        if proxy_country.upper() in [str(c).upper() for c in c_data] or "ALL" in [str(c).upper() for c in c_data]:
+                            matched_survey = s
+                            break
+                if not matched_survey and surveys:
+                    matched_survey = surveys[0]
+                if matched_survey and matched_survey.get("url"):
+                    raw_url = matched_survey["url"]
+                    resp_id = session.get("response_id") or "test_response"
+                    survey_url = raw_url.replace("identifier", resp_id).replace("IDENTIFIER", resp_id)
+
+        if not survey_url:
+            survey_url = project.get("survey_url")
+
+        if not survey_url:
+            raise ValueError(f"Could not resolve survey URL for session {self.session_id} (Project {project_id}).")
 
         # Ensure directories
         sess_screenshots_dir = os.path.join(SCREENSHOTS_DIR, self.session_id)

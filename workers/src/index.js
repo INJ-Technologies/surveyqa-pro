@@ -4460,13 +4460,16 @@ const calculateQualityScore = (pages, sessionEvents, pageCount, outcome) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // PYTHON STORY ENGINE RUNNER
 // ══════════════════════════════════════════════════════════════════════════════
-const runPythonSession = (sessionId) => {
+const runPythonSession = (sessionId, surveyUrl = null) => {
   return new Promise((resolve, reject) => {
     const pythonBin =
       process.env.PYTHON_BIN ||
       (process.platform === "win32" ? "python" : "python3");
     const appDir = path.resolve(__dirname, "..");
     const args = ["-m", "python_engine.runner", "--session-id", sessionId];
+    if (surveyUrl) {
+      args.push("--survey-url", surveyUrl);
+    }
 
     console.log(
       `[Worker] Dispatching to Python Story Engine: ${pythonBin} ${args.join(" ")} (cwd: ${appDir})`,
@@ -4542,7 +4545,7 @@ const processSession = async (job) => {
   const usePythonEngine = process.env.USE_PYTHON_ENGINE !== "false";
   if (usePythonEngine) {
     try {
-      return await runPythonSession(sessionId);
+      return await runPythonSession(sessionId, surveyUrl);
     } catch (err) {
       console.warn(
         `[Worker] Python engine execution failed: ${err.message}. Retrying via BullMQ...`,

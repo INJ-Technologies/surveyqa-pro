@@ -45,6 +45,12 @@ class DBClient:
             row = cur.fetchone()
             return dict(row) if row else None
 
+    def get_project_surveys(self, project_id: str) -> List[Dict[str, Any]]:
+        conn = self.get_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM project_surveys WHERE project_id = %s ORDER BY created_at ASC", (project_id,))
+            return [dict(r) for r in cur.fetchall()]
+
     def get_persona(self, persona_id: str) -> Optional[Dict[str, Any]]:
         conn = self.get_connection()
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
