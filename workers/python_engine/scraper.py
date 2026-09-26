@@ -296,24 +296,87 @@ class PageScraper:
             const claimedOptOutCbs = new Set();
 
             // ── Helper to find specify/other input near a radio/checkbox ──
-            const findSpecifyInput = (inputEl) => {
+            const findSpecifyInput = (inputEl, optLabel) => {
+                const isSpecifyOpt = /other|specify|please\\s*state|explain|details|write[- ]in|qualify/i.test(optLabel || '');
+
+                // 1. Traverse parent hierarchy (choice wrapper, td, tr, etc.)
                 let node = inputEl.parentElement;
-                for (let i = 0; i < 6; i++) {
-                    if (!node) break;
+                for (let i = 0; i < 5; i++) {
+                    if (!node || node === document.body) break;
                     const textInp = node.querySelector('input[type="text"], input[type="search"], textarea');
                     if (textInp && textInp !== inputEl) {
-                        claimedSpecifyInputs.add(textInp);
-                        return {
-                            found: true,
-                            id: textInp.id || null,
-                            name: textInp.name || null,
-                            placeholder: textInp.placeholder || '',
-                            value: textInp.value || ''
-                        };
+                        const hasMultipleControls = node.querySelectorAll('input[type="radio"], input[type="checkbox"]').length > 1;
+                        if (!hasMultipleControls || isSpecifyOpt) {
+                            claimedSpecifyInputs.add(textInp);
+                            return {
+                                found: true,
+                                id: textInp.id || null,
+                                name: textInp.name || null,
+                                placeholder: textInp.placeholder || '',
+                                value: textInp.value || ''
+                            };
+                        }
                     }
-                    if (node.querySelectorAll('input[type="radio"], input[type="checkbox"]').length > 1) break;
+                    if (node.querySelectorAll('input[type="radio"], input[type="checkbox"]').length > 1 && !isSpecifyOpt) break;
                     node = node.parentElement;
                 }
+
+                // 2. Check table row or immediate sibling wrapper
+                const cell = inputEl.closest('td, th');
+                if (cell && cell.parentElement) {
+                    const row = cell.parentElement;
+                    const rowInp = row.querySelector('input[type="text"], input[type="search"], textarea');
+                    if (rowInp) {
+                        claimedSpecifyInputs.add(rowInp);
+                        return {
+                            found: true,
+                            id: rowInp.id || null,
+                            name: rowInp.name || null,
+                            placeholder: rowInp.placeholder || '',
+                            value: rowInp.value || ''
+                        };
+                    }
+                }
+
+                // Sibling wrapper (e.g. <div class="choice"> followed by <div class="open-ended"> or <div class="oe">)
+                const wrapper = inputEl.closest('.choice, .element, [class*="choice"], [class*="option"], label') || inputEl.parentElement;
+                if (wrapper) {
+                    let sib = wrapper.nextElementSibling;
+                    for (let j = 0; j < 3 && sib; j++) {
+                        const sibInp = (sib.matches && sib.matches('input[type="text"], input[type="search"], textarea')) ? sib : sib.querySelector('input[type="text"], input[type="search"], textarea');
+                        if (sibInp && (isSpecifyOpt || /(oe|specify|other)/i.test(sibInp.id || sibInp.name || ''))) {
+                            claimedSpecifyInputs.add(sibInp);
+                            return {
+                                found: true,
+                                id: sibInp.id || null,
+                                name: sibInp.name || null,
+                                placeholder: sibInp.placeholder || '',
+                                value: sibInp.value || ''
+                            };
+                        }
+                        sib = sib.nextElementSibling;
+                    }
+                }
+
+                // 3. If option label is explicitly "Other / Specify", search question block for any unclaimed text input (e.g. oe250927.0)
+                if (isSpecifyOpt) {
+                    const qBlock = inputEl.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], [class*="question"], fieldset, form') || document;
+                    const allText = Array.from(qBlock.querySelectorAll('input[type="text"], input[type="search"], textarea'))
+                        .filter(inp => isVisible(inp) && !claimedSpecifyInputs.has(inp));
+
+                    const match = allText.find(inp => /(oe|specify|other)/i.test((inp.id || '') + ' ' + (inp.name || ''))) || allText[0];
+                    if (match) {
+                        claimedSpecifyInputs.add(match);
+                        return {
+                            found: true,
+                            id: match.id || null,
+                            name: match.name || null,
+                            placeholder: match.placeholder || '',
+                            value: match.value || ''
+                        };
+                    }
+                }
+
                 return null;
             };
 
@@ -417,7 +480,7 @@ class PageScraper:
                     label = cleanText(r.parentElement.innerText || '');
                 }
 
-                const spec = findSpecifyInput(r);
+                const spec = findSpecifyInput(r, label);
                 radioGroups[r.name].push({
                     value: r.value || '',
                     id: r.id || '',
@@ -504,7 +567,7 @@ class PageScraper:
                     }
                 }
 
-                const spec = findSpecifyInput(cb);
+                const spec = findSpecifyInput(cb, label);
                 cbGroups[groupKey].options.push({
                     name: cb.name || '',
                     value: cb.value || '',
@@ -676,6 +739,15 @@ class PageScraper:
             document.querySelectorAll('textarea').forEach((ta, ti) => {
                 if (!isVisible(ta)) return;
                 if (claimedSpecifyInputs.has(ta)) return;
+
+                const qBlock = ta.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], [class*="question"], fieldset');
+                const hasRadiosOrCheckboxes = qBlock && qBlock.querySelectorAll('input[type="radio"], input[type="checkbox"]').length > 0;
+                const taNameId = ((ta.name || '') + ' ' + (ta.id || '')).toLowerCase();
+                if (/(^|[._\\-])oe(\\d+|[._\\-])/i.test(taNameId) || /specify|other/i.test(taNameId) || hasRadiosOrCheckboxes) {
+                    claimedSpecifyInputs.add(ta);
+                    return;
+                }
+
                 const qInfo = getQuestionForControl(ta);
                 fields.push({
                     fieldType: 'textarea',
@@ -697,12 +769,19 @@ class PageScraper:
                 // Exclude if already attached to radio/checkbox/ranking as specify input
                 if (claimedSpecifyInputs.has(inp)) return;
 
-                // Exclude if inside an "other" or "specify" row/container or if name/id indicates specify
-                const row = inp.closest('tr, [class*="row"], .other, [class*="other"], .specify, [class*="specify"]');
+                // Exclude if inside an "other" or "specify" row/container, or Decipher oe format, or if inside a radio/checkbox question
+                const row = inp.closest('tr, [class*="row"], .other, [class*="other"], .specify, [class*="specify"], .oe, [class*="oe-"]');
                 const rowText = row ? cleanText(row.innerText || '') : '';
-                if (/other\\s*\\(|please\\s*specify|^other$/i.test(rowText) ||
-                    /specify|other/i.test(inp.name || '') ||
-                    /specify|other/i.test(inp.id || '')) {
+                const inpNameId = ((inp.name || '') + ' ' + (inp.id || '')).toLowerCase();
+                const isOeOrSpecify = /(^|[._\\-])oe(\\d+|[._\\-])/i.test(inpNameId) ||
+                    /specify|other/i.test(inpNameId) ||
+                    /other\\s*\\(|please\\s*specify|^other$/i.test(rowText);
+
+                // Check if this input is inside a question container that has radio buttons or checkboxes
+                const qBlock = inp.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], [class*="question"], fieldset, form');
+                const hasRadiosOrCheckboxes = qBlock && qBlock.querySelectorAll('input[type="radio"], input[type="checkbox"]').length > 0;
+
+                if (isOeOrSpecify || hasRadiosOrCheckboxes) {
                     claimedSpecifyInputs.add(inp);
                     return;
                 }

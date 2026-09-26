@@ -271,8 +271,11 @@ class ActionExecutor:
         self._check_input_element(opt_id=opt_id, opt_name=opt_name, opt_val=opt_val, is_radio=True)
         time.sleep(0.15)
 
-        # Handle follow-up specify box if present
-        if target_opt.get("hasSpecify"):
+        # Handle follow-up specify box if present ONLY when an Other/Specify option is chosen
+        is_other_opt = bool(target_opt.get("hasSpecify")) or bool(re.search(r"other|specify|please\s*state|explain", opt_label, re.I))
+
+        spec_text = None
+        if is_other_opt:
             spec_text = ans.get("specifyText")
             if not spec_text:
                 role = (persona or {}).get("job_title") or (persona or {}).get("role") or "Strategy & Operations"
@@ -291,21 +294,50 @@ class ActionExecutor:
                     }""", spec_text)
             else:
                 self.page.evaluate("""(data) => {
-                    const r = document.querySelector(`input[type="radio"][name="${data.groupName}"]:checked`);
+                    const r = document.querySelector(`input[type="radio"][name="${data.groupName}"]:checked`) || (data.optId ? document.getElementById(data.optId) : null);
                     if (!r) return;
                     let node = r.parentElement;
                     for (let i = 0; i < 5; i++) {
                         if (!node) break;
-                        const inp = node.querySelector('input[type="text"], textarea');
-                        if (inp) {
+                        const inp = node.querySelector('input[type="text"], input[type="search"], textarea');
+                        if (inp && inp !== r) {
+                            inp.removeAttribute('disabled');
+                            inp.disabled = false;
                             inp.value = data.text;
                             inp.dispatchEvent(new Event('input', { bubbles: true }));
                             inp.dispatchEvent(new Event('change', { bubbles: true }));
-                            break;
+                            return;
                         }
                         node = node.parentElement;
                     }
-                }""", {"groupName": opt_name or group_name, "text": spec_text})
+                    const qBlock = r.closest('.question, .qblock, [class*="question"], fieldset, form');
+                    if (qBlock) {
+                        const inps = Array.from(qBlock.querySelectorAll('input[type="text"], textarea'));
+                        const oeInp = inps.find(inp => /(oe|specify|other)/i.test((inp.id || '') + ' ' + (inp.name || ''))) || inps[0];
+                        if (oeInp) {
+                            oeInp.removeAttribute('disabled');
+                            oeInp.disabled = false;
+                            oeInp.value = data.text;
+                            oeInp.dispatchEvent(new Event('input', { bubbles: true }));
+                            oeInp.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    }
+                }""", {"groupName": opt_name or group_name, "optId": opt_id, "text": spec_text})
+        else:
+            # CRITICAL: If target_opt is NOT "Other (specify)", we MUST CLEAR any specify/open-end text inputs in this question block!
+            # Decipher validates: "Since you specified extra information, please also select a corresponding answer. Please select one."
+            self.page.evaluate("""(data) => {
+                const r = document.querySelector(`input[type="radio"][name="${data.groupName}"]:checked`) || (data.optId ? document.getElementById(data.optId) : null);
+                if (!r) return;
+                const qBlock = r.closest('.question, .qblock, [class*="question"], fieldset, form') || r.parentElement;
+                if (qBlock) {
+                    qBlock.querySelectorAll('input[type="text"], input[type="search"], textarea').forEach(inp => {
+                        inp.value = '';
+                        inp.dispatchEvent(new Event('input', { bubbles: true }));
+                        inp.dispatchEvent(new Event('change', { bubbles: true }));
+                    });
+                }
+            }""", {"groupName": opt_name or group_name, "optId": opt_id})
 
         return {
             "type": "radio",
@@ -388,7 +420,8 @@ class ActionExecutor:
             selected_labels.append(opt_label)
 
             # Handle specify if present ONLY for this option
-            if opt.get("hasSpecify"):
+            is_other = bool(opt.get("hasSpecify")) or bool(re.search(r"other|specify|please\s*state|explain", opt_label, re.I))
+            if is_other:
                 spec_text = ans.get("specifyText")
                 if not spec_text:
                     role = (persona or {}).get("job_title") or (persona or {}).get("role") or "Strategy & Operations"
@@ -425,6 +458,35 @@ class ActionExecutor:
                     }""", {"optId": opt_id, "text": spec_text})
 
             time.sleep(0.1)
+
+        # Clear specify inputs for ALL unselected options in this checkbox question
+        for idx, opt in enumerate(options):
+            if idx not in sel_indices:
+                spec_id = opt.get("specifyId")
+                opt_id = opt.get("id")
+                self.page.evaluate("""(data) => {
+                    if (data.specId) {
+                        const el = document.getElementById(data.specId);
+                        if (el) {
+                            el.value = '';
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    }
+                    if (data.optId) {
+                        const cb = document.getElementById(data.optId);
+                        if (cb) {
+                            const choice = cb.closest('tr, .row, .element, [class*="choice"], [class*="option"], label');
+                            if (choice) {
+                                choice.querySelectorAll('input[type="text"], textarea').forEach(inp => {
+                                    inp.value = '';
+                                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                                });
+                            }
+                        }
+                    }
+                }""", {"specId": spec_id, "optId": opt_id})
 
         return {
             "type": "checkbox",
@@ -758,6 +820,55 @@ class ActionExecutor:
         try:
             target_loc = locate_by_id(self.page, f_id) if f_id else (self.page.locator(f'[name="{f_name}"]') if f_name else None)
             if target_loc and target_loc.count() > 0:
+                is_valid_to_fill = target_loc.first.evaluate("""(el) => {
+                    const qBlock = el.closest('.question, .qblock, [class*="question"], fieldset, form');
+                    if (!qBlock) return true;
+
+                    // If question has radios:
+                    const radios = Array.from(qBlock.querySelectorAll('input[type="radio"]'));
+                    if (radios.length > 0) {
+                        const checkedRadio = radios.find(r => r.checked);
+                        if (!checkedRadio) return false;
+                        const choice = el.closest('tr, .row, .element, [class*="choice"], [class*="option"], label');
+                        const isAssociated = choice && choice.contains(checkedRadio);
+                        const isOther = /other|specify|please\\s*state|explain|details|write[- ]in/i.test(
+                            (checkedRadio.labels && checkedRadio.labels[0] ? checkedRadio.labels[0].innerText : '') ||
+                            (checkedRadio.parentElement ? checkedRadio.parentElement.innerText : '')
+                        );
+                        if (!isAssociated && !isOther) {
+                            // Checked radio is NOT Other (e.g. UK) -> clear and do NOT fill!
+                            el.value = '';
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                            return false;
+                        }
+                    }
+
+                    // If question has checkboxes:
+                    const checkboxes = Array.from(qBlock.querySelectorAll('input[type="checkbox"]'));
+                    if (checkboxes.length > 0) {
+                        const checkedCbs = checkboxes.filter(c => c.checked);
+                        const choice = el.closest('tr, .row, .element, [class*="choice"], [class*="option"], label');
+                        const isAssociated = checkedCbs.some(cb => choice && choice.contains(cb));
+                        const hasOtherChecked = checkedCbs.some(cb => /other|specify|please\\s*state|explain|details|write[- ]in/i.test(
+                            (cb.labels && cb.labels[0] ? cb.labels[0].innerText : '') ||
+                            (cb.parentElement ? cb.parentElement.innerText : '')
+                        ));
+                        if (!isAssociated && !hasOtherChecked) {
+                            el.value = '';
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                            return false;
+                        }
+                    }
+
+                    return true;
+                }""")
+
+                if not is_valid_to_fill:
+                    print(f"[Executor] Suppressed text input fill for '{f_name or f_id}' because associated Other option is not selected.")
+                    return None
+
                 target_loc.first.evaluate("""(el, val) => {
                     el.removeAttribute('disabled');
                     el.disabled = false;
@@ -765,8 +876,8 @@ class ActionExecutor:
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
                 }""", text_resp)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Executor] Text input execution error: {e}")
 
         return {
             "type": "open-end",

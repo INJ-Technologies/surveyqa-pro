@@ -400,7 +400,8 @@ class StoryEngine:
             "4. SCENARIO DIRECTIVES: Mandatory QA test conditions. You MUST follow them.\n"
             "5. CONDITIONAL SPECIFY / WRITE-IN:\n"
             "   - Only provide specifyText IF you actually selected 'Other (please specify)' or an option with hasSpecify=true.\n"
-            "   - If you did NOT select an option requiring specification, set specifyText to null.\n"
+            "   - If you did NOT select an option requiring specification (e.g. you selected 'UK' or standard option), specifyText MUST be null.\n"
+            "   - Open-ended text fields should NEVER be answered if they are part of a choice question where 'Other' is not selected.\n"
             "6. NO ILLOGICAL TEXT: Write realistic answers matching persona. Never enter random digits like '0'.\n"
             "7. TOKEN CONSERVATION & CRISPNESS (CRITICAL):\n"
             "   - story_update: Maximum 1 short sentence (<12 words) describing ONLY concrete new facts established (or \"\" if none).\n"
@@ -556,7 +557,7 @@ class StoryEngine:
             f'      "gridSelections": [{{"rowIndex": 0, "colIndex": 2}}],\n'
             f'      "textResponse": "...",\n'
             f'      "numericValue": 75,\n'
-            f'      "specifyText": "..."\n'
+            f'      "specifyText": null (ONLY provide a string if "Other (please specify)" was selected, otherwise MUST be null)\n'
             f'    }}\n'
             f'  ],\n'
             f'  "new_facts": {{"key": "value"}},\n'
