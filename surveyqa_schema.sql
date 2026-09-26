@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict C94xzmvDgT5xkfB3SHhCadEuIRgM78z6WekpDOtIbRiYANQxxOMiT0XsmrddlhP
+\restrict 3bDiyN8NuOohkZqZfQs8NlxvsCv24ler7XmSKLJj1haMV9zRvvFSNaIwBf1uMbT
 
 -- Dumped from database version 18.3
 -- Dumped by pg_dump version 18.3
@@ -71,6 +71,7 @@ CREATE TABLE public.ai_models (
     is_active boolean DEFAULT true,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
+    reasoning_price_per_1m numeric(12,6) DEFAULT 0,
     CONSTRAINT ai_models_reasoning_level_check CHECK (((reasoning_level)::text = ANY ((ARRAY['off'::character varying, 'low'::character varying, 'medium'::character varying, 'high'::character varying])::text[])))
 );
 
@@ -143,6 +144,7 @@ CREATE TABLE public.personas (
     created_by uuid,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
+    ai_generated boolean DEFAULT false,
     CONSTRAINT personas_device_type_check CHECK (((device_type)::text = ANY ((ARRAY['desktop'::character varying, 'mobile'::character varying, 'tablet'::character varying])::text[])))
 );
 
@@ -219,9 +221,11 @@ CREATE TABLE public.projects (
     settings jsonb DEFAULT '{}'::jsonb,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
+    persona_rotation character varying(20) DEFAULT 'random'::character varying,
     CONSTRAINT projects_ai_mode_image_check CHECK (((ai_mode_image)::text = ANY ((ARRAY['ai'::character varying, 'human'::character varying, 'predefined'::character varying])::text[]))),
     CONSTRAINT projects_ai_mode_openend_check CHECK (((ai_mode_openend)::text = ANY ((ARRAY['ai'::character varying, 'human'::character varying, 'predefined'::character varying])::text[]))),
     CONSTRAINT projects_ai_strategy_check CHECK (((ai_strategy)::text = ANY ((ARRAY['persona_true'::character varying, 'quota_guided'::character varying, 'stress_test'::character varying])::text[]))),
+    CONSTRAINT projects_persona_rotation_check CHECK (((persona_rotation)::text = ANY ((ARRAY['random'::character varying, 'round_robin'::character varying, 'weighted'::character varying])::text[]))),
     CONSTRAINT projects_status_check CHECK (((status)::text = ANY ((ARRAY['draft'::character varying, 'review'::character varying, 'active'::character varying, 'paused'::character varying, 'completed'::character varying, 'archived'::character varying])::text[]))),
     CONSTRAINT projects_survey_platform_check CHECK (((survey_platform)::text = ANY ((ARRAY['decipher'::character varying, 'qualtrics'::character varying, 'confirmit'::character varying, 'alchemer'::character varying, 'surveymonkey'::character varying, 'custom'::character varying, 'unknown'::character varying])::text[])))
 );
@@ -315,6 +319,20 @@ CREATE TABLE public.quota_plans (
 
 
 --
+-- Name: response_fingerprints; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.response_fingerprints (
+    id uuid DEFAULT public.uuid_generate_v4() NOT NULL,
+    project_id uuid NOT NULL,
+    session_id uuid,
+    fingerprint text NOT NULL,
+    page_count integer,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+
+--
 -- Name: response_libraries; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -390,6 +408,22 @@ CREATE TABLE public.scenarios (
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
     country_mapping jsonb
+);
+
+
+--
+-- Name: session_anomalies; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.session_anomalies (
+    id uuid DEFAULT public.uuid_generate_v4() NOT NULL,
+    project_id uuid NOT NULL,
+    session_id uuid,
+    anomaly_type character varying(50) NOT NULL,
+    details jsonb DEFAULT '{}'::jsonb,
+    severity character varying(20) DEFAULT 'warning'::character varying,
+    created_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT session_anomalies_severity_check CHECK (((severity)::text = ANY ((ARRAY['info'::character varying, 'warning'::character varying, 'critical'::character varying])::text[])))
 );
 
 
@@ -474,7 +508,30 @@ CREATE TABLE public.sessions (
     output_tokens_total integer DEFAULT 0,
     ai_calls_count integer DEFAULT 0,
     ai_cost_usd numeric(10,6) DEFAULT 0,
+    persona_name character varying(255),
+    straight_line_score numeric(5,2),
+    openend_quality_score numeric(5,2),
+    validation_errors integer DEFAULT 0,
+    platform_detected character varying(50),
+    survey_map_id uuid,
     CONSTRAINT sessions_status_check CHECK (((status)::text = ANY ((ARRAY['queued'::character varying, 'initialising'::character varying, 'in_progress'::character varying, 'completed'::character varying, 'terminated'::character varying, 'over_quota'::character varying, 'error'::character varying, 'flagged'::character varying])::text[])))
+);
+
+
+--
+-- Name: survey_maps; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.survey_maps (
+    id uuid DEFAULT public.uuid_generate_v4() NOT NULL,
+    project_id uuid NOT NULL,
+    survey_url text NOT NULL,
+    platform character varying(50) DEFAULT 'decipher'::character varying,
+    page_count integer,
+    screener_pages jsonb DEFAULT '[]'::jsonb,
+    question_map jsonb DEFAULT '[]'::jsonb,
+    routing_hints jsonb DEFAULT '{}'::jsonb,
+    mapped_at timestamp with time zone DEFAULT now()
 );
 
 
@@ -652,6 +709,22 @@ ALTER TABLE ONLY public.quota_plans
 
 
 --
+-- Name: response_fingerprints response_fingerprints_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.response_fingerprints
+    ADD CONSTRAINT response_fingerprints_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: response_fingerprints response_fingerprints_project_id_fingerprint_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.response_fingerprints
+    ADD CONSTRAINT response_fingerprints_project_id_fingerprint_key UNIQUE (project_id, fingerprint);
+
+
+--
 -- Name: response_libraries response_libraries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -684,6 +757,14 @@ ALTER TABLE ONLY public.scenarios
 
 
 --
+-- Name: session_anomalies session_anomalies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.session_anomalies
+    ADD CONSTRAINT session_anomalies_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: session_answers session_answers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -705,6 +786,22 @@ ALTER TABLE ONLY public.session_events
 
 ALTER TABLE ONLY public.sessions
     ADD CONSTRAINT sessions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: survey_maps survey_maps_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.survey_maps
+    ADD CONSTRAINT survey_maps_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: survey_maps survey_maps_project_id_survey_url_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.survey_maps
+    ADD CONSTRAINT survey_maps_project_id_survey_url_key UNIQUE (project_id, survey_url);
 
 
 --
@@ -786,6 +883,20 @@ CREATE INDEX idx_lib_entries_used ON public.response_library_entries USING btree
 --
 
 CREATE INDEX idx_personas_workspace ON public.personas USING btree (workspace_id);
+
+
+--
+-- Name: idx_project_personas_persona; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_project_personas_persona ON public.project_personas USING btree (persona_id);
+
+
+--
+-- Name: idx_project_personas_project; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_project_personas_project ON public.project_personas USING btree (project_id);
 
 
 --
@@ -1018,6 +1129,22 @@ ALTER TABLE ONLY public.quota_plans
 
 
 --
+-- Name: response_fingerprints response_fingerprints_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.response_fingerprints
+    ADD CONSTRAINT response_fingerprints_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE CASCADE;
+
+
+--
+-- Name: response_fingerprints response_fingerprints_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.response_fingerprints
+    ADD CONSTRAINT response_fingerprints_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.sessions(id) ON DELETE SET NULL;
+
+
+--
 -- Name: response_libraries response_libraries_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1079,6 +1206,22 @@ ALTER TABLE ONLY public.scenarios
 
 ALTER TABLE ONLY public.scenarios
     ADD CONSTRAINT scenarios_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES public.workspaces(id) ON DELETE CASCADE;
+
+
+--
+-- Name: session_anomalies session_anomalies_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.session_anomalies
+    ADD CONSTRAINT session_anomalies_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE CASCADE;
+
+
+--
+-- Name: session_anomalies session_anomalies_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.session_anomalies
+    ADD CONSTRAINT session_anomalies_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.sessions(id) ON DELETE SET NULL;
 
 
 --
@@ -1146,11 +1289,27 @@ ALTER TABLE ONLY public.sessions
 
 
 --
+-- Name: sessions sessions_survey_map_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sessions
+    ADD CONSTRAINT sessions_survey_map_id_fkey FOREIGN KEY (survey_map_id) REFERENCES public.survey_maps(id) ON DELETE SET NULL;
+
+
+--
 -- Name: sessions sessions_workspace_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.sessions
     ADD CONSTRAINT sessions_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES public.workspaces(id) ON DELETE SET NULL;
+
+
+--
+-- Name: survey_maps survey_maps_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.survey_maps
+    ADD CONSTRAINT survey_maps_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE CASCADE;
 
 
 --
@@ -1165,5 +1324,5 @@ ALTER TABLE ONLY public.users
 -- PostgreSQL database dump complete
 --
 
-\unrestrict C94xzmvDgT5xkfB3SHhCadEuIRgM78z6WekpDOtIbRiYANQxxOMiT0XsmrddlhP
+\unrestrict 3bDiyN8NuOohkZqZfQs8NlxvsCv24ler7XmSKLJj1haMV9zRvvFSNaIwBf1uMbT
 
