@@ -271,8 +271,8 @@ class ActionExecutor:
         time.sleep(0.15)
 
         # Handle follow-up specify box if present
-        spec_text = ans.get("specifyText")
-        if target_opt.get("hasSpecify") or spec_text:
+        if target_opt.get("hasSpecify"):
+            spec_text = ans.get("specifyText")
             if not spec_text:
                 role = (persona or {}).get("job_title") or (persona or {}).get("role") or "Strategy & Operations"
                 spec_text = role
@@ -280,8 +280,14 @@ class ActionExecutor:
             spec_id = target_opt.get("specifyId")
             if spec_id:
                 loc = locate_by_id(self.page, spec_id)
-                if loc.count() > 0 and loc.is_visible():
-                    loc.fill(spec_text)
+                if loc.count() > 0:
+                    loc.first.evaluate("""(el, val) => {
+                        el.removeAttribute('disabled');
+                        el.disabled = false;
+                        el.value = val;
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }""", spec_text)
             else:
                 self.page.evaluate("""(data) => {
                     const r = document.querySelector(`input[type="radio"][name="${data.groupName}"]:checked`);
@@ -380,17 +386,42 @@ class ActionExecutor:
             self._check_input_element(opt_id=opt_id, opt_name=opt_name, opt_val=opt_val, is_radio=False)
             selected_labels.append(opt_label)
 
-            # Handle specify if present
-            spec_text = ans.get("specifyText")
-            if opt.get("hasSpecify") or spec_text:
+            # Handle specify if present ONLY for this option
+            if opt.get("hasSpecify"):
+                spec_text = ans.get("specifyText")
                 if not spec_text:
                     role = (persona or {}).get("job_title") or (persona or {}).get("role") or "Strategy & Operations"
                     spec_text = role
                 spec_id = opt.get("specifyId")
                 if spec_id:
                     loc = locate_by_id(self.page, spec_id)
-                    if loc.count() > 0 and loc.is_visible():
-                        loc.fill(spec_text)
+                    if loc.count() > 0:
+                        loc.first.evaluate("""(el, val) => {
+                            el.removeAttribute('disabled');
+                            el.disabled = false;
+                            el.value = val;
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                        }""", spec_text)
+                else:
+                    self.page.evaluate("""(data) => {
+                        const cb = document.getElementById(data.optId);
+                        if (!cb) return;
+                        let node = cb.parentElement;
+                        for (let i = 0; i < 5; i++) {
+                            if (!node) break;
+                            const inp = node.querySelector('input[type="text"], textarea');
+                            if (inp) {
+                                inp.removeAttribute('disabled');
+                                inp.disabled = false;
+                                inp.value = data.text;
+                                inp.dispatchEvent(new Event('input', { bubbles: true }));
+                                inp.dispatchEvent(new Event('change', { bubbles: true }));
+                                break;
+                            }
+                            node = node.parentElement;
+                        }
+                    }""", {"optId": opt_id, "text": spec_text})
 
             time.sleep(0.1)
 
@@ -500,54 +531,39 @@ class ActionExecutor:
             if loc and loc.count() > 0:
                 try:
                     if chosen_rank:
-                        selected_ok = False
-                        # 1. Try label
-                        try:
-                            loc.select_option(label=chosen_rank, timeout=1200)
-                            selected_ok = True
-                        except Exception:
-                            pass
+                        loc.first.evaluate("""(el, targetRank) => {
+                            el.removeAttribute('disabled');
+                            el.disabled = false;
+                            const parentRow = el.closest('tr, .row, .grid-row, .fir-select');
+                            if (parentRow) {
+                                parentRow.classList.remove('disabled', 'fir-disabled');
+                            }
+                            const clean = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                            const targetClean = clean(targetRank);
+                            const targetNum = (targetRank.match(/\\d+/) || [''])[0];
 
-                        # 2. Try value
-                        if not selected_ok:
-                            try:
-                                m_num = re.search(r"\d+", str(chosen_rank))
-                                val_to_try = m_num.group(0) if m_num else str(chosen_rank)
-                                loc.select_option(value=val_to_try, timeout=1200)
-                                selected_ok = True
-                            except Exception:
-                                pass
+                            for (let opt of el.options) {
+                                const optClean = clean(opt.text);
+                                const optValClean = clean(opt.value);
+                                const optNum = (opt.text.match(/\\d+/) || opt.value.match(/\\d+/) || [''])[0];
 
-                        # 3. Direct DOM selection with change/input event dispatch
-                        if not selected_ok:
-                            try:
-                                loc.evaluate("""(el, targetRank) => {
-                                    const clean = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-                                    const targetClean = clean(targetRank);
-                                    const targetNum = (targetRank.match(/\\d+/) || [''])[0];
-
-                                    for (let opt of el.options) {
-                                        const optClean = clean(opt.text);
-                                        const optValClean = clean(opt.value);
-                                        const optNum = (opt.text.match(/\\d+/) || opt.value.match(/\\d+/) || [''])[0];
-
-                                        if (optClean === targetClean ||
-                                            optValClean === targetClean ||
-                                            (targetNum && optNum === targetNum) ||
-                                            opt.text.includes(targetRank) ||
-                                            opt.value === targetRank) {
-                                            el.value = opt.value;
-                                            el.dispatchEvent(new Event('input', { bubbles: true }));
-                                            el.dispatchEvent(new Event('change', { bubbles: true }));
-                                            return true;
-                                        }
-                                    }
-                                    return false;
-                                }""", chosen_rank)
-                            except Exception:
-                                pass
+                                if (optClean === targetClean ||
+                                    optValClean === targetClean ||
+                                    (targetNum && optNum === targetNum) ||
+                                    opt.text.includes(targetRank) ||
+                                    opt.value === targetRank) {
+                                    el.value = opt.value;
+                                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                                    return true;
+                                }
+                            }
+                            return false;
+                        }""", chosen_rank)
                     else:
-                        loc.evaluate("""el => {
+                        loc.first.evaluate("""el => {
+                            el.removeAttribute('disabled');
+                            el.disabled = false;
                             const emptyOpt = Array.from(el.options).find(o => !o.value || /select|--|choose|^none$|^$/i.test(o.text));
                             if (emptyOpt) {
                                 el.value = emptyOpt.value;
@@ -571,9 +587,19 @@ class ActionExecutor:
                         if not spec_text:
                             role = (persona or {}).get("job_title") or (persona or {}).get("role") or "Strategy & Operations"
                             spec_text = role
-                        spec_loc.first.fill(spec_text)
+                        spec_loc.first.evaluate("""(el, val) => {
+                            el.removeAttribute('disabled');
+                            el.disabled = false;
+                            el.value = val;
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                        }""", spec_text)
                     else:
-                        spec_loc.first.fill("")
+                        spec_loc.first.evaluate("""el => {
+                            el.value = '';
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                        }""")
 
             if chosen_rank:
                 final_assignments.append({
@@ -680,14 +706,28 @@ class ActionExecutor:
         sel_name = field.get("name")
 
         try:
-            if sel_id:
-                loc = locate_by_id(self.page, sel_id)
-                if loc.count() > 0:
-                    loc.select_option(label=label)
-            elif sel_name:
-                loc = self.page.locator(f'select[name="{sel_name}"]')
-                if loc.count() > 0:
-                    loc.select_option(label=label)
+            target_loc = locate_by_id(self.page, sel_id) if sel_id else (self.page.locator(f'select[name="{sel_name}"]') if sel_name else None)
+            if target_loc and target_loc.count() > 0:
+                target_loc.first.evaluate("""(el, targetLabel) => {
+                    el.removeAttribute('disabled');
+                    el.disabled = false;
+                    const clean = (s) => (s || '').toLowerCase().trim();
+                    const targetClean = clean(targetLabel);
+                    for (let opt of el.options) {
+                        if (clean(opt.text) === targetClean || clean(opt.value) === targetClean || opt.text.includes(targetLabel)) {
+                            el.value = opt.value;
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                            return true;
+                        }
+                    }
+                    if (el.options.length > 1) {
+                        el.selectedIndex = 1;
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                    return false;
+                }""", label)
         except Exception:
             pass
 
@@ -715,14 +755,15 @@ class ActionExecutor:
         f_name = field.get("name")
 
         try:
-            if f_id:
-                loc = locate_by_id(self.page, f_id)
-                if loc.count() > 0:
-                    loc.fill(text_resp)
-            elif f_name:
-                loc = self.page.locator(f'[name="{f_name}"]')
-                if loc.count() > 0:
-                    loc.fill(text_resp)
+            target_loc = locate_by_id(self.page, f_id) if f_id else (self.page.locator(f'[name="{f_name}"]') if f_name else None)
+            if target_loc and target_loc.count() > 0:
+                target_loc.first.evaluate("""(el, val) => {
+                    el.removeAttribute('disabled');
+                    el.disabled = false;
+                    el.value = val;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }""", text_resp)
         except Exception:
             pass
 
@@ -744,14 +785,15 @@ class ActionExecutor:
         f_name = field.get("name")
 
         try:
-            if f_id:
-                loc = locate_by_id(self.page, f_id)
-                if loc.count() > 0:
-                    loc.fill(str(num_val))
-            elif f_name:
-                loc = self.page.locator(f'[name="{f_name}"]')
-                if loc.count() > 0:
-                    loc.fill(str(num_val))
+            target_loc = locate_by_id(self.page, f_id) if f_id else (self.page.locator(f'[name="{f_name}"]') if f_name else None)
+            if target_loc and target_loc.count() > 0:
+                target_loc.first.evaluate("""(el, val) => {
+                    el.removeAttribute('disabled');
+                    el.disabled = false;
+                    el.value = val;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }""", str(num_val))
         except Exception:
             pass
 

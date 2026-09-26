@@ -519,6 +519,13 @@ class PageScraper:
 
             cbOrder.forEach((groupKey, gi) => {
                 const groupObj = cbGroups[groupKey];
+                const fullQText = (groupObj.questionLabel || '') + ' ' + (groupObj.questionHint || '');
+                let minReq = 1;
+                const mMin = fullQText.match(/(?:at\\s+least|rate\\s+at\\s+least|select\\s+at\\s+least|choose\\s+at\\s+least)\\s+(one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)/i);
+                if (mMin) {
+                    const wMap = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+                    minReq = wMap[mMin[1].toLowerCase()] || parseInt(mMin[1], 10) || 1;
+                }
                 fields.push({
                     fieldType: 'checkbox',
                     fieldIndex: fields.length,
@@ -527,6 +534,7 @@ class PageScraper:
                     questionLabel: groupObj.questionLabel || questions[0] || '',
                     questionTitle: groupObj.questionTitle || questions[0] || '',
                     questionHint: groupObj.questionHint || '',
+                    minSelections: minReq,
                     options: groupObj.options
                 });
             });
@@ -545,7 +553,7 @@ class PageScraper:
 
                 const container = sel.closest('table, .qblock, .question, [class*="qblock"], fieldset') || sel.parentElement;
                 const containerText = cleanText(container?.innerText || '');
-                const hasRankingContext = /rank|order of importance|order of preference|priority|rank the top|select each answer only once/i.test(containerText) ||
+                const hasRankingContext = /rank|order of importance|order of preference|priority|rank the top|select each answer only once|rate at least/i.test(containerText) ||
                                           /rank|order|priorit/i.test(sel.name || '') ||
                                           /rank|order|priorit/i.test(sel.id || '');
 
@@ -565,7 +573,9 @@ class PageScraper:
                 const containerText = cleanText(container?.innerText || '') + ' ' + (questions.join(' '));
 
                 let detectedRankLimit = null;
-                const matchLimit = containerText.match(/(?:rank|select)\\s+(?:the\\s+)?(?:top\\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)/i);
+                const matchLimit = containerText.match(/(?:rank|rate|select|choose)\\s+(?:the\\s+)?(?:top\\s+|at\\s+least\\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)/i) ||
+                                   containerText.match(/at\\s+least\\s+(one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)/i) ||
+                                   containerText.match(/top\\s+(one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)/i);
                 if (matchLimit) {
                     const wordMap = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
                     const parsed = wordMap[matchLimit[1].toLowerCase()] || parseInt(matchLimit[1], 10);

@@ -181,7 +181,10 @@ class StoryEngine:
                 })
             elif f_type == "checkbox":
                 substantive = [i for i, o in enumerate(raw_opts) if not is_optout_option(o.get("label", ""))]
-                chosen = substantive[:2] if len(substantive) >= 2 else (substantive[:1] if substantive else [0])
+                min_req = f.get("minSelections") or 1
+                chosen = substantive[:max(min_req, 2)] if len(substantive) >= min_req else substantive
+                if not chosen and raw_opts:
+                    chosen = [0]
                 answers.append({
                     "fieldIndex": f_idx,
                     "fieldType": "checkbox",
@@ -408,6 +411,10 @@ class StoryEngine:
                         for orig_idx, opt in enumerate(raw_opts)
                     ]
                 field_desc["options"] = opts_for_ai
+                if f_type == "checkbox":
+                    min_req = f.get("minSelections") or 1
+                    field_desc["minSelections"] = min_req
+                    field_desc["instruction"] = f"Select at least {min_req} options that fit your persona. Never select opt-out options (like 'Don't know', 'None')."
             elif f_type == "ranking":
                 rank_limit = f.get("rankLimit") or 3
                 substantive_items = [
