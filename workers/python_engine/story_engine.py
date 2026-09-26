@@ -11,7 +11,12 @@ from typing import List, Dict, Any, Optional
 import httpx
 
 from .config import get_secret, OPENROUTER_API_KEY
-from .optout_filter import filter_substantive_for_ai, is_optout_option
+from .optout_filter import (
+    filter_substantive_for_ai,
+    is_optout_option,
+    extract_numeric_range,
+    generate_humanized_number_in_range,
+)
 
 
 class StoryState:
@@ -194,10 +199,21 @@ class StoryEngine:
             if f_type == "radio":
                 substantive = [i for i, o in enumerate(raw_opts) if not is_optout_option(o.get("label", ""))]
                 chosen = substantive[0] if substantive else 0
+                chosen_opt = raw_opts[chosen] if chosen < len(raw_opts) else {}
+                spec_text = None
+                if chosen_opt.get("hasSpecify"):
+                    combo_text = f"{chosen_opt.get('label', '')} {chosen_opt.get('specifyPrompt', '')} {f.get('questionLabel', '')}"
+                    range_tuple = extract_numeric_range(chosen_opt.get("label", "")) or extract_numeric_range(chosen_opt.get("specifyPrompt", "")) or extract_numeric_range(f.get("questionLabel", ""))
+                    if range_tuple or re.search(r"exact number|how many|amount|count|between|employees|headcount|enter a number", combo_text, re.I):
+                        num_val = generate_humanized_number_in_range(range_tuple[0], range_tuple[1]) if range_tuple else 25000
+                        spec_text = str(num_val)
+                    else:
+                        spec_text = self.story_state.established_facts.get("job_title") or "Operations"
                 answers.append({
                     "fieldIndex": f_idx,
                     "fieldType": "radio",
-                    "selectedIndex": chosen
+                    "selectedIndex": chosen,
+                    "specifyText": spec_text
                 })
             elif f_type == "checkbox":
                 substantive = [i for i, o in enumerate(raw_opts) if not is_optout_option(o.get("label", ""))]
@@ -210,6 +226,34 @@ class StoryEngine:
                     "fieldIndex": f_idx,
                     "fieldType": "checkbox",
                     "selectedIndices": chosen
+                })
+            elif f_type == "composite_matrix":
+                rows = f.get("rows", [])
+                substantive_rows = [r for r in rows if not r.get("isOptOut")]
+                num_to_pick = max(2, min(len(substantive_rows), int(len(substantive_rows) * 0.6) or 3))
+                chosen_rows = substantive_rows[:num_to_pick]
+                selected_indices = [r.get("rowIndex") for r in chosen_rows]
+                row_ratings = []
+                for idx, r in enumerate(chosen_rows):
+                    opts = r.get("options", [])
+                    if opts:
+                        is_rank = any("rank" in str(o.get("text", "")).lower() for o in opts)
+                        if is_rank:
+                            val = opts[min(idx, len(opts) - 1)].get("value")
+                        else:
+                            rating_idx = min(len(opts) - 1, max(0, int(len(opts) * 0.7) - (idx % 2)))
+                            val = opts[rating_idx].get("value")
+                    else:
+                        val = "5" if idx % 2 == 0 else "6"
+                    row_ratings.append({
+                        "rowIndex": r.get("rowIndex"),
+                        "value": str(val)
+                    })
+                answers.append({
+                    "fieldIndex": f_idx,
+                    "fieldType": "composite_matrix",
+                    "selectedRowIndices": selected_indices,
+                    "rowRatings": row_ratings
                 })
             elif f_type == "ranking":
                 items = f.get("items", [])
@@ -238,12 +282,13 @@ class StoryEngine:
                 substantive_cols = [ci for ci, h in enumerate(col_headers) if not is_optout_option(h)]
                 if not substantive_cols:
                     substantive_cols = list(range(len(col_headers))) if col_headers else [0]
+                pos_cols = substantive_cols[len(substantive_cols)//2:] if len(substantive_cols) >= 3 else substantive_cols
                 grid_sels = []
                 for ri, row in enumerate(rows):
                     is_other = row.get("isOther") or bool(re.search(r"other|specify", row.get("rowLabel", ""), re.I))
                     if is_other:
                         continue  # Leave Other rows unrated so validation isn't triggered
-                    c_idx = substantive_cols[ri % len(substantive_cols)]
+                    c_idx = pos_cols[ri % len(pos_cols)]
                     grid_sels.append({"rowIndex": ri, "colIndex": c_idx})
                 answers.append({
                     "fieldIndex": f_idx,
@@ -411,21 +456,30 @@ class StoryEngine:
             "   - Leave ALL other remaining items unranked (do not include them in the rankings list).\n"
             "   - NEVER rank 'Don't know', 'None of the above', or any opt-out anchor.\n"
             "3. NO STRAIGHT-LINING ON GRIDS & 'OTHER' ROWS:\n"
-            "   - In rating grids/matrixes, express realistic nuanced opinions across substantive rows (avoid straight-lining).\n"
+            "   - In rating grids/matrixes, express realistic nuanced opinions across substantive rows (strictly avoid flat straight-lining!).\n"
+            "   - Pay close attention to scale direction: colIndex 0 is often the negative extreme (e.g. 'Strongly disagree', 'Decreased significantly'). If your story is positive, select positive columns!\n"
+            "   - Distribute ratings naturally across substantive columns (e.g. mix 60% positive, 30% moderately positive, 10% neutral). Never flatline!\n"
             "   - NEVER pick 'Don't know', 'Not applicable', or opt-out columns for substantive rows.\n"
             "   - For 'Other (please specify)' rows in grids: Leave unrated (omit from gridSelections) if standard options suffice.\n"
             "     If rating an Other row, you MUST supply a contextually authentic specifyText inline with the survey topic and your prior answers.\n"
             "4. SCENARIO DIRECTIVES: Mandatory QA test conditions. You MUST follow them.\n"
             "5. CONDITIONAL SPECIFY / WRITE-IN:\n"
             "   - Only provide specifyText IF you actually selected 'Other (please specify)' or an option with hasSpecify=true.\n"
+            "   - If the option or prompt asks for an exact number or amount (e.g. 'Please specify the exact number of employees', or range '10,000 - 49,999'):\n"
+            "     You MUST provide a clean, rounded, humanized integer within that range in 'specifyText' (e.g. '25000' or '30000', NOT random numbers like '10111' or '0').\n"
             "   - If you did NOT select an option requiring specification (e.g. you selected 'UK' or standard option), specifyText MUST be null.\n"
             "   - Open-ended text fields should NEVER be answered if they are part of a choice question where 'Other' is not selected.\n"
-            "6. NO ILLOGICAL TEXT: Write realistic answers matching persona. Never enter random digits like '0'.\n"
-            "7. TOKEN CONSERVATION & CRISPNESS (CRITICAL):\n"
+            "6. COMPOSITE MATRIX TABLES (CHECKBOX + RATING/RANKING):\n"
+            "   - In tables where each row has a checkbox (e.g. 'Have you implemented this approach?') and a rating/ranking dropdown:\n"
+            "   - First, select (check) 4 to 7 substantive rows that your organization implements/uses (never select 'None' or 'Don't know').\n"
+            "   - For EACH selected row, assign a realistic rating or rank in rowRatings.\n"
+            "   - Rows that are NOT selected MUST NOT be rated (omit from rowRatings).\n"
+            "7. NO ILLOGICAL TEXT: Write realistic answers matching persona. Never enter random digits like '0'.\n"
+            "8. TOKEN CONSERVATION & CRISPNESS (CRITICAL):\n"
             "   - story_update: Maximum 1 short sentence (<12 words) describing ONLY concrete new facts established (or \"\" if none).\n"
             "   - qa_rationale: Maximum 1 crisp sentence (<12 words) stating the decision rationale (e.g. 'Selected senior IT role; avoided opt-out.').\n"
             "   - NEVER use filler like 'As a professional respondent...' or restate questions.\n"
-            "8. OUTPUT FORMAT: Respond ONLY with valid, raw JSON matching the requested schema. No markdown formatting, no conversational text."
+            "9. OUTPUT FORMAT: Respond ONLY with valid, raw JSON matching the requested schema. No markdown formatting, no conversational text."
         )
 
     def _build_prompt(
@@ -530,6 +584,24 @@ class StoryEngine:
                     f"Never rank 'Don't know' or opt-outs. "
                     f"Only supply 'specifyText' if an 'Other (please specify)' item is ranked."
                 )
+            elif f_type == "composite_matrix":
+                substantive_rows = [
+                    {
+                        "rowIndex": r.get("rowIndex"),
+                        "rowLabel": r.get("rowLabel"),
+                        "availableOptions": [o.get("text") for o in r.get("options", [])]
+                    }
+                    for r in f.get("rows", [])
+                    if not r.get("isOptOut")
+                ]
+                field_desc["substantiveRows"] = substantive_rows
+                field_desc["checkboxColHeader"] = f.get("checkboxColHeader")
+                field_desc["secondaryColHeader"] = f.get("secondaryColHeader")
+                field_desc["instruction"] = (
+                    "CRITICAL: First, select (check) 4 to 7 substantive rows that your organization implements/uses (never select opt-out rows like 'None' or 'Don't know'). "
+                    "For EACH selected row, assign a realistic rating or rank in the secondary column. "
+                    "Rows that are NOT selected MUST NOT be rated (omit from rowRatings)."
+                )
             elif f_type == "grid":
                 field_desc["columnHeaders"] = [
                     {"colIndex": ci, "header": h}
@@ -554,8 +626,12 @@ class StoryEngine:
                         "If you DO rate an Other row, you MUST include 'specifyText' in that row's gridSelection with a statement inline with the survey topic and your story."
                     )
                 field_desc["instruction"] = (
-                    "Select realistic scale rating for each substantive row. Avoid straight-lining! "
-                    "NEVER select 'Don't know' or opt-out columns for substantive rows."
+                    "CRITICAL RATING SCALE INSTRUCTIONS:\n"
+                    "- Express authentic, nuanced opinions across rows. STRICTLY AVOID flat straight-lining (never give all rows the same column rating!).\n"
+                    "- Look at columnHeaders: understand scale direction (e.g. colIndex 0 might be 'Strongly disagree' or 'Decreased significantly', while the highest colIndex is 'Strongly agree' or 'Increased significantly').\n"
+                    "- If your persona's perspective is positive, select positive columns (e.g. Agree / Increased). Do NOT select colIndex 0 if colIndex 0 is the negative extreme!\n"
+                    "- Distribute realistic, varied ratings across substantive rows (e.g. mix 60% positive, 30% moderately positive, 10% neutral).\n"
+                    "- NEVER select 'Don't know' or opt-out columns for substantive rows."
                 )
             elif f_type == "select":
                 field_desc["options"] = [
@@ -589,14 +665,16 @@ class StoryEngine:
             f'  "answers": [\n'
             f'    {{\n'
             f'      "fieldIndex": 0,\n'
-            f'      "fieldType": "radio" | "checkbox" | "ranking" | "grid" | "select" | "text" | "numeric",\n'
+            f'      "fieldType": "radio" | "checkbox" | "ranking" | "grid" | "composite_matrix" | "select" | "text" | "numeric",\n'
             f'      "selectedIndex": 0,\n'
             f'      "selectedIndices": [0, 2],\n'
             f'      "rankings": [{{"itemIndex": 0, "rank": "Rank 1"}}, {{"itemIndex": 1, "rank": "Rank 2"}}, {{"itemIndex": 2, "rank": "Rank 3"}}],\n'
-            f'      "gridSelections": [{{"rowIndex": 0, "colIndex": 2}}, {{"rowIndex": 4, "colIndex": 1, "specifyText": "..."}}],\n'
+            f'      "gridSelections": [{{"rowIndex": 0, "colIndex": 3}}, {{"rowIndex": 1, "colIndex": 4}}, {{"rowIndex": 2, "colIndex": 3}}],\n'
+            f'      "selectedRowIndices": [0, 1, 3, 4],\n'
+            f'      "rowRatings": [{{"rowIndex": 0, "value": "5"}}, {{"rowIndex": 1, "value": "6"}}, {{"rowIndex": 3, "value": "5"}}, {{"rowIndex": 4, "value": "6"}}],\n'
             f'      "textResponse": "...",\n'
             f'      "numericValue": 75,\n'
-            f'      "specifyText": null (ONLY provide a string if "Other (please specify)" was selected, otherwise MUST be null)\n'
+            f'      "specifyText": null (ONLY provide a string if "Other" or an option requiring exact number/amount was selected, e.g. "25000" for employee range; otherwise MUST be null)\n'
             f'    }}\n'
             f'  ],\n'
             f'  "new_facts": {{"key": "value"}},\n'

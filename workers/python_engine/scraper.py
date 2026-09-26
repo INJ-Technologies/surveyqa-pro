@@ -298,63 +298,81 @@ class PageScraper:
 
             // ── Helper to find specify/other input near a radio/checkbox ──
             const findSpecifyInput = (inputEl, optLabel) => {
-                const isSpecifyOpt = /other|specify|please\\s*state|explain|details|write[- ]in|qualify/i.test(optLabel || '');
-                // CRITICAL: If this option is NOT explicitly an Other/Specify option, it CANNOT have a specify box!
-                if (!isSpecifyOpt) {
-                    return null;
-                }
-
-                // 1. Check immediate choice container or row
-                const choiceWrapper = inputEl.closest('tr, .row, .choice, .element, [class*="choice"], [class*="option"], label');
+                // 1. Check immediate choice container or row:
+                // If the choice wrapper physically contains a text/number/search input, that input belongs to THIS choice!
+                const choiceWrapper = inputEl.closest('tr, .row, .choice, .element, [class*="choice"], [class*="option"], [class*="answer"], li, label');
                 if (choiceWrapper) {
-                    const inp = choiceWrapper.querySelector('input[type="text"], input[type="search"], textarea');
+                    const inp = choiceWrapper.querySelector('input[type="text"], input[type="search"], input[type="number"], textarea');
                     if (inp && inp !== inputEl) {
                         claimedSpecifyInputs.add(inp);
+                        let promptText = '';
+                        if (inp.id) {
+                            try {
+                                const lbl = choiceWrapper.querySelector(`label[for="${CSS.escape(inp.id)}"]`);
+                                if (lbl) promptText = cleanText(lbl.innerText || lbl.textContent);
+                            } catch(e) {}
+                        }
+                        if (!promptText && inp.parentElement && inp.parentElement !== choiceWrapper) {
+                            promptText = cleanText(inp.parentElement.innerText || '');
+                        }
+                        if (!promptText && inp.placeholder) {
+                            promptText = inp.placeholder;
+                        }
                         return {
                             found: true,
                             id: inp.id || null,
                             name: inp.name || null,
                             placeholder: inp.placeholder || '',
-                            value: inp.value || ''
+                            value: inp.value || '',
+                            prompt: promptText
                         };
                     }
                 }
 
-                // 2. Next sibling of choice wrapper or cell
+                const isSpecifyOpt = /other|specify|please\\s*state|explain|details|write[- ]in|qualify/i.test(optLabel || '');
+
+                // 2. Next sibling of choice wrapper or cell (e.g. in table cell layout)
                 const parent = inputEl.parentElement;
                 if (parent) {
                     let sib = parent.nextElementSibling;
                     for (let j = 0; j < 3 && sib; j++) {
-                        const sibInp = (sib.matches && sib.matches('input[type="text"], input[type="search"], textarea')) ? sib : sib.querySelector('input[type="text"], input[type="search"], textarea');
+                        const sibInp = (sib.matches && sib.matches('input[type="text"], input[type="search"], input[type="number"], textarea')) ? sib : sib.querySelector('input[type="text"], input[type="search"], input[type="number"], textarea');
                         if (sibInp) {
-                            claimedSpecifyInputs.add(sibInp);
-                            return {
-                                found: true,
-                                id: sibInp.id || null,
-                                name: sibInp.name || null,
-                                placeholder: sibInp.placeholder || '',
-                                value: sibInp.value || ''
-                            };
+                            const sibText = cleanText(sib.innerText || '');
+                            if (isSpecifyOpt || /specify|exact|enter|detail/i.test(sibText) || /specify|exact|oe/i.test(sibInp.name || sibInp.id || '')) {
+                                claimedSpecifyInputs.add(sibInp);
+                                return {
+                                    found: true,
+                                    id: sibInp.id || null,
+                                    name: sibInp.name || null,
+                                    placeholder: sibInp.placeholder || '',
+                                    value: sibInp.value || '',
+                                    prompt: sibText
+                                };
+                            }
                         }
                         sib = sib.nextElementSibling;
                     }
                 }
 
-                // 3. Search question block for unclaimed oe... or specify... text input
-                const qBlock = inputEl.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], [class*="question"], fieldset, form') || document;
-                const allText = Array.from(qBlock.querySelectorAll('input[type="text"], input[type="search"], textarea'))
-                    .filter(inp => isVisible(inp) && !claimedSpecifyInputs.has(inp));
+                // 3. Search question block for unclaimed oe... or specify... text input ONLY if this is an explicit other/specify option
+                if (isSpecifyOpt) {
+                    const qBlock = inputEl.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], [class*="question"], fieldset, form') || document;
+                    const allText = Array.from(qBlock.querySelectorAll('input[type="text"], input[type="search"], textarea'))
+                        .filter(inp => isVisible(inp) && !claimedSpecifyInputs.has(inp));
 
-                const match = allText.find(inp => /(oe|specify|other)/i.test((inp.id || '') + ' ' + (inp.name || ''))) || allText[0];
-                if (match) {
-                    claimedSpecifyInputs.add(match);
-                    return {
-                        found: true,
-                        id: match.id || null,
-                        name: match.name || null,
-                        placeholder: match.placeholder || '',
-                        value: match.value || ''
-                    };
+                    const match = allText.find(inp => /(oe|specify|other)/i.test((inp.id || '') + ' ' + (inp.name || '')));
+                    if (match) {
+                        claimedSpecifyInputs.add(match);
+                        return {
+                            found: true,
+                            id: match.id || null,
+                            name: match.name || null,
+                            placeholder: match.placeholder || '',
+                            value: match.value || '',
+                            prompt: ''
+                        };
+                    }
                 }
 
                 return null;
@@ -444,6 +462,87 @@ class PageScraper:
                 }
             });
 
+            // ── 1b. Check for Composite Matrix Tables (Checkbox + Select/Rating per row) ──
+            const claimedCompositeCheckboxes = new Set();
+            const claimedCompositeSelects = new Set();
+
+            tables.forEach((table) => {
+                const rows = Array.from(table.querySelectorAll('tr')).filter(isVisible);
+                // Look for rows that contain BOTH a checkbox and a select (or secondary control)
+                const compRows = rows.filter(r => r.querySelector('input[type="checkbox"]') && r.querySelector('select'));
+                if (compRows.length < 2) return;
+
+                // Extract column headers from table thead or first tr
+                const headerRow = table.querySelector('thead tr, tr:first-child');
+                let colHeaders = [];
+                if (headerRow) {
+                    colHeaders = Array.from(headerRow.querySelectorAll('th, td'))
+                        .map(c => cleanText(c.innerText || c.textContent))
+                        .filter(t => t.length > 0);
+                }
+
+                let cbHeader = colHeaders[1] || 'Select';
+                let secHeader = colHeaders[2] || colHeaders[1] || 'Rating';
+
+                const matrixRows = [];
+                compRows.forEach((tr, ri) => {
+                    const cb = tr.querySelector('input[type="checkbox"]');
+                    const sel = tr.querySelector('select');
+                    if (!cb || !sel) return;
+
+                    claimedCompositeCheckboxes.add(cb);
+                    claimedOptOutCbs.add(cb);
+                    claimedCompositeSelects.add(sel);
+
+                    // Row label from first cell without interactive inputs
+                    const cells = Array.from(tr.querySelectorAll('td, th'));
+                    let rowLabel = '';
+                    const firstNonInputCell = cells.find(c => !c.querySelector('input, select'));
+                    if (firstNonInputCell) {
+                        rowLabel = cleanText(firstNonInputCell.innerText || firstNonInputCell.textContent);
+                    }
+                    if (!rowLabel && cb.id) {
+                        try {
+                            const lbl = document.querySelector(`label[for="${CSS.escape(cb.id)}"]`);
+                            if (lbl) rowLabel = cleanText(lbl.innerText);
+                        } catch(e) {}
+                    }
+
+                    const isOptOut = isOptOutText(rowLabel) || (cb.classList && cb.classList.contains('no-answer'));
+
+                    const validOpts = Array.from(sel.options)
+                        .filter(o => o.value && !/select|--|choose|^$/i.test(o.text))
+                        .map(o => ({ value: o.value, text: cleanText(o.text) }));
+
+                    matrixRows.push({
+                        rowIndex: ri,
+                        rowLabel: rowLabel || `Item ${ri + 1}`,
+                        isOptOut: isOptOut,
+                        checkboxId: cb.id || null,
+                        checkboxName: cb.name || null,
+                        checkboxChecked: cb.checked,
+                        selectId: sel.id || null,
+                        selectName: sel.name || null,
+                        currentSelectValue: sel.value || null,
+                        options: validOpts
+                    });
+                });
+
+                if (matrixRows.length >= 2) {
+                    const qInfo = getQuestionForControl(table);
+                    fields.push({
+                        fieldType: 'composite_matrix',
+                        fieldIndex: fields.length,
+                        questionLabel: qInfo.fullText,
+                        questionTitle: qInfo.question,
+                        questionHint: qInfo.hint,
+                        checkboxColHeader: cbHeader,
+                        secondaryColHeader: secHeader,
+                        rows: matrixRows
+                    });
+                }
+            });
+
             // ── 2. Standard Radio Groups (excluding grids) ──
             const radioGroups = {};
             const radioOrder = [];
@@ -481,7 +580,8 @@ class PageScraper:
                     checked: r.checked,
                     hasSpecify: !!spec,
                     specifyId: spec ? spec.id : null,
-                    specifyName: spec ? spec.name : null
+                    specifyName: spec ? spec.name : null,
+                    specifyPrompt: spec ? spec.prompt : null
                 });
             });
 
@@ -502,7 +602,7 @@ class PageScraper:
             });
 
             // ── 3. Dropdowns & Ranking Detection ──
-            const selects = Array.from(document.querySelectorAll('select')).filter(isVisible);
+            const selects = Array.from(document.querySelectorAll('select')).filter(s => isVisible(s) && !claimedCompositeSelects.has(s));
 
             // Group ranking selects (e.g. selects in same table/container where options are ranks 1, 2, 3...)
             const rankingCandidates = [];
@@ -547,14 +647,17 @@ class PageScraper:
                     }
                 }
 
-                // Claim ALL checkboxes in this ranking container (e.g. "Don't know", "No significant constraints")
-                // so they are NEVER emitted or processed as standalone checkbox questions!
+                // Claim ONLY genuine opt-out checkboxes in this ranking container (e.g. "Don't know", "No significant constraints")
                 const optOutCheckboxes = [];
                 if (container) {
                     container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                        claimedOptOutCbs.add(cb);
-                        if (cb.id) optOutCheckboxes.push(cb.id);
-                        if (cb.name) optOutCheckboxes.push(cb.name);
+                        const row = cb.closest('tr, .row, .element, label, [class*="choice"]') || cb.parentElement;
+                        const rowText = cleanText(row ? (row.innerText || row.textContent) : '');
+                        if (isOptOutText(rowText) || (cb.classList && cb.classList.contains('no-answer'))) {
+                            claimedOptOutCbs.add(cb);
+                            if (cb.id) optOutCheckboxes.push(cb.id);
+                            if (cb.name) optOutCheckboxes.push(cb.name);
+                        }
                     });
                 }
 
@@ -637,17 +740,10 @@ class PageScraper:
             const cbOrder = [];
             document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
                 if (!isInputInteractive(cb)) return;
-                if (claimedOptOutCbs.has(cb)) return;
+                if (claimedOptOutCbs.has(cb) || claimedCompositeCheckboxes.has(cb)) return;
                 if (cb.classList && cb.classList.contains('no-answer')) return;
 
                 // Group checkboxes belonging to the same question block into one multi-option question
-                const qBlock = cb.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], fieldset, table, [role="group"]');
-                // If question block contains ranking selects, skip this checkbox entirely
-                if (qBlock && qBlock.querySelectorAll('select').length >= 2) {
-                    claimedOptOutCbs.add(cb);
-                    return;
-                }
-
                 const qInfo = getQuestionForControl(cb);
                 const qText = qInfo.fullText;
 
@@ -715,7 +811,8 @@ class PageScraper:
                     checked: cb.checked,
                     hasSpecify: !!spec,
                     specifyId: spec ? spec.id : null,
-                    specifyName: spec ? spec.name : null
+                    specifyName: spec ? spec.name : null,
+                    specifyPrompt: spec ? spec.prompt : null
                 });
             });
 

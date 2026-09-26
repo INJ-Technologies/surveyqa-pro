@@ -10,7 +10,13 @@ import time
 from typing import List, Dict, Any, Optional
 from playwright.sync_api import Page, Locator
 
-from .optout_filter import is_consent_checkbox, is_optout_option, is_grid_other_row
+from .optout_filter import (
+    is_consent_checkbox,
+    is_optout_option,
+    is_grid_other_row,
+    extract_numeric_range,
+    generate_humanized_number_in_range,
+)
 
 
 def safe_click(locator: Locator):
@@ -234,6 +240,10 @@ class ActionExecutor:
                     res = self._execute_grid(field, ans, persona)
                     if res:
                         results.append(res)
+                elif f_type == "composite_matrix":
+                    res = self._execute_composite_matrix(field, ans, persona)
+                    if res:
+                        results.append(res)
                 elif f_type == "select":
                     res = self._execute_select(field, ans)
                     if res:
@@ -278,12 +288,33 @@ class ActionExecutor:
         self._check_input_element(opt_id=opt_id, opt_name=opt_name, opt_val=opt_val, is_radio=True)
         time.sleep(0.15)
 
-        # Handle follow-up specify box if present ONLY when an Other/Specify option is chosen
+        # Handle follow-up specify box if present (either explicitly marked hasSpecify or Other/Specify option)
+        has_specify = target_opt.get("hasSpecify")
         is_other_opt = bool(re.search(r"other|specify|please\\s*state|explain|details|write[- ]in|qualify", opt_label, re.I))
 
         spec_text = None
-        if is_other_opt:
+        if has_specify or is_other_opt:
             spec_text = ans.get("specifyText")
+            spec_prompt = target_opt.get("specifyPrompt") or ""
+            q_label = field.get("questionLabel", "")
+            combo_text = f"{opt_label} {spec_prompt} {q_label}"
+
+            range_tuple = extract_numeric_range(opt_label) or extract_numeric_range(spec_prompt) or extract_numeric_range(q_label)
+            is_numeric_specify = bool(range_tuple or re.search(r"exact number|how many|amount|count|between|employees|headcount|enter a number", combo_text, re.I))
+
+            if is_numeric_specify:
+                established = (persona or {}).get("established_facts", {})
+                if "employee_count" in established and "employee" in combo_text.lower():
+                    spec_text = str(established["employee_count"])
+                elif not spec_text or not str(spec_text).replace(",", "").isdigit():
+                    if range_tuple:
+                        num_val = generate_humanized_number_in_range(range_tuple[0], range_tuple[1])
+                    else:
+                        num_val = 25000 if "employee" in combo_text.lower() else 50
+                    spec_text = str(num_val)
+                    if persona and "established_facts" in persona:
+                        persona["established_facts"]["exact_employees" if "employee" in combo_text.lower() else "exact_numeric"] = num_val
+
             if not spec_text:
                 q_text = field.get("questionLabel", "").lower()
                 if any(w in q_text for w in ["job", "role", "title", "function", "department"]):
@@ -313,7 +344,7 @@ class ActionExecutor:
                     let node = r.parentElement;
                     for (let i = 0; i < 5; i++) {
                         if (!node) break;
-                        const inp = node.querySelector('input[type="text"], input[type="search"], textarea');
+                        const inp = node.querySelector('input[type="text"], input[type="search"], input[type="number"], textarea');
                         if (inp && inp !== r) {
                             inp.removeAttribute('disabled');
                             inp.disabled = false;
@@ -326,7 +357,7 @@ class ActionExecutor:
                     }
                     const qBlock = r.closest('.question, .qblock, [class*="question"], fieldset, form');
                     if (qBlock) {
-                        const inps = Array.from(qBlock.querySelectorAll('input[type="text"], textarea'));
+                        const inps = Array.from(qBlock.querySelectorAll('input[type="text"], input[type="number"], textarea'));
                         const oeInp = inps.find(inp => /(oe|specify|other)/i.test((inp.id || '') + ' ' + (inp.name || ''))) || inps[0];
                         if (oeInp) {
                             oeInp.removeAttribute('disabled');
@@ -477,10 +508,31 @@ class ActionExecutor:
             self._check_input_element(opt_id=opt_id, opt_name=opt_name, opt_val=opt_val, is_radio=False)
             selected_labels.append(opt_label)
 
-            # Handle specify if present ONLY for this option
+            # Handle specify if present (either explicitly marked hasSpecify or Other/Specify option)
+            has_specify = opt.get("hasSpecify")
             is_other = bool(re.search(r"other|specify|please\\s*state|explain|details|write[- ]in|qualify", opt_label, re.I))
-            if is_other:
+            if has_specify or is_other:
                 spec_text = ans.get("specifyText")
+                spec_prompt = opt.get("specifyPrompt") or ""
+                q_label = field.get("questionLabel", "")
+                combo_text = f"{opt_label} {spec_prompt} {q_label}"
+
+                range_tuple = extract_numeric_range(opt_label) or extract_numeric_range(spec_prompt) or extract_numeric_range(q_label)
+                is_numeric_specify = bool(range_tuple or re.search(r"exact number|how many|amount|count|between|employees|headcount|enter a number", combo_text, re.I))
+
+                if is_numeric_specify:
+                    established = (persona or {}).get("established_facts", {})
+                    if "employee_count" in established and "employee" in combo_text.lower():
+                        spec_text = str(established["employee_count"])
+                    elif not spec_text or not str(spec_text).replace(",", "").isdigit():
+                        if range_tuple:
+                            num_val = generate_humanized_number_in_range(range_tuple[0], range_tuple[1])
+                        else:
+                            num_val = 25000 if "employee" in combo_text.lower() else 50
+                        spec_text = str(num_val)
+                        if persona and "established_facts" in persona:
+                            persona["established_facts"]["exact_employees" if "employee" in combo_text.lower() else "exact_numeric"] = num_val
+
                 if not spec_text:
                     q_text = field.get("questionLabel", "").lower()
                     if any(w in q_text for w in ["job", "role", "title", "function", "department"]):
@@ -509,7 +561,7 @@ class ActionExecutor:
                         let node = cb.parentElement;
                         for (let i = 0; i < 5; i++) {
                             if (!node) break;
-                            const inp = node.querySelector('input[type="text"], textarea');
+                            const inp = node.querySelector('input[type="text"], input[type="number"], textarea');
                             if (inp) {
                                 inp.removeAttribute('disabled');
                                 inp.disabled = false;
@@ -590,9 +642,7 @@ class ActionExecutor:
                 const rowText = (row ? (row.innerText || row.textContent) : '').toLowerCase().replace(/[\u2018\u2019`]/g, "'");
                 const isOptOut = cb.classList.contains('no-answer') || 
                                  /don'?t\\s+know|do\\s+not\\s+know|not\\s+sure|unsure|cannot\\s+say|none\\s+of|no\\s+significant|no\\s+clear|have\\s+no\\s+plan/i.test(rowText);
-                const qBlock = cb.closest('.question, .qblock, table');
-                const hasSelects = qBlock && qBlock.querySelectorAll('select').length >= 2;
-                if (isOptOut || hasSelects) {
+                if (isOptOut) {
                     cb.checked = false;
                     cb.removeAttribute('checked');
                     const cell = cb.closest('.cell-input, .fir-checkbox, tr, td, label');
@@ -887,12 +937,33 @@ class ActionExecutor:
         col_map = {}
         spec_map = {}
         for gs in grid_selections:
-            r_idx = gs.get("rowIndex")
-            c_idx = gs.get("colIndex")
+            if not isinstance(gs, dict):
+                continue
+            r_idx = gs.get("rowIndex") if gs.get("rowIndex") is not None else gs.get("row")
+            if isinstance(r_idx, str):
+                for ri, row in enumerate(rows):
+                    if r_idx.lower() in (row.get("rowLabel") or "").lower():
+                        r_idx = ri
+                        break
+
+            c_idx = gs.get("colIndex") if gs.get("colIndex") is not None else gs.get("col")
+            if c_idx is None or isinstance(c_idx, str):
+                text_val = str(c_idx or gs.get("column") or gs.get("selected") or gs.get("rating") or gs.get("value") or "").strip().lower()
+                for ci, h in enumerate(col_headers):
+                    if text_val and (text_val in h.lower() or h.lower() in text_val):
+                        c_idx = ci
+                        break
+
             if r_idx is not None and c_idx is not None:
-                col_map[r_idx] = c_idx
+                try:
+                    col_map[int(r_idx)] = int(c_idx)
+                except (ValueError, TypeError):
+                    pass
             if r_idx is not None and gs.get("specifyText"):
-                spec_map[r_idx] = gs.get("specifyText")
+                try:
+                    spec_map[int(r_idx)] = gs.get("specifyText")
+                except (ValueError, TypeError):
+                    pass
 
         # Top-level specifyText fallback if present
         top_specify = ans.get("specifyText")
@@ -903,14 +974,43 @@ class ActionExecutor:
             if not is_grid_other_row(r)
         ]
 
-        if substantive_row_indices:
-            chosen_cols = [col_map.get(ri, substantive_cols[ri % len(substantive_cols)]) for ri in substantive_row_indices]
-            if len(substantive_row_indices) >= 3 and len(set(chosen_cols)) == 1:
-                # Vary at least one row slightly among substantive columns
-                jitter_ri = random.choice(substantive_row_indices)
-                curr_c = chosen_cols[0]
-                alt_cols = [c for c in substantive_cols if c != curr_c]
-                col_map[jitter_ri] = random.choice(alt_cols) if alt_cols else curr_c
+        if len(substantive_row_indices) >= 2:
+            from collections import Counter
+            chosen_cols = [col_map.get(ri) for ri in substantive_row_indices]
+            valid_chosen = [c for c in chosen_cols if c is not None]
+            counts = Counter(valid_chosen)
+
+            # Check if all or >= 70% of rows have the exact same column
+            is_flat = False
+            most_common_col = None
+            if not valid_chosen or len(counts) <= 1:
+                is_flat = True
+                most_common_col = valid_chosen[0] if valid_chosen else None
+            else:
+                most_common_col, max_count = counts.most_common(1)[0]
+                if (max_count / len(substantive_row_indices)) >= 0.7:
+                    is_flat = True
+
+            if is_flat:
+                story_text = ((persona or {}).get("cumulative_story") or "").lower()
+                q_text = field.get("questionLabel", "").lower()
+                is_positive = any(w in story_text or w in q_text for w in ["increase", "agree", "positive", "high", "adopt", "likely", "effective", "benefit", "threat"])
+
+                if is_positive and len(substantive_cols) >= 3 and (most_common_col == 0 or most_common_col is None):
+                    # Flipped negative extreme to positive half
+                    primary_c = substantive_cols[-1]
+                    secondary_c = substantive_cols[-2]
+                elif most_common_col is not None and most_common_col in substantive_cols:
+                    primary_c = most_common_col
+                    pos = substantive_cols.index(primary_c)
+                    adj_pos = pos - 1 if pos > 0 else (pos + 1 if pos + 1 < len(substantive_cols) else pos)
+                    secondary_c = substantive_cols[adj_pos]
+                else:
+                    primary_c = substantive_cols[-1] if len(substantive_cols) >= 2 else substantive_cols[0]
+                    secondary_c = substantive_cols[-2] if len(substantive_cols) >= 2 else primary_c
+
+                for i, ri in enumerate(substantive_row_indices):
+                    col_map[ri] = secondary_c if (i % 3 == 0) else primary_c
 
         row_results = []
         for ri, row in enumerate(rows):
@@ -1078,6 +1178,129 @@ class ActionExecutor:
             "type": "grid",
             "question": field.get("questionLabel", ""),
             "gridAnswers": row_results
+        }
+
+    def _execute_composite_matrix(
+        self,
+        field: Dict[str, Any],
+        ans: Dict[str, Any],
+        persona: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Executes multi-column composite matrix tables where each row contains
+        a selection checkbox and a rating or ranking control (e.g. select dropdown or radio).
+        CRITICAL RULES:
+        1. Substantive rows: Selects a realistic subset (e.g. 50-70% of rows).
+        2. NEVER selects opt-out rows (e.g. 'None of the above', 'Don't know').
+        3. Selected rows: Check the checkbox AND assign a rating/rank in the secondary control.
+        4. Unselected rows: Uncheck the checkbox AND clear/reset the secondary control.
+        """
+        rows = field.get("rows", [])
+        if not rows:
+            return None
+
+        substantive_rows = [r for r in rows if not r.get("isOptOut")]
+        selected_row_indices = set(ans.get("selectedRowIndices") or [])
+        row_ratings_list = ans.get("rowRatings") or []
+        row_ratings_map = {}
+        for rr in row_ratings_list:
+            if isinstance(rr, dict) and "rowIndex" in rr:
+                row_ratings_map[rr["rowIndex"]] = rr.get("value")
+
+        # Fallback if AI returned no selections
+        if not selected_row_indices and substantive_rows:
+            num_to_pick = max(2, min(len(substantive_rows), int(len(substantive_rows) * 0.6) or 3))
+            selected_row_indices = {r["rowIndex"] for r in substantive_rows[:num_to_pick]}
+
+        executed_rows = []
+        for r in rows:
+            ri = r.get("rowIndex", 0)
+            is_optout = r.get("isOptOut", False)
+            is_selected = (ri in selected_row_indices) and not is_optout
+            row_label = r.get("rowLabel", "")
+
+            cb_id = r.get("checkboxId")
+            cb_name = r.get("checkboxName")
+            sel_id = r.get("selectId")
+            sel_name = r.get("selectName")
+            opts = r.get("options", [])
+
+            if is_selected:
+                # 1. Check the checkbox
+                self._check_input_element(opt_id=cb_id, opt_name=cb_name, is_radio=False)
+
+                # 2. Select rating or rank in secondary control
+                chosen_val = row_ratings_map.get(ri)
+                if chosen_val is None and opts:
+                    pick_idx = min(len(opts) - 1, max(0, int(len(opts) * 0.7) - (ri % 2)))
+                    chosen_val = opts[pick_idx].get("value") or opts[pick_idx].get("text")
+
+                self.page.evaluate("""(data) => {
+                    const sel = data.selId ? document.getElementById(data.selId) : (data.selName ? document.querySelector(`select[name="${data.selName}"]`) : null);
+                    if (!sel) return;
+                    let found = false;
+                    for (let i = 0; i < sel.options.length; i++) {
+                        const opt = sel.options[i];
+                        if (opt.value == data.targetVal || opt.text.trim() == String(data.targetVal).trim()) {
+                            sel.selectedIndex = i;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found && sel.options.length > 1) {
+                        const idx = Math.min(sel.options.length - 1, Math.max(1, Math.floor(sel.options.length * 0.7)));
+                        sel.selectedIndex = idx;
+                    }
+                    sel.dispatchEvent(new Event('input', { bubbles: true }));
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                }""", {"selId": sel_id, "selName": sel_name, "targetVal": chosen_val})
+
+                executed_rows.append({
+                    "rowIndex": ri,
+                    "rowLabel": row_label,
+                    "checked": True,
+                    "rating": str(chosen_val)
+                })
+            else:
+                # Uncheck checkbox and clear select
+                self.page.evaluate("""(data) => {
+                    if (data.cbId) {
+                        const cb = document.getElementById(data.cbId);
+                        if (cb) {
+                            cb.checked = false;
+                            cb.removeAttribute('checked');
+                            const cell = cb.closest('.cell-input, .fir-checkbox, tr, td, label');
+                            if (cell) cell.classList.remove('fir-selected', 'checked', 'selected');
+                            cb.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    }
+                    if (data.cbName) {
+                        document.querySelectorAll(`input[type="checkbox"][name="${data.cbName}"]`).forEach(cb => {
+                            cb.checked = false;
+                            cb.removeAttribute('checked');
+                            cb.dispatchEvent(new Event('change', { bubbles: true }));
+                        });
+                    }
+                    const sel = data.selId ? document.getElementById(data.selId) : (data.selName ? document.querySelector(`select[name="${data.selName}"]`) : null);
+                    if (sel) {
+                        sel.selectedIndex = 0;
+                        sel.value = '';
+                        sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }""", {"cbId": cb_id, "cbName": cb_name, "selId": sel_id, "selName": sel_name})
+
+                executed_rows.append({
+                    "rowIndex": ri,
+                    "rowLabel": row_label,
+                    "checked": False,
+                    "rating": None
+                })
+
+        return {
+            "type": "composite_matrix",
+            "question": field.get("questionLabel", ""),
+            "selectedCount": sum(1 for er in executed_rows if er["checked"]),
+            "matrixAnswers": executed_rows
         }
 
     def _execute_select(self, field: Dict[str, Any], ans: Dict[str, Any]) -> Optional[Dict[str, Any]]:

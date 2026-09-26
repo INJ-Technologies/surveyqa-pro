@@ -384,6 +384,15 @@ class SurveySessionRunner:
                     for ea in executed_answers:
                         if ea.get("type") == "grid":
                             grid_answers.extend(ea.get("gridAnswers", []))
+                        elif ea.get("type") == "composite_matrix":
+                            grid_answers.extend([
+                                {
+                                    "row": ma["rowLabel"],
+                                    "selected": f"Checked (Rating: {ma['rating']})" if ma["checked"] and ma.get("rating") else ("Checked" if ma["checked"] else "(Unrated / Not selected)"),
+                                    "answered": ma["checked"]
+                                }
+                                for ma in ea.get("matrixAnswers", [])
+                            ])
                         else:
                             flat_options.append(ea)
 
