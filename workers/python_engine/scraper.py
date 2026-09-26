@@ -395,6 +395,13 @@ class PageScraper:
                         rowLabel = cleanText(firstNonRadioCell.innerText || firstNonRadioCell.textContent);
                     }
 
+                    // Check if this row is an Other / Specify row
+                    const rowInp = tr.querySelector('input[type="text"], input[type="search"], textarea');
+                    const isOtherRow = /other|specify|please\\s*state|explain|details|write[- ]in|qualify/i.test(rowLabel) || !!rowInp;
+                    if (rowInp) {
+                        claimedSpecifyInputs.add(rowInp);
+                    }
+
                     const cols = radios.map((r, ci) => {
                         let label = colHeaders[ci] || '';
                         if (!label && r.id) {
@@ -411,8 +418,13 @@ class PageScraper:
                     });
 
                     gridRows.push({
+                        rowIndex: gridRows.length,
                         groupName: rowName,
                         rowLabel: rowLabel || rowName,
+                        isOther: isOtherRow,
+                        hasSpecify: !!rowInp,
+                        specifyId: rowInp ? rowInp.id : null,
+                        specifyName: rowInp ? rowInp.name : null,
                         columns: cols
                     });
                 });

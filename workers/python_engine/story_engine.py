@@ -226,10 +226,15 @@ class StoryEngine:
             elif f_type == "grid":
                 rows = f.get("rows", [])
                 col_headers = f.get("colHeaders", [])
-                num_cols = len(col_headers) if col_headers else 3
+                substantive_cols = [ci for ci, h in enumerate(col_headers) if not is_optout_option(h)]
+                if not substantive_cols:
+                    substantive_cols = list(range(len(col_headers))) if col_headers else [0]
                 grid_sels = []
-                for ri in range(len(rows)):
-                    c_idx = (ri % (num_cols - 1)) if num_cols > 1 else 0
+                for ri, row in enumerate(rows):
+                    is_other = row.get("isOther") or bool(re.search(r"other|specify", row.get("rowLabel", ""), re.I))
+                    if is_other:
+                        continue  # Leave Other rows unrated so validation isn't triggered
+                    c_idx = substantive_cols[ri % len(substantive_cols)]
                     grid_sels.append({"rowIndex": ri, "colIndex": c_idx})
                 answers.append({
                     "fieldIndex": f_idx,
@@ -396,8 +401,11 @@ class StoryEngine:
             "   - Assign strictly UNIQUE ranks. No two items may share the same rank.\n"
             "   - Leave ALL other remaining items unranked (do not include them in the rankings list).\n"
             "   - NEVER rank 'Don't know', 'None of the above', or any opt-out anchor.\n"
-            "3. NO STRAIGHT-LINING ON GRIDS: In rating grids/matrixes, express realistic nuanced opinions across rows.\n"
-            "   Do not pick the exact same scale column for all rows.\n"
+            "3. NO STRAIGHT-LINING ON GRIDS & 'OTHER' ROWS:\n"
+            "   - In rating grids/matrixes, express realistic nuanced opinions across substantive rows (avoid straight-lining).\n"
+            "   - NEVER pick 'Don't know', 'Not applicable', or opt-out columns for substantive rows.\n"
+            "   - For 'Other (please specify)' rows in grids: Leave unrated (omit from gridSelections) if standard options suffice.\n"
+            "     If rating an Other row, you MUST supply a contextually authentic specifyText inline with the survey topic and your prior answers.\n"
             "4. SCENARIO DIRECTIVES: Mandatory QA test conditions. You MUST follow them.\n"
             "5. CONDITIONAL SPECIFY / WRITE-IN:\n"
             "   - Only provide specifyText IF you actually selected 'Other (please specify)' or an option with hasSpecify=true.\n"
@@ -514,12 +522,32 @@ class StoryEngine:
                     f"Only supply 'specifyText' if an 'Other (please specify)' item is ranked."
                 )
             elif f_type == "grid":
-                field_desc["columnHeaders"] = f.get("colHeaders", [])
-                field_desc["rows"] = [
-                    {"rowIndex": ri, "rowLabel": r.get("rowLabel")}
-                    for ri, r in enumerate(f.get("rows", []))
+                field_desc["columnHeaders"] = [
+                    {"colIndex": ci, "header": h}
+                    for ci, h in enumerate(f.get("colHeaders", []))
                 ]
-                field_desc["instruction"] = "Select realistic scale rating for each row. Avoid straight-lining!"
+                substantive_rows = []
+                other_rows = []
+                for ri, r in enumerate(f.get("rows", [])):
+                    r_label = r.get("rowLabel", "")
+                    is_other = r.get("isOther") or bool(re.search(r"other|specify|please\s*state|explain|details|write[- ]in|qualify", r_label, re.I))
+                    r_info = {"rowIndex": ri, "rowLabel": r_label}
+                    if is_other:
+                        other_rows.append(r_info)
+                    else:
+                        substantive_rows.append(r_info)
+
+                field_desc["substantiveRows"] = substantive_rows
+                if other_rows:
+                    field_desc["otherRows"] = other_rows
+                    field_desc["otherRowGuidance"] = (
+                        "For Other (please specify) rows: You may IGNORE and LEAVE UNRATED (omit from gridSelections - recommended). "
+                        "If you DO rate an Other row, you MUST include 'specifyText' in that row's gridSelection with a statement inline with the survey topic and your story."
+                    )
+                field_desc["instruction"] = (
+                    "Select realistic scale rating for each substantive row. Avoid straight-lining! "
+                    "NEVER select 'Don't know' or opt-out columns for substantive rows."
+                )
             elif f_type == "select":
                 field_desc["options"] = [
                     {"index": i, "label": o.get("label")}
@@ -556,7 +584,7 @@ class StoryEngine:
             f'      "selectedIndex": 0,\n'
             f'      "selectedIndices": [0, 2],\n'
             f'      "rankings": [{{"itemIndex": 0, "rank": "Rank 1"}}, {{"itemIndex": 1, "rank": "Rank 2"}}, {{"itemIndex": 2, "rank": "Rank 3"}}],\n'
-            f'      "gridSelections": [{{"rowIndex": 0, "colIndex": 2}}],\n'
+            f'      "gridSelections": [{{"rowIndex": 0, "colIndex": 2}}, {{"rowIndex": 4, "colIndex": 1, "specifyText": "..."}}],\n'
             f'      "textResponse": "...",\n'
             f'      "numericValue": 75,\n'
             f'      "specifyText": null (ONLY provide a string if "Other (please specify)" was selected, otherwise MUST be null)\n'

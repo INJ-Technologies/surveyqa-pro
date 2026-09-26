@@ -189,8 +189,15 @@ class ActionExecutor:
                 elif f_type == "grid":
                     rows = f.get("rows", [])
                     cols = f.get("colHeaders", [])
-                    grid_sels = [{"rowIndex": ri, "colIndex": (ri % max(1, len(cols) - 1))} for ri in range(len(rows))]
-                    res = self._execute_grid(f, {"gridSelections": grid_sels})
+                    sub_cols = [ci for ci, h in enumerate(cols) if not is_optout_option(h)]
+                    if not sub_cols:
+                        sub_cols = list(range(len(cols))) if cols else [0]
+                    grid_sels = [
+                        {"rowIndex": ri, "colIndex": sub_cols[ri % len(sub_cols)]}
+                        for ri, r in enumerate(rows)
+                        if not (r.get("isOther") or bool(re.search(r"other|specify", r.get("rowLabel", ""), re.I)))
+                    ]
+                    res = self._execute_grid(f, {"gridSelections": grid_sels}, persona)
                     if res: results.append(res)
                 elif f_type == "select":
                     res = self._execute_select(f, {"selectedIndex": chosen_idx})
@@ -224,7 +231,7 @@ class ActionExecutor:
                     if res:
                         results.append(res)
                 elif f_type == "grid":
-                    res = self._execute_grid(field, ans)
+                    res = self._execute_grid(field, ans, persona)
                     if res:
                         results.append(res)
                 elif f_type == "select":
@@ -802,36 +809,205 @@ class ActionExecutor:
             "assignments": final_assignments
         }
 
-    def _execute_grid(self, field: Dict[str, Any], ans: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _synthesize_grid_other_text(
+        self,
+        field: Dict[str, Any],
+        persona: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Synthesizes a realistic, highly contextual response for an 'Other (please specify)'
+        row in a grid question, aligning with the question prompt, neighboring row statements,
+        and persona context.
+        """
+        q_text = ((field.get("questionLabel") or "") + " " + (field.get("questionTitle") or "")).lower()
+        rows = field.get("rows", [])
+        row_labels = [r.get("rowLabel", "") for r in rows if not r.get("isOther")]
+
+        # Topic-specific syntheses tailored to payment/financial/merchant domain
+        if any(w in q_text for w in ["interchange", "regulation", "cap", "fee", "rate", "cost"]):
+            return "Internal compliance automation and routing optimization for merchant fee structures"
+        elif any(w in q_text for w in ["fraud", "risk", "chargeback", "security", "scam", "dispute"]):
+            return "Machine-learning assisted transaction scoring and chargeback dispute workflows"
+        elif any(w in q_text for w in ["instant", "real-time", "rtp", "fednow", "faster"]):
+            return "Direct API integration with real-time settlement rails and automated reconciliation"
+        elif any(w in q_text for w in ["cross-border", "international", "fx", "currency"]):
+            return "Multi-currency routing protocols and international settlement monitoring"
+        elif any(w in q_text for w in ["merchant", "checkout", "conversion", "payment method", "wallet"]):
+            return "Dynamic payment method presentation and alternative payment orchestration"
+        elif any(w in q_text for w in ["tech", "software", "infrastructure", "system", "platform"]):
+            return "Cloud-native payment gateway redundancy and microservice monitoring"
+        elif any(w in q_text for w in ["customer", "experience", "satisfaction", "retention"]):
+            return "Frictionless authentication protocols and enhanced customer communication"
+
+        # If we have neighboring row statements, borrow context / tone
+        if row_labels:
+            first_label = row_labels[0].lower()
+            if first_label.startswith("invest") or "invest" in first_label:
+                return "Invested in customized workflow automation and reporting infrastructure"
+            elif first_label.startswith("adjust") or "adjust" in first_label:
+                return "Adjusted operational guidelines to balance service quality with processing costs"
+            elif first_label.startswith("negotiat") or "negotiat" in first_label:
+                return "Negotiated tailored SLA and support tiers with regional service providers"
+            elif first_label.startswith("shift") or "shift" in first_label:
+                return "Shifted resource allocation toward automated reconciliation tools"
+
+        # Persona-based fallback
+        if persona:
+            role = persona.get("job_title") or persona.get("role")
+            if role:
+                return f"Standard {role.lower()} workflow optimization and operational compliance"
+
+        return "Automated workflow optimization and internal operational monitoring"
+
+    def _execute_grid(
+        self,
+        field: Dict[str, Any],
+        ans: Dict[str, Any],
+        persona: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Executes radio grid / matrix selections.
-        Enforces anti-straight-lining so responses look natural and authentic.
+        CRITICAL RULES:
+        1. Substantive rows: Express nuanced opinions, strictly avoiding straight-lining and opt-out columns ('Don't know', 'N/A').
+        2. 'Other (please specify)' rows:
+           - If unrated / omitted from gridSelections: Leave unrated, ensure NO radio is checked, and clear any specify input.
+           - If rated in gridSelections: Check selected column radio AND fill the specify input with contextual statement.
         """
         rows = field.get("rows", [])
         col_headers = field.get("colHeaders", [])
         if not rows:
             return None
 
+        # Filter substantive columns (exclude 'Don't know', 'Not applicable', etc.)
+        substantive_cols = [ci for ci, h in enumerate(col_headers) if not is_optout_option(h)]
+        if not substantive_cols:
+            substantive_cols = list(range(len(col_headers))) if col_headers else [0]
+
         grid_selections = ans.get("gridSelections", [])
         col_map = {}
+        spec_map = {}
         for gs in grid_selections:
             r_idx = gs.get("rowIndex")
-            c_idx = gs.get("colIndex", 0)
-            if r_idx is not None:
+            c_idx = gs.get("colIndex")
+            if r_idx is not None and c_idx is not None:
                 col_map[r_idx] = c_idx
+            if r_idx is not None and gs.get("specifyText"):
+                spec_map[r_idx] = gs.get("specifyText")
 
-        # Check for straight-lining (all rows assigned the identical column)
-        chosen_cols = [col_map.get(ri, 0) for ri in range(len(rows))]
-        if len(rows) >= 3 and len(set(chosen_cols)) == 1:
-            # Vary at least one row slightly
-            jitter_row = random.randint(0, len(rows) - 1)
-            num_cols = len(col_headers) if col_headers else 4
-            col_map[jitter_row] = (chosen_cols[0] + 1) % max(1, num_cols)
+        # Top-level specifyText fallback if present
+        top_specify = ans.get("specifyText")
+
+        # Anti-straight-lining for substantive rows only
+        substantive_row_indices = [
+            ri for ri, r in enumerate(rows)
+            if not (r.get("isOther") or bool(re.search(r"other|specify|please\s*state|explain|details|write[- ]in|qualify", r.get("rowLabel", ""), re.I)))
+        ]
+
+        if substantive_row_indices:
+            chosen_cols = [col_map.get(ri, substantive_cols[ri % len(substantive_cols)]) for ri in substantive_row_indices]
+            if len(substantive_row_indices) >= 3 and len(set(chosen_cols)) == 1:
+                # Vary at least one row slightly among substantive columns
+                jitter_ri = random.choice(substantive_row_indices)
+                curr_c = chosen_cols[0]
+                alt_cols = [c for c in substantive_cols if c != curr_c]
+                col_map[jitter_ri] = random.choice(alt_cols) if alt_cols else curr_c
 
         row_results = []
         for ri, row in enumerate(rows):
-            target_col = col_map.get(ri, 0)
+            is_other = row.get("isOther") or bool(re.search(r"other|specify|please\s*state|explain|details|write[- ]in|qualify", row.get("rowLabel", ""), re.I))
+            row_label = row.get("rowLabel", "")
             cols = row.get("columns", [])
+            row_name = row.get("groupName")
+            spec_id = row.get("specifyId")
+            spec_name = row.get("specifyName")
+
+            # --- CASE 1: 'Other' row is NOT rated (omit from answers) ---
+            if is_other and ri not in col_map:
+                # Thoroughly uncheck any radios and clear any text inputs in this row
+                radio_ids = [c.get("id") for c in cols if c.get("id")]
+                self.page.evaluate("""(data) => {
+                    // Uncheck radios by name
+                    if (data.groupName) {
+                        document.querySelectorAll(`input[type="radio"][name="${data.groupName}"]`).forEach(r => {
+                            r.checked = false;
+                            r.removeAttribute('checked');
+                            const cell = r.closest('.cell-input, .fir-radio, tr, td, label');
+                            if (cell) {
+                                cell.querySelectorAll('.fir-selected, .checked, .selected').forEach(el => el.classList.remove('fir-selected', 'checked', 'selected'));
+                                cell.classList.remove('fir-selected', 'checked', 'selected');
+                            }
+                            r.dispatchEvent(new Event('change', { bubbles: true }));
+                        });
+                    }
+                    // Uncheck radios by IDs
+                    if (data.radioIds && Array.isArray(data.radioIds)) {
+                        data.radioIds.forEach(id => {
+                            const r = document.getElementById(id);
+                            if (r) {
+                                r.checked = false;
+                                r.removeAttribute('checked');
+                                const cell = r.closest('.cell-input, .fir-radio, tr, td, label');
+                                if (cell) {
+                                    cell.querySelectorAll('.fir-selected, .checked, .selected').forEach(el => el.classList.remove('fir-selected', 'checked', 'selected'));
+                                    cell.classList.remove('fir-selected', 'checked', 'selected');
+                                }
+                                r.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                        });
+                    }
+                    // Clear specify input
+                    if (data.specId) {
+                        const inp = document.getElementById(data.specId);
+                        if (inp) {
+                            inp.value = '';
+                            inp.dispatchEvent(new Event('input', { bubbles: true }));
+                            inp.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    }
+                    if (data.specName) {
+                        document.querySelectorAll(`input[name="${data.specName}"], textarea[name="${data.specName}"]`).forEach(inp => {
+                            inp.value = '';
+                            inp.dispatchEvent(new Event('input', { bubbles: true }));
+                            inp.dispatchEvent(new Event('change', { bubbles: true }));
+                        });
+                    }
+                    // Clear any text input inside the row element
+                    if (data.groupName) {
+                        const anyRadio = document.querySelector(`input[name="${data.groupName}"]`);
+                        if (anyRadio) {
+                            const tr = anyRadio.closest('tr, .row, .grid-row');
+                            if (tr) {
+                                tr.querySelectorAll('input[type="text"], input[type="search"], textarea').forEach(inp => {
+                                    inp.value = '';
+                                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                                });
+                            }
+                        }
+                    }
+                }""", {
+                    "groupName": row_name,
+                    "radioIds": radio_ids,
+                    "specId": spec_id,
+                    "specName": spec_name
+                })
+
+                row_results.append({
+                    "row": row_label,
+                    "selected": "(Unrated)",
+                    "answered": False
+                })
+                continue
+
+            # --- CASE 2: Substantive row OR rated Other row ---
+            if is_other:
+                target_col = col_map[ri]
+            else:
+                target_col = col_map.get(ri)
+                # Guarantee substantive column selection (never opt-out like 'Don't know')
+                if target_col is None or target_col not in substantive_cols:
+                    target_col = substantive_cols[ri % len(substantive_cols)]
+
             if not cols:
                 continue
 
@@ -854,16 +1030,46 @@ class ActionExecutor:
                     except Exception:
                         pass
             else:
-                row_name = row.get("groupName")
                 if row_name:
                     all_radios = self.page.locator(f'input[type="radio"][name="{row_name}"]').all()
                     if target_col < len(all_radios):
                         safe_click(all_radios[target_col])
 
+            # If this is an Other row that was rated, fill the specify input!
+            spec_text = None
+            if is_other:
+                spec_text = spec_map.get(ri) or top_specify or self._synthesize_grid_other_text(field, persona)
+                self.page.evaluate("""(data) => {
+                    let inp = null;
+                    if (data.specId) inp = document.getElementById(data.specId);
+                    if (!inp && data.specName) inp = document.querySelector(`input[name="${data.specName}"], textarea[name="${data.specName}"]`);
+                    if (!inp && data.groupName) {
+                        const anyR = document.querySelector(`input[name="${data.groupName}"]`);
+                        if (anyR) {
+                            const tr = anyR.closest('tr, .row, .grid-row') || anyR.parentElement;
+                            if (tr) inp = tr.querySelector('input[type="text"], input[type="search"], textarea');
+                        }
+                    }
+                    if (inp) {
+                        inp.removeAttribute('disabled');
+                        inp.disabled = false;
+                        inp.value = data.text;
+                        inp.dispatchEvent(new Event('input', { bubbles: true }));
+                        inp.dispatchEvent(new Event('change', { bubbles: true }));
+                        return true;
+                    }
+                    return false;
+                }""", {
+                    "specId": spec_id,
+                    "specName": spec_name,
+                    "groupName": row_name,
+                    "text": spec_text
+                })
+
             col_label = col_opt.get("label") or (col_headers[target_col] if target_col < len(col_headers) else f"Col {target_col + 1}")
             row_results.append({
-                "row": row.get("rowLabel"),
-                "selected": col_label,
+                "row": row_label,
+                "selected": col_label + (f" (specify: {spec_text})" if is_other and spec_text else ""),
                 "answered": True
             })
             time.sleep(0.1)
