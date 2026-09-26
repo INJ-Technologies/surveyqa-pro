@@ -326,10 +326,25 @@ class ActionExecutor:
         if not options:
             return None
 
-        # Guarantee at least 1 substantive selection to satisfy Decipher validation rules
-        if not sel_indices:
-            substantive = [i for i, o in enumerate(options) if not is_optout_option(o.get("label", ""))]
-            sel_indices = [substantive[0]] if substantive else [0]
+        # Check if question requires a minimum number of selections (e.g. "at least 3 items")
+        min_required = field.get("minSelections") or 1
+        q_text = (field.get("questionLabel", "") + " " + field.get("questionHint", "")).lower()
+        m = re.search(r"at\s+least\s+(one|two|three|four|five|[0-9]+)", q_text)
+        if m:
+            word_map = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+            val = word_map.get(m.group(1)) or (int(m.group(1)) if m.group(1).isdigit() else 1)
+            min_required = max(min_required, val)
+
+        substantive = [i for i, o in enumerate(options) if not is_optout_option(o.get("label", ""))]
+
+        # Guarantee at least min_required substantive selections
+        sel_indices = [i for i in sel_indices if i in substantive]
+        if len(sel_indices) < min_required and substantive:
+            for s_idx in substantive:
+                if s_idx not in sel_indices:
+                    sel_indices.append(s_idx)
+                if len(sel_indices) >= min_required:
+                    break
 
         # Uncheck any opt-outs if substantive options are selected
         has_substantive = any(not is_optout_option(options[i].get("label", "")) for i in sel_indices if 0 <= i < len(options))
@@ -485,7 +500,52 @@ class ActionExecutor:
             if loc and loc.count() > 0:
                 try:
                     if chosen_rank:
-                        loc.select_option(label=chosen_rank)
+                        selected_ok = False
+                        # 1. Try label
+                        try:
+                            loc.select_option(label=chosen_rank, timeout=1200)
+                            selected_ok = True
+                        except Exception:
+                            pass
+
+                        # 2. Try value
+                        if not selected_ok:
+                            try:
+                                m_num = re.search(r"\d+", str(chosen_rank))
+                                val_to_try = m_num.group(0) if m_num else str(chosen_rank)
+                                loc.select_option(value=val_to_try, timeout=1200)
+                                selected_ok = True
+                            except Exception:
+                                pass
+
+                        # 3. Direct DOM selection with change/input event dispatch
+                        if not selected_ok:
+                            try:
+                                loc.evaluate("""(el, targetRank) => {
+                                    const clean = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                                    const targetClean = clean(targetRank);
+                                    const targetNum = (targetRank.match(/\\d+/) || [''])[0];
+
+                                    for (let opt of el.options) {
+                                        const optClean = clean(opt.text);
+                                        const optValClean = clean(opt.value);
+                                        const optNum = (opt.text.match(/\\d+/) || opt.value.match(/\\d+/) || [''])[0];
+
+                                        if (optClean === targetClean ||
+                                            optValClean === targetClean ||
+                                            (targetNum && optNum === targetNum) ||
+                                            opt.text.includes(targetRank) ||
+                                            opt.value === targetRank) {
+                                            el.value = opt.value;
+                                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                                            return true;
+                                        }
+                                    }
+                                    return false;
+                                }""", chosen_rank)
+                            except Exception:
+                                pass
                     else:
                         loc.evaluate("""el => {
                             const emptyOpt = Array.from(el.options).find(o => !o.value || /select|--|choose|^none$|^$/i.test(o.text));

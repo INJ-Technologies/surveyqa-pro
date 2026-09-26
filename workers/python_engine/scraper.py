@@ -268,7 +268,7 @@ class PageScraper:
             // ── Helper to find question label and instruction/hint for a control ──
             const isOptOutText = (t) => {
                 if (!t) return false;
-                return /don'?t\s+know|do\s+not\s+know|not\s+sure|unsure|cannot\s+say|prefer\s+not|none\s+of|^\s*none\s*$|not\s+applicable|^\s*n\/?a\s*$/i.test(t);
+                return /don'?t\\s+know|do\\s+not\\s+know|not\\s+sure|unsure|cannot\\s+say|prefer\\s+not|none\\s+of|^\\s*none\\s*$|not\\s+applicable|^\\s*n\\/?a\\s*$/i.test(t);
             };
 
             const getQuestionForControl = (el) => {
@@ -541,7 +541,7 @@ class PageScraper:
             selects.forEach((sel) => {
                 const optTexts = Array.from(sel.options).map(o => cleanText(o.text));
                 const meaningfulOpts = optTexts.filter(t => !/select|--|choose|^none$|^$/i.test(t));
-                const rankLikeOpts = meaningfulOpts.filter(t => /^(rank\s*)?[0-9]+(\w+)?$/i.test(t) || /^(top\s*)?[0-9]+/i.test(t) || /^[0-9]+(st|nd|rd|th)$/i.test(t) || /^#[0-9]+$/.test(t));
+                const rankLikeOpts = meaningfulOpts.filter(t => /^(rank\\s*)?[0-9]+(\\w+)?$/i.test(t) || /^(top\\s*)?[0-9]+/i.test(t) || /^[0-9]+(st|nd|rd|th)$/i.test(t) || /^#[0-9]+$/.test(t));
 
                 const container = sel.closest('table, .qblock, .question, [class*="qblock"], fieldset') || sel.parentElement;
                 const containerText = cleanText(container?.innerText || '');
@@ -565,7 +565,7 @@ class PageScraper:
                 const containerText = cleanText(container?.innerText || '') + ' ' + (questions.join(' '));
 
                 let detectedRankLimit = null;
-                const matchLimit = containerText.match(/(?:rank|select)\s+(?:the\s+)?(?:top\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)/i);
+                const matchLimit = containerText.match(/(?:rank|select)\\s+(?:the\\s+)?(?:top\\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)/i);
                 if (matchLimit) {
                     const wordMap = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
                     const parsed = wordMap[matchLimit[1].toLowerCase()] || parseInt(matchLimit[1], 10);
@@ -690,7 +690,7 @@ class PageScraper:
                 // Exclude if inside an "other" or "specify" row/container or if name/id indicates specify
                 const row = inp.closest('tr, [class*="row"], .other, [class*="other"], .specify, [class*="specify"]');
                 const rowText = row ? cleanText(row.innerText || '') : '';
-                if (/other\s*\(|please\s*specify|^other$/i.test(rowText) ||
+                if (/other\\s*\\(|please\\s*specify|^other$/i.test(rowText) ||
                     /specify|other/i.test(inp.name || '') ||
                     /specify|other/i.test(inp.id || '')) {
                     claimedSpecifyInputs.add(inp);
