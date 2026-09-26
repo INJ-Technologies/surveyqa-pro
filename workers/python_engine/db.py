@@ -258,7 +258,6 @@ class DBClient:
             "scenario_name": "scenario_name",
             "proxy_ip": "proxy_ip",
             "proxy_country": "proxy_country",
-            "living_story": "living_story",
         }
 
         for k, v in kwargs.items():
@@ -268,23 +267,33 @@ class DBClient:
 
         vals.append(session_id)
         sql = f"UPDATE sessions SET {', '.join(cols)} WHERE id = %s"
-        with conn.cursor() as cur:
-            cur.execute(sql, tuple(vals))
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, tuple(vals))
+        except Exception as e:
+            print(f"[DB] Warning: update_session_status failed: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
     def update_session_progress(
         self,
         session_id: str,
         question_count: int,
         total_duration_s: int,
-        living_story: Optional[str] = None
+        **kwargs
     ):
         conn = self.get_connection()
         cols = ["question_count = %s", "total_duration_s = %s", "updated_at = NOW()"]
-        vals = [question_count, total_duration_s]
-        if living_story:
-            cols.append("living_story = %s")
-            vals.append(living_story)
-        vals.append(session_id)
+        vals = [question_count, total_duration_s, session_id]
         sql = f"UPDATE sessions SET {', '.join(cols)} WHERE id = %s"
-        with conn.cursor() as cur:
-            cur.execute(sql, tuple(vals))
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, tuple(vals))
+        except Exception as e:
+            print(f"[DB] Warning: update_session_progress failed: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass

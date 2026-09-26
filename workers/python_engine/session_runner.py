@@ -293,8 +293,7 @@ class SurveySessionRunner:
                         self.db.update_session_progress(
                             session_id=self.session_id,
                             question_count=current_page,
-                            total_duration_s=int(time.time() - start_time),
-                            living_story=story_state.cumulative_story
+                            total_duration_s=int(time.time() - start_time)
                         )
                         break
 
@@ -374,8 +373,7 @@ class SurveySessionRunner:
                     self.db.update_session_progress(
                         session_id=self.session_id,
                         question_count=current_page,
-                        total_duration_s=int(time.time() - start_time),
-                        living_story=story_state.cumulative_story
+                        total_duration_s=int(time.time() - start_time)
                     )
 
                     # Log each answer to session_answers table
@@ -451,7 +449,6 @@ class SurveySessionRunner:
             total_duration_s=total_duration,
             question_count=current_page,
             model_used=model_name,
-            living_story=story_state.cumulative_story,
         )
 
         return {

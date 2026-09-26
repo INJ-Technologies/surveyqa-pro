@@ -440,6 +440,7 @@ const migrate = async () => {
     await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS validation_errors INTEGER DEFAULT 0`);
     await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS platform_detected VARCHAR(50)`);
     await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS survey_map_id UUID REFERENCES survey_maps(id) ON DELETE SET NULL`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS living_story TEXT`);
 
     // ─── INDEXES ───────────────────────────────────────────────────────────
     const indexes = [
