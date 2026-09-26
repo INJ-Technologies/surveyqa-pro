@@ -298,53 +298,34 @@ class PageScraper:
             // ── Helper to find specify/other input near a radio/checkbox ──
             const findSpecifyInput = (inputEl, optLabel) => {
                 const isSpecifyOpt = /other|specify|please\\s*state|explain|details|write[- ]in|qualify/i.test(optLabel || '');
-
-                // 1. Traverse parent hierarchy (choice wrapper, td, tr, etc.)
-                let node = inputEl.parentElement;
-                for (let i = 0; i < 5; i++) {
-                    if (!node || node === document.body) break;
-                    const textInp = node.querySelector('input[type="text"], input[type="search"], textarea');
-                    if (textInp && textInp !== inputEl) {
-                        const hasMultipleControls = node.querySelectorAll('input[type="radio"], input[type="checkbox"]').length > 1;
-                        if (!hasMultipleControls || isSpecifyOpt) {
-                            claimedSpecifyInputs.add(textInp);
-                            return {
-                                found: true,
-                                id: textInp.id || null,
-                                name: textInp.name || null,
-                                placeholder: textInp.placeholder || '',
-                                value: textInp.value || ''
-                            };
-                        }
-                    }
-                    if (node.querySelectorAll('input[type="radio"], input[type="checkbox"]').length > 1 && !isSpecifyOpt) break;
-                    node = node.parentElement;
+                // CRITICAL: If this option is NOT explicitly an Other/Specify option, it CANNOT have a specify box!
+                if (!isSpecifyOpt) {
+                    return null;
                 }
 
-                // 2. Check table row or immediate sibling wrapper
-                const cell = inputEl.closest('td, th');
-                if (cell && cell.parentElement) {
-                    const row = cell.parentElement;
-                    const rowInp = row.querySelector('input[type="text"], input[type="search"], textarea');
-                    if (rowInp) {
-                        claimedSpecifyInputs.add(rowInp);
+                // 1. Check immediate choice container or row
+                const choiceWrapper = inputEl.closest('tr, .row, .choice, .element, [class*="choice"], [class*="option"], label');
+                if (choiceWrapper) {
+                    const inp = choiceWrapper.querySelector('input[type="text"], input[type="search"], textarea');
+                    if (inp && inp !== inputEl) {
+                        claimedSpecifyInputs.add(inp);
                         return {
                             found: true,
-                            id: rowInp.id || null,
-                            name: rowInp.name || null,
-                            placeholder: rowInp.placeholder || '',
-                            value: rowInp.value || ''
+                            id: inp.id || null,
+                            name: inp.name || null,
+                            placeholder: inp.placeholder || '',
+                            value: inp.value || ''
                         };
                     }
                 }
 
-                // Sibling wrapper (e.g. <div class="choice"> followed by <div class="open-ended"> or <div class="oe">)
-                const wrapper = inputEl.closest('.choice, .element, [class*="choice"], [class*="option"], label') || inputEl.parentElement;
-                if (wrapper) {
-                    let sib = wrapper.nextElementSibling;
+                // 2. Next sibling of choice wrapper or cell
+                const parent = inputEl.parentElement;
+                if (parent) {
+                    let sib = parent.nextElementSibling;
                     for (let j = 0; j < 3 && sib; j++) {
                         const sibInp = (sib.matches && sib.matches('input[type="text"], input[type="search"], textarea')) ? sib : sib.querySelector('input[type="text"], input[type="search"], textarea');
-                        if (sibInp && (isSpecifyOpt || /(oe|specify|other)/i.test(sibInp.id || sibInp.name || ''))) {
+                        if (sibInp) {
                             claimedSpecifyInputs.add(sibInp);
                             return {
                                 found: true,
@@ -358,23 +339,21 @@ class PageScraper:
                     }
                 }
 
-                // 3. If option label is explicitly "Other / Specify", search question block for any unclaimed text input (e.g. oe250927.0)
-                if (isSpecifyOpt) {
-                    const qBlock = inputEl.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], [class*="question"], fieldset, form') || document;
-                    const allText = Array.from(qBlock.querySelectorAll('input[type="text"], input[type="search"], textarea'))
-                        .filter(inp => isVisible(inp) && !claimedSpecifyInputs.has(inp));
+                // 3. Search question block for unclaimed oe... or specify... text input
+                const qBlock = inputEl.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], [class*="question"], fieldset, form') || document;
+                const allText = Array.from(qBlock.querySelectorAll('input[type="text"], input[type="search"], textarea'))
+                    .filter(inp => isVisible(inp) && !claimedSpecifyInputs.has(inp));
 
-                    const match = allText.find(inp => /(oe|specify|other)/i.test((inp.id || '') + ' ' + (inp.name || ''))) || allText[0];
-                    if (match) {
-                        claimedSpecifyInputs.add(match);
-                        return {
-                            found: true,
-                            id: match.id || null,
-                            name: match.name || null,
-                            placeholder: match.placeholder || '',
-                            value: match.value || ''
-                        };
-                    }
+                const match = allText.find(inp => /(oe|specify|other)/i.test((inp.id || '') + ' ' + (inp.name || ''))) || allText[0];
+                if (match) {
+                    claimedSpecifyInputs.add(match);
+                    return {
+                        found: true,
+                        id: match.id || null,
+                        name: match.name || null,
+                        placeholder: match.placeholder || '',
+                        value: match.value || ''
+                    };
                 }
 
                 return null;
@@ -951,8 +930,11 @@ class PageScraper:
 
                     if (radio.checked) {
                         radioGroups[name].selected = labelText;
-                        const spec = getSpecText(radio);
-                        if (spec) radioGroups[name].specText = spec;
+                        const isOtherRadio = /other|specify|please\\s*state|explain|details|write[- ]in|qualify/i.test(labelText);
+                        if (isOtherRadio) {
+                            const spec = getSpecText(radio);
+                            if (spec) radioGroups[name].specText = spec;
+                        }
                     }
                 });
 
@@ -1007,10 +989,13 @@ class PageScraper:
 
                     if (cb.checked) {
                         cbGroups[gKey].selected.push(labelText);
-                        const spec = getSpecText(cb);
-                        if (spec) {
-                            if (!cbGroups[gKey].specText) cbGroups[gKey].specText = spec;
-                            else cbGroups[gKey].specText += `, ${spec}`;
+                        const isOtherCb = /other|specify|please\\s*state|explain|details|write[- ]in|qualify/i.test(labelText);
+                        if (isOtherCb) {
+                            const spec = getSpecText(cb);
+                            if (spec) {
+                                if (!cbGroups[gKey].specText) cbGroups[gKey].specText = spec;
+                                else cbGroups[gKey].specText += `, ${spec}`;
+                            }
                         }
                     }
                 });

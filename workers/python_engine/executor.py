@@ -272,14 +272,21 @@ class ActionExecutor:
         time.sleep(0.15)
 
         # Handle follow-up specify box if present ONLY when an Other/Specify option is chosen
-        is_other_opt = bool(target_opt.get("hasSpecify")) or bool(re.search(r"other|specify|please\s*state|explain", opt_label, re.I))
+        is_other_opt = bool(re.search(r"other|specify|please\\s*state|explain|details|write[- ]in|qualify", opt_label, re.I))
 
         spec_text = None
         if is_other_opt:
             spec_text = ans.get("specifyText")
             if not spec_text:
-                role = (persona or {}).get("job_title") or (persona or {}).get("role") or "Strategy & Operations"
-                spec_text = role
+                q_text = field.get("questionLabel", "").lower()
+                if any(w in q_text for w in ["job", "role", "title", "function", "department"]):
+                    spec_text = (persona or {}).get("job_title") or "Operations"
+                elif any(w in q_text for w in ["country", "location", "where"]):
+                    spec_text = (persona or {}).get("country") or "United States"
+                elif any(w in q_text for w in ["industry", "sector", "business"]):
+                    spec_text = (persona or {}).get("industry") or "Technology"
+                else:
+                    spec_text = "Standard operations"
 
             spec_id = target_opt.get("specifyId")
             if spec_id:
@@ -328,8 +335,17 @@ class ActionExecutor:
             # Decipher validates: "Since you specified extra information, please also select a corresponding answer. Please select one."
             self.page.evaluate("""(data) => {
                 const r = document.querySelector(`input[type="radio"][name="${data.groupName}"]:checked`) || (data.optId ? document.getElementById(data.optId) : null);
-                if (!r) return;
-                const qBlock = r.closest('.question, .qblock, [class*="question"], fieldset, form') || r.parentElement;
+                let qBlock = r ? r.closest('.question, .qblock, [class*="question"], fieldset, form, table') : null;
+                if (!qBlock && r) {
+                    let p = r.parentElement;
+                    for (let i = 0; i < 6 && p; i++) {
+                        if (p.querySelector('input[type="text"], textarea')) {
+                            qBlock = p;
+                            break;
+                        }
+                        p = p.parentElement;
+                    }
+                }
                 if (qBlock) {
                     qBlock.querySelectorAll('input[type="text"], input[type="search"], textarea').forEach(inp => {
                         inp.value = '';
@@ -337,6 +353,18 @@ class ActionExecutor:
                         inp.dispatchEvent(new Event('change', { bubbles: true }));
                     });
                 }
+                const gName = (data.groupName || '');
+                const m = gName.match(/\\d+/);
+                const qNum = m ? m[0] : '';
+                document.querySelectorAll('input[type="text"], textarea').forEach(inp => {
+                    const idOrName = ((inp.id || '') + ' ' + (inp.name || '')).toLowerCase();
+                    if ((qNum && idOrName.includes(qNum) && (idOrName.startsWith('oe') || idOrName.includes('oe'))) ||
+                        (r && r.closest('.question, [class*="question"]') && r.closest('.question, [class*="question"]').contains(inp))) {
+                        inp.value = '';
+                        inp.dispatchEvent(new Event('input', { bubbles: true }));
+                        inp.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                });
             }""", {"groupName": opt_name or group_name, "optId": opt_id})
 
         return {
@@ -420,12 +448,19 @@ class ActionExecutor:
             selected_labels.append(opt_label)
 
             # Handle specify if present ONLY for this option
-            is_other = bool(opt.get("hasSpecify")) or bool(re.search(r"other|specify|please\s*state|explain", opt_label, re.I))
+            is_other = bool(re.search(r"other|specify|please\\s*state|explain|details|write[- ]in|qualify", opt_label, re.I))
             if is_other:
                 spec_text = ans.get("specifyText")
                 if not spec_text:
-                    role = (persona or {}).get("job_title") or (persona or {}).get("role") or "Strategy & Operations"
-                    spec_text = role
+                    q_text = field.get("questionLabel", "").lower()
+                    if any(w in q_text for w in ["job", "role", "title", "function", "department"]):
+                        spec_text = (persona or {}).get("job_title") or "Operations"
+                    elif any(w in q_text for w in ["country", "location", "where"]):
+                        spec_text = (persona or {}).get("country") or "United States"
+                    elif any(w in q_text for w in ["industry", "sector", "business"]):
+                        spec_text = (persona or {}).get("industry") or "Technology"
+                    else:
+                        spec_text = "Standard operations"
                 spec_id = opt.get("specifyId")
                 if spec_id:
                     loc = locate_by_id(self.page, spec_id)
@@ -642,14 +677,22 @@ class ActionExecutor:
             # Handle specify input for this row (e.g. "Other (Please specify)")
             spec_id = item.get("specifyId")
             spec_name = item.get("specifyName")
-            if spec_id or spec_name:
+            is_other_rank = bool(re.search(r"other|specify|please\\s*state|explain|details|write[- ]in|qualify", item.get("itemLabel", ""), re.I))
+            if (spec_id or spec_name) and is_other_rank:
                 spec_loc = locate_by_id(self.page, spec_id) if spec_id else self.page.locator(f'[name="{spec_name}"]')
                 if spec_loc.count() > 0:
                     if chosen_rank:
                         spec_text = ans.get("specifyText")
                         if not spec_text:
-                            role = (persona or {}).get("job_title") or (persona or {}).get("role") or "Strategy & Operations"
-                            spec_text = role
+                            q_text = field.get("questionLabel", "").lower()
+                            if any(w in q_text for w in ["job", "role", "title", "function", "department"]):
+                                spec_text = (persona or {}).get("job_title") or "Operations"
+                            elif any(w in q_text for w in ["country", "location", "where"]):
+                                spec_text = (persona or {}).get("country") or "United States"
+                            elif any(w in q_text for w in ["industry", "sector", "business"]):
+                                spec_text = (persona or {}).get("industry") or "Technology"
+                            else:
+                                spec_text = "Standard operations"
                         spec_loc.first.evaluate("""(el, val) => {
                             el.removeAttribute('disabled');
                             el.disabled = false;
@@ -663,6 +706,14 @@ class ActionExecutor:
                             el.dispatchEvent(new Event('input', { bubbles: true }));
                             el.dispatchEvent(new Event('change', { bubbles: true }));
                         }""")
+            elif spec_id or spec_name:
+                spec_loc = locate_by_id(self.page, spec_id) if spec_id else self.page.locator(f'[name="{spec_name}"]')
+                if spec_loc.count() > 0:
+                    spec_loc.first.evaluate("""el => {
+                        el.value = '';
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }""")
 
             if chosen_rank:
                 final_assignments.append({
