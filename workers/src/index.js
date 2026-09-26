@@ -4756,12 +4756,15 @@ const processSession = async (job) => {
             if (ipData?.ip) {
         console.log(`[Worker] IP: ${ipData.ip} (${proxyCountry})`);
 
-        // Duplicate IP check before recording
-        const isDuplicateIP = await checkDuplicateIP(projectId, ipData.ip);
-        if (isDuplicateIP) {
-          console.warn(`[Worker] Duplicate IP detected: ${ipData.ip} — flagging session`);
-          await logAnomaly(projectId, sessionId, 'DUPLICATE_IP', { ip: ipData.ip }, 'warning');
-          await logSessionEvent(sessionId, 'flag_warning', { flag: 'DUPLICATE_IP', ip: ipData.ip });
+        // Duplicate IP check — skip for internal testing (same server IP always)
+        let isDuplicateIP = false;
+        if (!internalTesting) {
+          isDuplicateIP = await checkDuplicateIP(projectId, ipData.ip);
+          if (isDuplicateIP) {
+            console.warn(`[Worker] Duplicate IP detected: ${ipData.ip} — flagging session`);
+            await logAnomaly(projectId, sessionId, 'DUPLICATE_IP', { ip: ipData.ip }, 'warning');
+            await logSessionEvent(sessionId, 'flag_warning', { flag: 'DUPLICATE_IP', ip: ipData.ip });
+          }
         }
 
         await recordUsedIP(projectId, sessionId, ipData.ip);
@@ -4937,6 +4940,12 @@ const processSession = async (job) => {
           // Normal / no persona — default average human
           baseMin = 8_000;
           baseMax = 15_000; // 8–15s
+        }
+
+        // Internal testing — skip reading delay entirely
+        if (internalTesting) {
+          baseMin = 500;
+          baseMax = 1_500;
         }
 
         // Each additional question on the page adds 60–80% of base time
@@ -5203,16 +5212,20 @@ const processSession = async (job) => {
         // ── Post-answer hesitation delay ─────────────────────────────────────────────
         // After selecting an answer, a real person pauses before clicking Next.
         // Expressive/detailed personas take longer (reviewing their answer).
-        {
+                {
           const styleStr = (
             persona?.behavioural_attrs?.responseStyle || ""
           ).toLowerCase();
           let hesMs;
-          if (styleStr.includes("expressive") || styleStr.includes("detail"))
+          if (internalTesting) {
+            hesMs = 300 + Math.random() * 200; // near-instant for testing
+          } else if (styleStr.includes("expressive") || styleStr.includes("detail")) {
             hesMs = 3000 + Math.random() * 4000;
-          else if (styleStr.includes("terse") || styleStr.includes("minimal"))
+          } else if (styleStr.includes("terse") || styleStr.includes("minimal")) {
             hesMs = 800 + Math.random() * 1200;
-          else hesMs = 1500 + Math.random() * 2500;
+          } else {
+            hesMs = 1500 + Math.random() * 2500;
+          }
           await page.waitForTimeout(Math.round(hesMs)).catch(() => {});
         }
         // Last-resort: ask AI to fill anything it missed on this page
@@ -5232,7 +5245,7 @@ const processSession = async (job) => {
           agentSetup.personaBrief,
         );
 
-        await page.waitForTimeout(800);
+        await page.waitForTimeout(internalTesting ? 200 : 800);
         const pageOptionsAfter = await capturePageOptions(page);
         const gridAnswers = await captureGridAnswers(page);
 
