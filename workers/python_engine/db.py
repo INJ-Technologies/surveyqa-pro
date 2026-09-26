@@ -258,6 +258,7 @@ class DBClient:
             "scenario_name": "scenario_name",
             "proxy_ip": "proxy_ip",
             "proxy_country": "proxy_country",
+            "living_story": "living_story",
         }
 
         for k, v in kwargs.items():
@@ -265,6 +266,24 @@ class DBClient:
                 cols.append(f"{field_map[k]} = %s")
                 vals.append(v)
 
+        vals.append(session_id)
+        sql = f"UPDATE sessions SET {', '.join(cols)} WHERE id = %s"
+        with conn.cursor() as cur:
+            cur.execute(sql, tuple(vals))
+
+    def update_session_progress(
+        self,
+        session_id: str,
+        question_count: int,
+        total_duration_s: int,
+        living_story: Optional[str] = None
+    ):
+        conn = self.get_connection()
+        cols = ["question_count = %s", "total_duration_s = %s", "updated_at = NOW()"]
+        vals = [question_count, total_duration_s]
+        if living_story:
+            cols.append("living_story = %s")
+            vals.append(living_story)
         vals.append(session_id)
         sql = f"UPDATE sessions SET {', '.join(cols)} WHERE id = %s"
         with conn.cursor() as cur:

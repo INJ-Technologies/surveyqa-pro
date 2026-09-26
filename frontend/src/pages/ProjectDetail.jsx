@@ -3530,7 +3530,7 @@ function SessionReportModal({
   const getPageEvents = () => {
     if (!detail?.events) return [];
     return detail.events
-      .filter((e) => e.event_type === "page_answered")
+      .filter((e) => e.event_type === "page_answered" || e.event_type === "page_view")
       .map((e) => ({
         ...e,
         payload:

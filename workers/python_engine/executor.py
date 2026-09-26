@@ -24,6 +24,17 @@ def safe_click(locator: Locator):
             pass
 
 
+def locate_by_id(page: Page, el_id: str) -> Locator:
+    """
+    Safely locates an element by its ID attribute, properly handling
+    special characters like dots, colons, and brackets common in survey platforms.
+    """
+    if not el_id:
+        return page.locator("nonexistent-selector")
+    clean_id = el_id.replace('"', '\\"')
+    return page.locator(f'[id="{clean_id}"]')
+
+
 class ActionExecutor:
     def __init__(self, page: Page):
         self.page = page
@@ -137,10 +148,20 @@ class ActionExecutor:
         # Click radio
         clicked = False
         if opt_id:
-            loc = self.page.locator(f"#{opt_id}")
+            loc = locate_by_id(self.page, opt_id)
             if loc.count() > 0:
                 safe_click(loc)
                 clicked = True
+                try:
+                    if not loc.is_checked():
+                        clean_id = opt_id.replace('"', '\\"')
+                        lbl = self.page.locator(f'label[for="{clean_id}"]')
+                        if lbl.count() > 0:
+                            safe_click(lbl)
+                        if not loc.is_checked():
+                            loc.evaluate("el => { el.checked = true; el.dispatchEvent(new Event('change', {bubbles: true})); }")
+                except Exception:
+                    pass
 
         if not clicked and group_name:
             if opt_val:
@@ -166,8 +187,8 @@ class ActionExecutor:
 
             spec_id = target_opt.get("specifyId")
             if spec_id:
-                loc = self.page.locator(f"#{spec_id}")
-                if loc.is_visible():
+                loc = locate_by_id(self.page, spec_id)
+                if loc.count() > 0 and loc.is_visible():
                     loc.fill(spec_text)
             else:
                 # Find input near radio
@@ -226,10 +247,20 @@ class ActionExecutor:
 
             clicked = False
             if opt_id:
-                loc = self.page.locator(f"#{opt_id}")
+                loc = locate_by_id(self.page, opt_id)
                 if loc.count() > 0:
                     safe_click(loc)
                     clicked = True
+                    try:
+                        if not loc.is_checked():
+                            clean_id = opt_id.replace('"', '\\"')
+                            lbl = self.page.locator(f'label[for="{clean_id}"]')
+                            if lbl.count() > 0:
+                                safe_click(lbl)
+                            if not loc.is_checked():
+                                loc.evaluate("el => { el.checked = true; el.dispatchEvent(new Event('change', {bubbles: true})); }")
+                    except Exception:
+                        pass
 
             if not clicked and group_name:
                 if opt_val:
@@ -301,12 +332,12 @@ class ActionExecutor:
             sel_name = item.get("name")
             try:
                 if sel_id:
-                    loc = self.page.locator(f"#{sel_id}")
-                    if loc.is_visible():
+                    loc = locate_by_id(self.page, sel_id)
+                    if loc.count() > 0 and loc.is_visible():
                         loc.select_option(label=chosen_rank)
                 elif sel_name:
                     loc = self.page.locator(f'select[name="{sel_name}"]')
-                    if loc.is_visible():
+                    if loc.count() > 0 and loc.is_visible():
                         loc.select_option(label=chosen_rank)
             except Exception:
                 pass
@@ -357,9 +388,19 @@ class ActionExecutor:
             radio_id = col_opt.get("id")
 
             if radio_id:
-                loc = self.page.locator(f"#{radio_id}")
+                loc = locate_by_id(self.page, radio_id)
                 if loc.count() > 0:
                     safe_click(loc)
+                    try:
+                        if not loc.is_checked():
+                            clean_id = radio_id.replace('"', '\\"')
+                            lbl = self.page.locator(f'label[for="{clean_id}"]')
+                            if lbl.count() > 0:
+                                safe_click(lbl)
+                            if not loc.is_checked():
+                                loc.evaluate("el => { el.checked = true; el.dispatchEvent(new Event('change', {bubbles: true})); }")
+                    except Exception:
+                        pass
             else:
                 row_name = row.get("groupName")
                 if row_name:
@@ -396,11 +437,13 @@ class ActionExecutor:
 
         try:
             if sel_id:
-                loc = self.page.locator(f"#{sel_id}")
-                loc.select_option(label=label)
+                loc = locate_by_id(self.page, sel_id)
+                if loc.count() > 0:
+                    loc.select_option(label=label)
             elif sel_name:
                 loc = self.page.locator(f'select[name="{sel_name}"]')
-                loc.select_option(label=label)
+                if loc.count() > 0:
+                    loc.select_option(label=label)
         except Exception:
             pass
 
@@ -429,11 +472,13 @@ class ActionExecutor:
 
         try:
             if f_id:
-                loc = self.page.locator(f"#{f_id}")
-                loc.fill(text_resp)
+                loc = locate_by_id(self.page, f_id)
+                if loc.count() > 0:
+                    loc.fill(text_resp)
             elif f_name:
                 loc = self.page.locator(f'[name="{f_name}"]')
-                loc.fill(text_resp)
+                if loc.count() > 0:
+                    loc.fill(text_resp)
         except Exception:
             pass
 
@@ -456,11 +501,13 @@ class ActionExecutor:
 
         try:
             if f_id:
-                loc = self.page.locator(f"#{f_id}")
-                loc.fill(str(num_val))
+                loc = locate_by_id(self.page, f_id)
+                if loc.count() > 0:
+                    loc.fill(str(num_val))
             elif f_name:
                 loc = self.page.locator(f'[name="{f_name}"]')
-                loc.fill(str(num_val))
+                if loc.count() > 0:
+                    loc.fill(str(num_val))
         except Exception:
             pass
 

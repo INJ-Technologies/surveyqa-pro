@@ -277,7 +277,7 @@ class SurveySessionRunner:
                         # Log exit page event
                         self.db.log_session_event(
                             session_id=self.session_id,
-                            event_type="page_view",
+                            event_type="page_answered",
                             page_num=current_page,
                             payload={
                                 "isExitPage": True,
@@ -289,6 +289,12 @@ class SurveySessionRunner:
                                 "questions": visible_questions,
                                 "story_snapshot": story_state.cumulative_story,
                             }
+                        )
+                        self.db.update_session_progress(
+                            session_id=self.session_id,
+                            question_count=current_page,
+                            total_duration_s=int(time.time() - start_time),
+                            living_story=story_state.cumulative_story
                         )
                         break
 
@@ -347,7 +353,7 @@ class SurveySessionRunner:
                     time_taken = int(time.time() - page_start_time)
                     self.db.log_session_event(
                         session_id=self.session_id,
-                        event_type="page_view",
+                        event_type="page_answered",
                         page_num=current_page,
                         payload={
                             "url": page.url,
@@ -364,6 +370,14 @@ class SurveySessionRunner:
                         }
                     )
 
+                    # Real-time progress update to sessions table
+                    self.db.update_session_progress(
+                        session_id=self.session_id,
+                        question_count=current_page,
+                        total_duration_s=int(time.time() - start_time),
+                        living_story=story_state.cumulative_story
+                    )
+
                     # Log each answer to session_answers table
                     for ans_idx, ea in enumerate(executed_answers):
                         self.db.log_session_answer(
@@ -377,6 +391,17 @@ class SurveySessionRunner:
                             ai_reasoning=qa_rationale,
                             time_spent_s=time_taken
                         )
+
+                    # Loop guard: detect if stuck on repeated validation errors for > 4 attempts
+                    if detected_errors and not executed_answers:
+                        consecutive_error_count = consecutive_error_count + 1 if 'consecutive_error_count' in locals() else 1
+                        if consecutive_error_count >= 5:
+                            print(f"[SessionRunner] Stalled on page errors for 5 consecutive attempts. Stopping loop.")
+                            outcome = "error"
+                            self.db.update_session_status(self.session_id, "error", error_log=f"Validation loop: {detected_errors}")
+                            break
+                    else:
+                        consecutive_error_count = 0
 
                     # 8. Click Next button (with countdown timer awareness)
                     next_clicked = executor.wait_for_timer_and_click_next()
@@ -426,6 +451,7 @@ class SurveySessionRunner:
             total_duration_s=total_duration,
             question_count=current_page,
             model_used=model_name,
+            living_story=story_state.cumulative_story,
         )
 
         return {
