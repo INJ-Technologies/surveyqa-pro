@@ -9,3 +9,16 @@ github_ssh_key
 github_ssh_key.pub
 *.pem
 *.key
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+ENV/
+
+# Runtime artifacts
+screenshots/
+traces/

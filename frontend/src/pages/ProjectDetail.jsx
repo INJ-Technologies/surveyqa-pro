@@ -44,6 +44,8 @@ import {
   ChevronDown,
   Pencil,
   Copy,
+  BookOpen,
+  Sparkles,
 } from "lucide-react";
 
 const FONT =
@@ -3506,6 +3508,14 @@ function SessionReportModal({
           html += `<div style="font-size:0.78rem;color:#2563eb;background:#f0f7ff;padding:6px 10px;border-radius:6px;margin-bottom:12px;word-break:break-all;">🔗 ${payload.url}</div>`;
         }
 
+        if (payload.qa_rationale || payload.story_update) {
+          html += `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;margin-bottom:14px;">
+            <div style="font-size:0.72rem;font-weight:700;color:#15803d;text-transform:uppercase;margin-bottom:4px;">🎯 QA Decision Rationale & Story Evolution</div>
+            ${payload.qa_rationale ? `<div style="font-size:0.83rem;color:#166534;margin-bottom:4px;"><strong>QA Rationale:</strong> ${payload.qa_rationale}</div>` : ""}
+            ${payload.story_update ? `<div style="font-size:0.82rem;color:#14532d;font-style:italic;"><strong>Story Update:</strong> "${payload.story_update}"</div>` : ""}
+          </div>`;
+        }
+
         html += `<div style="margin-bottom:16px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
         <div style="padding:6px 10px;background:#f8fafc;font-size:0.72rem;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Screenshot</div>
         <img src="${API_BASE}/sessions/${session.id}/screenshot/page_${i + 1}.png" style="width:100%;display:block;" onerror="this.parentElement.style.display='none'" />
@@ -3552,22 +3562,29 @@ function SessionReportModal({
       })
       .join("");
 
+    const latestStory = pageEvents.slice().reverse().find(e => e.payload?.cumulative_story || e.payload?.story_snapshot)?.payload?.cumulative_story 
+      || pageEvents.slice().reverse().find(e => e.payload?.story_snapshot)?.payload?.story_snapshot
+      || session.living_story;
+
     w.document
       .write(`<html><head><title>Session Report — ${session.id.slice(0, 8)}</title>
       <style>
         body{font-family:Arial,sans-serif;font-size:13px;color:#1e293b;padding:24px;max-width:900px;margin:0 auto;}
         h1{font-size:1.2rem;margin-bottom:4px;}
-        .meta{font-size:0.82rem;color:#64748b;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid #e2e8f0;}
+        .meta{font-size:0.82rem;color:#64748b;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid #e2e8f0;}
+        .story-box{background:#f0f7ff;border:1px solid #bae6fd;border-radius:8px;padding:12px 14px;margin-bottom:20px;line-height:1.5;font-size:0.86rem;}
         @media print{body{padding:12px}}
       </style></head><body>
       <h1>Session Report — ${session.id.slice(0, 8)}</h1>
       <div class="meta">
         Outcome: <strong>${formatLabel(session.outcome)}</strong> &nbsp;|&nbsp;
         Country: ${session.proxy_country || "—"} &nbsp;|&nbsp;
+        Persona: <strong>${session.persona_name || "—"}</strong> &nbsp;|&nbsp;
         Duration: ${fmtDuration(session.total_duration_s)} &nbsp;|&nbsp;
         Response ID: ${session.response_id || "—"} &nbsp;|&nbsp;
         IP: ${getMetaEvent("ip_assigned")?.ip || "—"}
       </div>
+      ${latestStory ? `<div class="story-box"><strong style="color:#0369a1;text-transform:uppercase;font-size:0.74rem;display:block;margin-bottom:4px;">📖 Respondent Persona & Living Story</strong>"${latestStory}"</div>` : ""}
       ${allPagesHtml || "<p>No page data recorded.</p>"}
     </body></html>`);
     w.document.close();
@@ -4132,6 +4149,144 @@ function SessionReportModal({
                     }}
                   >
                     🔗 {activePage.payload.url}
+                  </div>
+                )}
+
+                {/* Cumulative Living Story Card */}
+                {(() => {
+                  const currentStory =
+                    activePage.payload?.cumulative_story ||
+                    activePage.payload?.story_snapshot ||
+                    pageEvents.slice().reverse().find((e) => e.payload?.cumulative_story)?.payload?.cumulative_story ||
+                    session.living_story;
+                  if (!currentStory) return null;
+                  return (
+                    <div
+                      style={{
+                        background: "linear-gradient(135deg, #f0f7ff 0%, #e0f2fe 100%)",
+                        border: "1.5px solid #bae6fd",
+                        borderRadius: 12,
+                        padding: "14px 18px",
+                        marginBottom: 16,
+                        boxShadow: "0 2px 8px rgba(14, 165, 233, 0.08)",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          marginBottom: 6,
+                          flexWrap: "wrap",
+                          gap: 6,
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <BookOpen size={16} color="#0284c7" />
+                          <span
+                            style={{
+                              fontSize: "0.78rem",
+                              fontWeight: 700,
+                              color: "#0369a1",
+                              fontFamily: FONT,
+                              textTransform: "uppercase",
+                              letterSpacing: 0.5,
+                            }}
+                          >
+                            Respondent Persona & Living Story
+                          </span>
+                        </div>
+                        {session.persona_name && (
+                          <span
+                            style={{
+                              fontSize: "0.72rem",
+                              background: "#e0f2fe",
+                              color: "#0284c7",
+                              padding: "2px 8px",
+                              borderRadius: 12,
+                              fontWeight: 600,
+                              border: "1px solid #7dd3fc",
+                              fontFamily: FONT,
+                            }}
+                          >
+                            👤 {session.persona_name}
+                          </span>
+                        )}
+                      </div>
+                      <p
+                        style={{
+                          margin: 0,
+                          fontSize: "0.85rem",
+                          color: "#0f172a",
+                          lineHeight: 1.55,
+                          fontFamily: FONT,
+                        }}
+                      >
+                        "{currentStory}"
+                      </p>
+                    </div>
+                  );
+                })()}
+
+                {/* Page QA Rationale & Story Evolution */}
+                {(activePage.payload?.qa_rationale || activePage.payload?.story_update) && (
+                  <div
+                    style={{
+                      background: "#f0fdf4",
+                      border: "1.5px solid #bbf7d0",
+                      borderRadius: 10,
+                      padding: "12px 16px",
+                      marginBottom: 16,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        marginBottom: 6,
+                      }}
+                    >
+                      <Sparkles size={15} color="#16a34a" />
+                      <span
+                        style={{
+                          fontSize: "0.75rem",
+                          fontWeight: 700,
+                          color: "#15803d",
+                          fontFamily: FONT,
+                          textTransform: "uppercase",
+                          letterSpacing: 0.4,
+                        }}
+                      >
+                        QA Decision Rationale & Story Evolution
+                      </span>
+                    </div>
+                    {activePage.payload?.qa_rationale && (
+                      <div
+                        style={{
+                          fontSize: "0.83rem",
+                          color: "#166534",
+                          marginBottom: activePage.payload?.story_update ? 6 : 0,
+                          lineHeight: 1.5,
+                          fontFamily: FONT,
+                        }}
+                      >
+                        <strong>QA Rationale:</strong> {activePage.payload.qa_rationale}
+                      </div>
+                    )}
+                    {activePage.payload?.story_update && (
+                      <div
+                        style={{
+                          fontSize: "0.82rem",
+                          color: "#14532d",
+                          fontStyle: "italic",
+                          lineHeight: 1.45,
+                          fontFamily: FONT,
+                        }}
+                      >
+                        <strong>Story Update:</strong> "{activePage.payload.story_update}"
+                      </div>
+                    )}
                   </div>
                 )}
                 <div

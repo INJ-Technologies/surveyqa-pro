@@ -3,6 +3,7 @@ const { Worker } = require("bullmq");
 const { chromium } = require("playwright");
 const path = require("path");
 const fs = require("fs");
+const { spawn } = require("child_process");
 
 const readSecret = (name) => {
   try {
@@ -4457,6 +4458,61 @@ const calculateQualityScore = (pages, sessionEvents, pageCount, outcome) => {
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
+// PYTHON STORY ENGINE RUNNER
+// ══════════════════════════════════════════════════════════════════════════════
+const runPythonSession = (sessionId) => {
+  return new Promise((resolve, reject) => {
+    const pythonBin =
+      process.env.PYTHON_BIN ||
+      (process.platform === "win32" ? "python" : "python3");
+    const appDir = path.resolve(__dirname, "..");
+    const args = ["-m", "python_engine.runner", "--session-id", sessionId];
+
+    console.log(
+      `[Worker] Dispatching to Python Story Engine: ${pythonBin} ${args.join(" ")} (cwd: ${appDir})`,
+    );
+
+    const child = spawn(pythonBin, args, {
+      cwd: appDir,
+      env: {
+        ...process.env,
+        PYTHONPATH: appDir,
+        PYTHONUNBUFFERED: "1",
+      },
+    });
+
+    child.stdout.on("data", (data) => {
+      process.stdout.write(data);
+    });
+
+    child.stderr.on("data", (data) => {
+      process.stderr.write(data);
+    });
+
+    child.on("close", (code) => {
+      if (code === 0) {
+        console.log(
+          `[Worker] ✓ Python Story Engine session ${sessionId} finished successfully.`,
+        );
+        resolve({ sessionId, outcome: "completed" });
+      } else {
+        console.error(
+          `[Worker] ✗ Python Story Engine session ${sessionId} exited with error code ${code}`,
+        );
+        reject(new Error(`Python Story Engine exited with code ${code}`));
+      }
+    });
+
+    child.on("error", (err) => {
+      console.error(
+        `[Worker] ✗ Failed to spawn Python process: ${err.message}`,
+      );
+      reject(err);
+    });
+  });
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
 // MAIN SESSION PROCESSOR
 // ══════════════════════════════════════════════════════════════════════════════
 const processSession = async (job) => {
@@ -4481,6 +4537,19 @@ const processSession = async (job) => {
   console.log(
     `[Worker] Session ${sessionId} | Country: ${proxyCountry} | ResponseID: ${responseId}`,
   );
+
+  // ── Dispatch to Python Story Engine (Default) ──────────────────────────────
+  const usePythonEngine = process.env.USE_PYTHON_ENGINE !== "false";
+  if (usePythonEngine) {
+    try {
+      return await runPythonSession(sessionId);
+    } catch (err) {
+      console.warn(
+        `[Worker] Python engine execution failed: ${err.message}. Retrying via BullMQ...`,
+      );
+      throw err;
+    }
+  }
 
   // ── Pre-session anomaly check — stop if project is in bad state ─────────────
   const anomalyWarnings = await preSessionAnomalyCheck(projectId);

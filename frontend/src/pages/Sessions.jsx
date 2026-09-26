@@ -5,6 +5,7 @@ import api from '../api';
 import {
   Activity, RefreshCw, X, FileText, StopCircle,
   Trash2, AlertCircle, CheckCircle, Filter, ChevronRight,
+  BookOpen, Sparkles,
 } from 'lucide-react';
 
 const FONT = "'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
@@ -102,7 +103,7 @@ function SessionReportModal({ sessionId, projectId, onClose, showToast }) {
 
   const pageEvents = () =>
     (detail?.events || [])
-      .filter(e => e.event_type === 'page_answered')
+      .filter(e => e.event_type === 'page_view' || e.event_type === 'page_answered')
       .map(e => ({ ...e, payload: typeof e.payload === 'string' ? JSON.parse(e.payload) : e.payload }));
 
   if (loading) return (
@@ -206,6 +207,144 @@ function SessionReportModal({ sessionId, projectId, onClose, showToast }) {
                 {activePg.payload?.url && (
                   <div style={{ fontSize: '0.78rem', color: '#2563eb', fontFamily: FONT, background: '#f0f7ff', padding: '6px 10px', borderRadius: 6, marginBottom: 14, wordBreak: 'break-all' }}>
                     🔗 {activePg.payload.url}
+                  </div>
+                )}
+
+                {/* Cumulative Living Story Card */}
+                {(() => {
+                  const currentStory =
+                    activePg.payload?.cumulative_story ||
+                    activePg.payload?.story_snapshot ||
+                    pages.slice().reverse().find((e) => e.payload?.cumulative_story)?.payload?.cumulative_story ||
+                    session.living_story;
+                  if (!currentStory) return null;
+                  return (
+                    <div
+                      style={{
+                        background: 'linear-gradient(135deg, #f0f7ff 0%, #e0f2fe 100%)',
+                        border: '1.5px solid #bae6fd',
+                        borderRadius: 12,
+                        padding: '14px 18px',
+                        marginBottom: 16,
+                        boxShadow: '0 2px 8px rgba(14, 165, 233, 0.08)',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          marginBottom: 6,
+                          flexWrap: 'wrap',
+                          gap: 6,
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <BookOpen size={16} color="#0284c7" />
+                          <span
+                            style={{
+                              fontSize: '0.78rem',
+                              fontWeight: 700,
+                              color: '#0369a1',
+                              fontFamily: FONT,
+                              textTransform: 'uppercase',
+                              letterSpacing: 0.5,
+                            }}
+                          >
+                            Respondent Persona & Living Story
+                          </span>
+                        </div>
+                        {session.persona_name && (
+                          <span
+                            style={{
+                              fontSize: '0.72rem',
+                              background: '#e0f2fe',
+                              color: '#0284c7',
+                              padding: '2px 8px',
+                              borderRadius: 12,
+                              fontWeight: 600,
+                              border: '1px solid #7dd3fc',
+                              fontFamily: FONT,
+                            }}
+                          >
+                            👤 {session.persona_name}
+                          </span>
+                        )}
+                      </div>
+                      <p
+                        style={{
+                          margin: 0,
+                          fontSize: '0.85rem',
+                          color: '#0f172a',
+                          lineHeight: 1.55,
+                          fontFamily: FONT,
+                        }}
+                      >
+                        "{currentStory}"
+                      </p>
+                    </div>
+                  );
+                })()}
+
+                {/* Page QA Rationale & Story Evolution */}
+                {(activePg.payload?.qa_rationale || activePg.payload?.story_update) && (
+                  <div
+                    style={{
+                      background: '#f0fdf4',
+                      border: '1.5px solid #bbf7d0',
+                      borderRadius: 10,
+                      padding: '12px 16px',
+                      marginBottom: 16,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        marginBottom: 6,
+                      }}
+                    >
+                      <Sparkles size={15} color="#16a34a" />
+                      <span
+                        style={{
+                          fontSize: '0.75rem',
+                          fontWeight: 700,
+                          color: '#15803d',
+                          fontFamily: FONT,
+                          textTransform: 'uppercase',
+                          letterSpacing: 0.4,
+                        }}
+                      >
+                        QA Decision Rationale & Story Evolution
+                      </span>
+                    </div>
+                    {activePg.payload?.qa_rationale && (
+                      <div
+                        style={{
+                          fontSize: '0.83rem',
+                          color: '#166534',
+                          marginBottom: activePg.payload?.story_update ? 6 : 0,
+                          lineHeight: 1.5,
+                          fontFamily: FONT,
+                        }}
+                      >
+                        <strong>QA Rationale:</strong> {activePg.payload.qa_rationale}
+                      </div>
+                    )}
+                    {activePg.payload?.story_update && (
+                      <div
+                        style={{
+                          fontSize: '0.82rem',
+                          color: '#14532d',
+                          fontStyle: 'italic',
+                          lineHeight: 1.45,
+                          fontFamily: FONT,
+                        }}
+                      >
+                        <strong>Story Update:</strong> "{activePg.payload.story_update}"
+                      </div>
+                    )}
                   </div>
                 )}
                 <div style={{ border: '1.5px solid #e2e8f0', borderRadius: 10, overflow: 'hidden', marginBottom: 16 }}>
