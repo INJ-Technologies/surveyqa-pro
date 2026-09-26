@@ -143,11 +143,16 @@ class SurveySessionRunner:
                 "--window-position=0,0",
                 "--ignore-certificate-errors",
             ]
-            browser = p.chromium.launch(
-                headless=True,
-                proxy=proxy_opts,
-                args=launch_args,
-            )
+            launch_kwargs = {
+                "headless": True,
+                "proxy": proxy_opts,
+                "args": launch_args,
+            }
+            exec_path = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
+            if exec_path and os.path.exists(exec_path):
+                launch_kwargs["executable_path"] = exec_path
+
+            browser = p.chromium.launch(**launch_kwargs)
 
             context = browser.new_context(
                 viewport={"width": 1366, "height": 768},
