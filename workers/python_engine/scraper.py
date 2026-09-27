@@ -388,49 +388,18 @@ class PageScraper:
                 if (radioRows.length < 2) return;
 
                 // Column scale headers
-                const firstRadioRowIdx = rows.indexOf(radioRows[0]);
-                const preRadioRows = firstRadioRowIdx > 0 ? rows.slice(0, firstRadioRowIdx) : [];
-                const firstRowRadios = Array.from(radioRows[0].querySelectorAll('input[type="radio"]'));
-                const firstRowRadioCount = firstRowRadios.length;
-
+                const headerRow = table.querySelector('thead tr, tr:first-child');
                 let colHeaders = [];
-                // Look for the header row among preRadioRows:
-                // Prefer row that has multiple cells and does not have a single full-width colspan instruction
-                for (let i = preRadioRows.length - 1; i >= 0; i--) {
-                    const candidateTr = preRadioRows[i];
-                    const cells = Array.from(candidateTr.querySelectorAll('th, td'));
-                    if (cells.length === 1 && cells[0].getAttribute('colspan')) continue;
-                    const texts = cells
+                if (headerRow) {
+                    colHeaders = Array.from(headerRow.querySelectorAll('th, td'))
                         .filter(c => !c.querySelector('input'))
                         .map(c => cleanText(c.innerText || c.textContent))
                         .filter(t => t.length > 0);
-                    // Filter out pure instruction rows (e.g. 'Please select one option in each row.')
-                    if (texts.length === 1 && /select\\s+one|please\\s*select|in\\s*each\\s*row/i.test(texts[0])) continue;
-                    if (texts.length >= 2) {
-                        colHeaders = texts;
-                        break;
-                    }
-                }
-
-                // If still not found, check thead th or th elements
-                if (colHeaders.length === 0) {
-                    const theadThs = Array.from(table.querySelectorAll('thead th, thead td, th.fir-header, th.caption, th.col-legend, th'))
-                        .filter(c => !c.querySelector('input'))
-                        .map(c => cleanText(c.innerText || c.textContent))
-                        .filter(t => t.length > 0);
-                    if (theadThs.length >= 2) {
-                        colHeaders = theadThs;
-                    }
-                }
-
-                // If colHeaders has 1 more element than radios, the first cell was the top-left corner/row-header cell!
-                if (colHeaders.length === firstRowRadioCount + 1) {
-                    colHeaders.shift();
                 }
 
                 const gridRows = [];
                 radioRows.forEach(tr => {
-                    const radios = Array.from(tr.querySelectorAll('input[type="radio"]')).filter(isInputInteractive);
+                    const radios = Array.from(tr.querySelectorAll('input[type="radio"]')).filter(isVisible);
                     if (radios.length === 0) return;
 
                     const rowName = radios[0].name || '';
@@ -454,14 +423,9 @@ class PageScraper:
 
                     const cols = radios.map((r, ci) => {
                         let label = colHeaders[ci] || '';
-                        if (!label) {
-                            label = r.getAttribute('aria-label') || r.getAttribute('title') || '';
-                        }
                         if (!label && r.id) {
-                            try {
-                                const lbl = document.querySelector(`label[for="${CSS.escape(r.id)}"]`);
-                                if (lbl) label = cleanText(lbl.innerText);
-                            } catch(e) {}
+                            const lbl = document.querySelector(`label[for="${r.id}"]`);
+                            if (lbl) label = cleanText(lbl.innerText);
                         }
                         return {
                             colIndex: ci,
@@ -471,10 +435,6 @@ class PageScraper:
                             checked: r.checked
                         };
                     });
-
-                    if (colHeaders.length === 0 && cols.length > 0) {
-                        colHeaders = cols.map(c => c.label);
-                    }
 
                     gridRows.push({
                         rowIndex: gridRows.length,
@@ -784,7 +744,6 @@ class PageScraper:
                 if (cb.classList && cb.classList.contains('no-answer')) return;
 
                 // Group checkboxes belonging to the same question block into one multi-option question
-                const qBlock = cb.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], fieldset, table, [role="group"]');
                 const qInfo = getQuestionForControl(cb);
                 const qText = qInfo.fullText;
 
