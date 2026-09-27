@@ -108,9 +108,10 @@ class DBClient:
         scenarios = []
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             if scenario_ids and len(scenario_ids) > 0:
+                s_ids = [str(sid) for sid in scenario_ids]
                 cur.execute(
-                    "SELECT * FROM scenarios WHERE id = ANY(%s) AND COALESCE(is_active, true) = true",
-                    (scenario_ids,)
+                    "SELECT * FROM scenarios WHERE id::text = ANY(%s) AND COALESCE(is_active, true) = true",
+                    (s_ids,)
                 )
             else:
                 cur.execute(

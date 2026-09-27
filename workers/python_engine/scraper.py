@@ -750,6 +750,7 @@ class PageScraper:
                 // Strip trailing option index/suffix (e.g. ans2214.0.0 -> ans2214.0)
                 let baseName = (cb.name || '').replace(/([._\\[])\\d+\\]?$/, '');
 
+                const qBlock = cb.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], [class*="question"], fieldset, form, table');
                 let groupKey = '';
                 if (qBlock && (qBlock.id || qBlock.getAttribute('name'))) {
                     groupKey = qBlock.id || qBlock.getAttribute('name');

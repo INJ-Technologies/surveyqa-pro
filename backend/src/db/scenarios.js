@@ -219,7 +219,7 @@ const getActiveScenarios = async (projectId) => {
 const getScenariosByIds = async (ids) => {
   if (!ids || ids.length === 0) return [];
   const result = await pool.query(
-    `SELECT * FROM scenarios WHERE id = ANY($1)`,
+    `SELECT * FROM scenarios WHERE id::text = ANY($1)`,
     [ids]
   );
   return result.rows.map(r => ({
