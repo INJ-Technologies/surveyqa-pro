@@ -4821,6 +4821,7 @@ const processSession = async (job) => {
         const m = modelResult.rows[0];
         const secretName = "openrouter_synthfield";
         const resolvedKey = readSecret(secretName);
+        if (resolvedKey) {
           const isFree = Boolean(m.is_free) || (m.model_id || "").toLowerCase().includes(":free") || (m.model_id || "").toLowerCase().endsWith("/free");
           providerConfig = {
             provider_type: "openrouter",
