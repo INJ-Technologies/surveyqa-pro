@@ -6653,6 +6653,29 @@ function SessionsTab({
                             calls
                           </div>
                         </div>
+                      ) : ['completed', 'over_quota', 'terminated', 'screenout', 'error'].includes(session.status) || (session.questions_count && session.questions_count > 0) ? (
+                        <div style={{ textAlign: "right" }}>
+                          <div
+                            style={{
+                              fontSize: "0.82rem",
+                              fontWeight: 700,
+                              color: "#64748b",
+                              fontFamily: FONT,
+                            }}
+                          >
+                            $0.000000
+                          </div>
+                          <div
+                            style={{
+                              fontSize: "0.65rem",
+                              color: "#94a3b8",
+                              fontFamily: FONT,
+                            }}
+                            title="Heuristic QA engine fallback was used for this session"
+                          >
+                            Heuristic QA
+                          </div>
+                        </div>
                       ) : (
                         <span style={{ color: "#94a3b8", fontSize: "0.75rem" }}>
                           —

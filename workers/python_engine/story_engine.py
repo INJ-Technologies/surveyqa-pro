@@ -198,6 +198,63 @@ class StoryEngine:
             "model_used": self.last_model_used or self.model_name,
         }
 
+    def _resolve_directive_choice(
+        self,
+        directive: Dict[str, Any],
+        raw_opts: List[Dict[str, Any]],
+        substantive_indices: List[int]
+    ) -> int:
+        """
+        Determines the appropriate option index respecting scenario directives.
+        Strictly prevents selection of avoided options and strictly picks from allowed ones.
+        """
+        action = directive.get("action")
+        zero_vals = directive.get("zero_based_values") or [v - 1 for v in directive.get("action_values", []) if v >= 1]
+        target_txt = (directive.get("action_text") or "").strip().lower()
+
+        # 1. select_not_in: MUST NOT SELECT specified option numbers or text
+        if action == "select_not_in":
+            forbidden = set(zero_vals)
+            # Find non-forbidden substantive options
+            allowed_sub = [
+                i for i in substantive_indices
+                if i not in forbidden and not (target_txt and target_txt in raw_opts[i].get("label", "").lower())
+            ]
+            if allowed_sub:
+                print(f"[StoryEngine Fallback] Enforcing 'select_not_in' (avoiding {zero_vals}): selected alternative #{allowed_sub[0] + 1} ({raw_opts[allowed_sub[0]].get('label', '')[:30]})")
+                return allowed_sub[0]
+            # If all substantive are forbidden, check any non-forbidden option
+            remaining = [
+                i for i in range(len(raw_opts))
+                if i not in forbidden and not (target_txt and target_txt in raw_opts[i].get("label", "").lower())
+            ]
+            if remaining:
+                print(f"[StoryEngine Fallback] Enforcing 'select_not_in' (avoiding {zero_vals}): selected alternative #{remaining[0] + 1}")
+                return remaining[0]
+            return 0
+
+        # 2. select_one_of: MUST CHOOSE ONE OF the allowed options
+        elif action == "select_one_of":
+            allowed = [v for v in zero_vals if 0 <= v < len(raw_opts)]
+            if allowed:
+                allowed_sub = [i for i in allowed if not is_optout_option(raw_opts[i].get("label", ""))]
+                choice = allowed_sub[0] if allowed_sub else allowed[0]
+                print(f"[StoryEngine Fallback] Enforcing 'select_one_of' (allowed {zero_vals}): selected #{choice + 1}")
+                return choice
+
+        # 3. select_exact / country_logic: MUST CHOOSE exact option
+        elif action in ("select_exact", "country_logic"):
+            if target_txt:
+                for idx_opt, opt in enumerate(raw_opts):
+                    if target_txt in opt.get("label", "").lower():
+                        print(f"[StoryEngine Fallback] Enforcing exact match for '{target_txt}': selected #{idx_opt + 1}")
+                        return idx_opt
+            if zero_vals and 0 <= zero_vals[0] < len(raw_opts):
+                print(f"[StoryEngine Fallback] Enforcing exact option #{zero_vals[0] + 1}")
+                return zero_vals[0]
+
+        return substantive_indices[0] if substantive_indices else 0
+
     def _generate_fallback_answers(
         self,
         fields: List[Dict[str, Any]],
@@ -206,7 +263,7 @@ class StoryEngine:
     ) -> List[Dict[str, Any]]:
         """
         Generates robust, realistic substantive fallback answers when the LLM
-        is rate-limited (429) or unavailable, strictly avoiding opt-outs.
+        is rate-limited (429) or unavailable, strictly adhering to scenario directives.
         """
         answers = []
         for f in fields:
@@ -216,25 +273,15 @@ class StoryEngine:
 
             if f_type == "radio":
                 substantive = [i for i, o in enumerate(raw_opts) if not is_optout_option(o.get("label", ""))]
-                chosen = substantive[0] if substantive else 0
-
-                # 1. Check scenario directives first
                 f_directive = next((d for d in scenario_directives if d.get("target_field_index") == f_idx), None)
+
                 if f_directive:
-                    target_txt = (f_directive.get("action_text") or "").strip().lower()
-                    if target_txt:
-                        for idx_opt, opt in enumerate(raw_opts):
-                            if target_txt in opt.get("label", "").lower():
-                                chosen = idx_opt
-                                break
-                    elif f_directive.get("action_values"):
-                        val_idx = f_directive["action_values"][0] - 1
-                        if 0 <= val_idx < len(raw_opts):
-                            chosen = val_idx
+                    chosen = self._resolve_directive_choice(f_directive, raw_opts, substantive)
                 else:
-                    # 2. Check if this is a country/location question and matches persona country
+                    # Check if this is a country/location question and matches persona country
                     p_country = (self.story_state.established_facts.get("country") or self.story_state.proxy_country or "").strip().lower()
                     aliases = ["uk", "united kingdom", "great britain"] if any(k in p_country for k in ("gb", "uk", "united kingdom")) else []
+                    chosen = substantive[0] if substantive else 0
                     for idx_opt, opt in enumerate(raw_opts):
                         opt_lbl = opt.get("label", "").strip().lower()
                         if opt_lbl == p_country or opt_lbl in aliases or (self.story_state.country_name and opt_lbl == self.story_state.country_name.lower()):
@@ -267,8 +314,35 @@ class StoryEngine:
                 })
             elif f_type == "checkbox":
                 substantive = [i for i, o in enumerate(raw_opts) if not is_optout_option(o.get("label", ""))]
-                min_req = f.get("minSelections") or 1
-                chosen = substantive[:max(min_req, 2)] if len(substantive) >= min_req else substantive
+                f_directive = next((d for d in scenario_directives if d.get("target_field_index") == f_idx), None)
+                if f_directive:
+                    action = f_directive.get("action")
+                    zero_vals = f_directive.get("zero_based_values") or [v - 1 for v in f_directive.get("action_values", []) if v >= 1]
+                    target_txt = (f_directive.get("action_text") or "").strip().lower()
+
+                    if action == "select_not_in":
+                        forbidden = set(zero_vals)
+                        allowed_sub = [
+                            i for i in substantive
+                            if i not in forbidden and not (target_txt and target_txt in raw_opts[i].get("label", "").lower())
+                        ]
+                        min_req = f.get("minSelections") or 1
+                        chosen = allowed_sub[:max(min_req, 2)] if len(allowed_sub) >= min_req else allowed_sub
+                    elif action == "select_one_of":
+                        allowed = [v for v in zero_vals if 0 <= v < len(raw_opts)]
+                        allowed_sub = [i for i in allowed if not is_optout_option(raw_opts[i].get("label", ""))]
+                        chosen = allowed_sub[:1] if allowed_sub else allowed[:1]
+                    elif action in ("select_exact", "country_logic"):
+                        if target_txt:
+                            chosen = [i for i, o in enumerate(raw_opts) if target_txt in o.get("label", "").lower()]
+                        else:
+                            chosen = [v for v in zero_vals if 0 <= v < len(raw_opts)]
+                    else:
+                        min_req = f.get("minSelections") or 1
+                        chosen = substantive[:max(min_req, 2)] if len(substantive) >= min_req else substantive
+                else:
+                    min_req = f.get("minSelections") or 1
+                    chosen = substantive[:max(min_req, 2)] if len(substantive) >= min_req else substantive
                 if not chosen and raw_opts:
                     sub_non_optout = [i for i, o in enumerate(raw_opts) if not is_optout_option(o.get("label", ""))]
                     chosen = [sub_non_optout[0]] if sub_non_optout else []
@@ -364,23 +438,13 @@ class StoryEngine:
                 })
             elif f_type == "select":
                 substantive = [i for i, o in enumerate(raw_opts) if not is_optout_option(o.get("label", "")) and not re.search(r"select|choose|--", o.get("label", ""), re.I)]
-                chosen = substantive[0] if substantive else (1 if len(raw_opts) > 1 else 0)
-
                 f_directive = next((d for d in scenario_directives if d.get("target_field_index") == f_idx), None)
                 if f_directive:
-                    target_txt = (f_directive.get("action_text") or "").strip().lower()
-                    if target_txt:
-                        for idx_opt, opt in enumerate(raw_opts):
-                            if target_txt in opt.get("label", "").lower():
-                                chosen = idx_opt
-                                break
-                    elif f_directive.get("action_values"):
-                        val_idx = f_directive["action_values"][0] - 1
-                        if 0 <= val_idx < len(raw_opts):
-                            chosen = val_idx
+                    chosen = self._resolve_directive_choice(f_directive, raw_opts, substantive)
                 else:
                     p_country = (self.story_state.established_facts.get("country") or self.story_state.proxy_country or "").strip().lower()
                     aliases = ["uk", "united kingdom", "great britain"] if any(k in p_country for k in ("gb", "uk", "united kingdom")) else []
+                    chosen = substantive[0] if substantive else (1 if len(raw_opts) > 1 else 0)
                     for idx_opt, opt in enumerate(raw_opts):
                         opt_lbl = opt.get("label", "").strip().lower()
                         if opt_lbl == p_country or opt_lbl in aliases or (self.story_state.country_name and opt_lbl == self.story_state.country_name.lower()):
@@ -531,6 +595,72 @@ class StoryEngine:
                             else:
                                 a["specifyText"] = self.story_state.established_facts.get("job_title") or "Operations"
 
+        # HARD GUARANTEE: Enforce scenario directives on all final answers
+        for a in answers:
+            if not isinstance(a, dict):
+                continue
+            f_idx = a.get("fieldIndex")
+            f_dir = next((d for d in scenario_directives if d.get("target_field_index") == f_idx), None)
+            if not f_dir:
+                continue
+
+            dir_action = f_dir.get("action")
+            dir_zero_vals = f_dir.get("zero_based_values") or [v - 1 for v in f_dir.get("action_values", []) if v >= 1]
+            dir_txt = (f_dir.get("action_text") or "").strip().lower()
+            f_obj = field_by_idx.get(f_idx, {})
+            f_raw_opts = f_obj.get("options", [])
+
+            if dir_action == "select_not_in":
+                forbidden = set(dir_zero_vals)
+                if a.get("fieldType") in ("radio", "select"):
+                    sel = a.get("selectedIndex")
+                    sel_lbl = f_raw_opts[sel].get("label", "").lower() if (sel is not None and 0 <= sel < len(f_raw_opts)) else ""
+                    if sel in forbidden or (dir_txt and dir_txt in sel_lbl):
+                        substantive = [i for i, o in enumerate(f_raw_opts) if i not in forbidden and not is_optout_option(o.get("label", ""))]
+                        new_choice = substantive[0] if substantive else ([i for i in range(len(f_raw_opts)) if i not in forbidden] or [0])[0]
+                        print(f"[StoryEngine] ENFORCEMENT: Overrode forbidden option #{sel + 1} -> #{new_choice + 1} per scenario directive.")
+                        a["selectedIndex"] = new_choice
+                        qa_rationale += f" [Enforced: Avoided option #{sel + 1}]"
+                elif a.get("fieldType") == "checkbox":
+                    sels = a.get("selectedIndices", [])
+                    clean = [s for s in sels if s not in forbidden and not (dir_txt and dir_txt in f_raw_opts[s].get("label", "").lower())]
+                    if not clean:
+                        substantive = [i for i, o in enumerate(f_raw_opts) if i not in forbidden and not is_optout_option(o.get("label", ""))]
+                        clean = [substantive[0]] if substantive else [0]
+                    a["selectedIndices"] = clean
+
+            elif dir_action == "select_one_of":
+                allowed = [v for v in dir_zero_vals if 0 <= v < len(f_raw_opts)]
+                if allowed:
+                    if a.get("fieldType") in ("radio", "select"):
+                        sel = a.get("selectedIndex")
+                        if sel not in allowed:
+                            sub_allowed = [i for i in allowed if not is_optout_option(f_raw_opts[i].get("label", ""))]
+                            new_choice = sub_allowed[0] if sub_allowed else allowed[0]
+                            print(f"[StoryEngine] ENFORCEMENT: Overrode option #{sel + 1} to allowed option #{new_choice + 1}.")
+                            a["selectedIndex"] = new_choice
+                            qa_rationale += f" [Enforced: Picked from allowed set {f_dir.get('action_values')}]"
+                    elif a.get("fieldType") == "checkbox":
+                        sels = a.get("selectedIndices", [])
+                        valid_sels = [s for s in sels if s in allowed]
+                        a["selectedIndices"] = valid_sels if valid_sels else [allowed[0]]
+
+            elif dir_action in ("select_exact", "country_logic"):
+                target_idx = None
+                if dir_txt:
+                    for idx_opt, opt in enumerate(f_raw_opts):
+                        if dir_txt in opt.get("label", "").lower():
+                            target_idx = idx_opt
+                            break
+                elif dir_zero_vals and 0 <= dir_zero_vals[0] < len(f_raw_opts):
+                    target_idx = dir_zero_vals[0]
+
+                if target_idx is not None:
+                    if a.get("fieldType") in ("radio", "select"):
+                        a["selectedIndex"] = target_idx
+                    elif a.get("fieldType") == "checkbox":
+                        a["selectedIndices"] = [target_idx]
+
         # Update StoryState
         self.story_state.update_story(story_update, new_facts)
         self.story_state.record_page_decision(page_number, answers, qa_rationale)
@@ -605,8 +735,11 @@ class StoryEngine:
             "   - Distribute ratings naturally across substantive columns (e.g. mix 60% positive, 30% moderately positive, 10% neutral). Never flatline!\n"
             "   - NEVER pick 'Don't know', 'Not applicable', or opt-out columns for substantive rows.\n"
             "   - For 'Other (please specify)' rows in grids: Leave unrated (omit from gridSelections) if standard options suffice.\n"
-            "     If rating an Other row, you MUST supply a contextually authentic specifyText inline with the survey topic and your prior answers.\n"
-            "4. SCENARIO DIRECTIVES: Mandatory QA test conditions. You MUST follow them.\n"
+            "4. SCENARIO DIRECTIVES (CRITICAL & ABSOLUTE PRIORITY):\n"
+            "   - Mandatory QA test conditions defined for this session. They take strict precedence over persona preferences.\n"
+            "   - If instructed to AVOID specific options, you MUST NEVER select them under any circumstances.\n"
+            "   - If instructed to CHOOSE ONE OF specific options, you MUST select strictly from that allowed subset based on your persona.\n"
+            "   - If instructed to select an exact option, you MUST select that exact option.\n"
             "5. CONDITIONAL SPECIFY / WRITE-IN:\n"
             "   - Only provide specifyText IF you actually selected 'Other (please specify)' or an option with hasSpecify=true.\n"
             "   - If the option or prompt asks for an exact number or amount (e.g. 'Please specify the exact number of employees', or range '10,000 - 49,999'):\n"
@@ -689,13 +822,38 @@ class StoryEngine:
             if f_directive:
                 field_desc["scenario_requirement"] = f_directive.get("instruction")
 
-            if f_type in ("radio", "checkbox"):
+            if f_type in ("radio", "checkbox", "select"):
                 raw_opts = f.get("options", [])
                 opts_for_ai = []
+
+                dir_action = f_directive.get("action") if f_directive else None
+                dir_zero_vals = (f_directive.get("zero_based_values") or [v - 1 for v in f_directive.get("action_values", []) if v >= 1]) if f_directive else []
+                dir_txt = ((f_directive.get("action_text") or "").strip().lower()) if f_directive else ""
+
                 for orig_idx, opt in enumerate(raw_opts):
                     lbl = opt.get("label", "")
                     if not allow_optout and is_optout_option(lbl):
                         continue
+
+                    # STRICT SCENARIO CANDIDATE FILTERING:
+                    # 1. select_not_in: Exclude forbidden options so LLM cannot pick them
+                    if dir_action == "select_not_in":
+                        if orig_idx in dir_zero_vals or (dir_txt and dir_txt in lbl.lower()):
+                            continue
+
+                    # 2. select_one_of: Keep only allowed options
+                    elif dir_action == "select_one_of":
+                        if dir_zero_vals and orig_idx not in dir_zero_vals:
+                            continue
+
+                    # 3. select_exact / country_logic: Keep only target option
+                    elif dir_action in ("select_exact", "country_logic"):
+                        if dir_txt:
+                            if dir_txt not in lbl.lower():
+                                continue
+                        elif dir_zero_vals and orig_idx not in dir_zero_vals:
+                            continue
+
                     has_spec = opt.get("hasSpecify", False)
                     entry = {
                         "index": orig_idx,
@@ -705,17 +863,21 @@ class StoryEngine:
                     if has_spec and opt.get("specifyPrompt"):
                         entry["specifyPrompt"] = opt.get("specifyPrompt")
                     opts_for_ai.append(entry)
-                if not opts_for_ai:
+
+                # Fallback: if all options were filtered out, re-allow non-forbidden options
+                if not opts_for_ai and raw_opts:
                     for orig_idx, opt in enumerate(raw_opts):
-                        has_spec = opt.get("hasSpecify", False)
-                        entry = {
+                        if dir_action == "select_not_in" and (orig_idx in dir_zero_vals or (dir_txt and dir_txt in opt.get("label", "").lower())):
+                            continue
+                        opts_for_ai.append({
                             "index": orig_idx,
                             "label": opt.get("label", ""),
-                            "hasSpecify": has_spec
-                        }
-                        if has_spec and opt.get("specifyPrompt"):
-                            entry["specifyPrompt"] = opt.get("specifyPrompt")
-                        opts_for_ai.append(entry)
+                            "hasSpecify": opt.get("hasSpecify", False)
+                        })
+
+                if not opts_for_ai and raw_opts:
+                    opts_for_ai = [{"index": 0, "label": raw_opts[0].get("label", ""), "hasSpecify": False}]
+
                 field_desc["options"] = opts_for_ai
 
                 # If options contain respondent's country, add guidance
@@ -873,9 +1035,10 @@ class StoryEngine:
             candidate_models = [
                 self.model_name,
                 "meta-llama/llama-3.3-70b-instruct:free",
+                "google/gemma-2-9b-it:free",
                 "qwen/qwen-2.5-72b-instruct:free",
+                "mistralai/mistral-7b-instruct:free",
                 "meta-llama/llama-3.1-8b-instruct:free",
-                "mistralai/mistral-7b-instruct:free"
             ]
         else:
             candidate_models = [
@@ -898,7 +1061,7 @@ class StoryEngine:
             "max_tokens": 500,
         }
 
-        max_retries = 4
+        max_retries = 5
         for attempt in range(max_retries):
             current_model = candidate_models[min(attempt, len(candidate_models) - 1)] if attempt > 0 else self.model_name
             payload["model"] = current_model

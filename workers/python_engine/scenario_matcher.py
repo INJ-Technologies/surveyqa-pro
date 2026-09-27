@@ -193,9 +193,22 @@ class ScenarioMatcher:
             except (ValueError, TypeError):
                 pass
 
+        zero_based_vals = [v - 1 for v in vals if v >= 1]
+
         # Find which field on the page corresponds to this step
         target_field_index = None
-        if matched_question:
+        norm_when_val = normalize_text(step.get("when_value") or "")
+        
+        # 1. Direct match on question label if when_type is question_contains
+        if norm_when_val and step.get("when_type") == "question_contains":
+            for f in fields_on_page:
+                f_q = normalize_text(f.get("questionLabel", ""))
+                if norm_when_val in f_q:
+                    target_field_index = f.get("fieldIndex")
+                    break
+
+        # 2. Match via matched_question text
+        if target_field_index is None and matched_question:
             norm_mq = normalize_text(matched_question)
             for f in fields_on_page:
                 f_q = normalize_text(f.get("questionLabel", ""))
@@ -203,6 +216,7 @@ class ScenarioMatcher:
                     target_field_index = f.get("fieldIndex")
                     break
 
+        # 3. Fallback to first field on page if available
         if target_field_index is None and len(fields_on_page) > 0:
             target_field_index = fields_on_page[0].get("fieldIndex")
 
@@ -212,22 +226,26 @@ class ScenarioMatcher:
             "action_mode": action_mode,
             "action_text": action_text,
             "action_values": vals,
+            "zero_based_values": zero_based_vals,
             "target_field_index": target_field_index,
             "matched_question": matched_question,
             "step_id": step.get("id"),
+            "wait_min_s": step.get("wait_min_s"),
+            "wait_max_s": step.get("wait_max_s"),
+            "duration_s": step.get("duration_s"),
         }
 
         # Formulate human/AI readable instruction
         if action == "select_exact" and vals:
-            directive["instruction"] = f"Must select option #{vals[0]}"
+            directive["instruction"] = f"MANDATORY: Must select option #{vals[0]}"
         elif action == "select_exact" and action_text:
-            directive["instruction"] = f"Must select option matching '{action_text}'"
+            directive["instruction"] = f"MANDATORY: Must select option matching '{action_text}'"
         elif action == "country_logic":
-            directive["instruction"] = f"COUNTRY LOGIC: Select the option matching '{action_text}'. Mandatory — do not deviate."
+            directive["instruction"] = f"MANDATORY COUNTRY LOGIC: Select the option matching '{action_text}'. Mandatory — do not deviate."
         elif action == "select_one_of" and vals:
-            directive["instruction"] = f"Must select one of options: {vals}"
+            directive["instruction"] = f"MANDATORY: Choose one of option #{', #'.join(str(v) for v in vals)} based on your persona. All other options are prohibited."
         elif action == "select_not_in" and vals:
-            directive["instruction"] = f"Must NOT select options: {vals}"
+            directive["instruction"] = f"MANDATORY: Do NOT select option #{', #'.join(str(v) for v in vals)}. You MUST select from the other remaining options based on your persona."
         elif action == "open_end" and action_text:
             directive["instruction"] = f"Provide text response: '{action_text}'"
         elif action == "skip":

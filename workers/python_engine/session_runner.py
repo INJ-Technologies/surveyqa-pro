@@ -12,6 +12,7 @@ Orchestrates the entire survey QA run:
 import os
 import time
 import math
+import random
 from typing import Dict, Any, Optional
 from playwright.sync_api import sync_playwright
 
@@ -448,7 +449,8 @@ class SurveySessionRunner:
                         fields=visible_fields,
                         answers=answers,
                         persona=persona,
-                        error_banners=detected_errors
+                        error_banners=detected_errors,
+                        scenario_directives=scenario_directives
                     )
 
                     # 6. Post-execution verification & screenshot
@@ -511,6 +513,8 @@ class SurveySessionRunner:
                             "story_update": story_update,
                             "qa_rationale": qa_rationale,
                             "cumulative_story": cumulative_story,
+                            "scenario_directives": scenario_directives,
+                            "scenario_name": scenario_name,
                         }
                     )
 
@@ -553,7 +557,26 @@ class SurveySessionRunner:
                     else:
                         consecutive_error_count = 0
 
-                    # 8. Click Next button (with countdown timer awareness)
+                    # 8. Scenario wait-after-answering pacing (if configured in step)
+                    scenario_wait = None
+                    for sd in scenario_directives:
+                        w_min = sd.get("wait_min_s")
+                        w_max = sd.get("wait_max_s")
+                        if w_min is not None and w_max is not None:
+                            try:
+                                scenario_wait = random.randint(int(w_min), int(w_max))
+                            except Exception:
+                                scenario_wait = int(w_min)
+                        elif w_min is not None:
+                            try:
+                                scenario_wait = int(w_min)
+                            except Exception:
+                                pass
+                    if scenario_wait and scenario_wait > 0:
+                        print(f"[SessionRunner] Scenario specified wait after answering: {scenario_wait}s")
+                        time.sleep(scenario_wait)
+
+                    # 9. Click Next button (with countdown timer awareness)
                     next_clicked = executor.wait_for_timer_and_click_next()
                     if not next_clicked:
                         print(f"[SessionRunner] No Next button found or enabled. Checking if survey has completed...")

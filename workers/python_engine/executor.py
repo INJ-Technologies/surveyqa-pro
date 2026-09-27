@@ -161,13 +161,15 @@ class ActionExecutor:
         fields: List[Dict[str, Any]],
         answers: List[Dict[str, Any]],
         persona: Optional[Dict[str, Any]] = None,
-        error_banners: Optional[List[str]] = None
+        error_banners: Optional[List[str]] = None,
+        scenario_directives: Optional[List[Dict[str, Any]]] = None
     ) -> List[Dict[str, Any]]:
         """
         Executes all field decisions on the current page DOM.
         Returns a list of structured answer summary records.
         """
         self.error_banners = error_banners or []
+        self.scenario_directives = scenario_directives or []
         # Always tick mandatory consent checkboxes first
         self.handle_consent_checkboxes()
 
@@ -183,6 +185,29 @@ class ActionExecutor:
                 opts = f.get("options", [])
                 substantive = [i for i, o in enumerate(opts) if not is_optout_option(o.get("label", ""))]
                 chosen_idx = substantive[0] if substantive else 0
+
+                # Check scenario directives in executor safety fallback
+                f_dir = next((d for d in self.scenario_directives if d.get("target_field_index") == f_idx), None)
+                if f_dir:
+                    action = f_dir.get("action")
+                    zero_vals = f_dir.get("zero_based_values") or [v - 1 for v in f_dir.get("action_values", []) if v >= 1]
+                    target_txt = (f_dir.get("action_text") or "").strip().lower()
+                    if action == "select_not_in":
+                        forbidden = set(zero_vals)
+                        allowed_sub = [i for i in substantive if i not in forbidden and not (target_txt and target_txt in opts[i].get("label", "").lower())]
+                        chosen_idx = allowed_sub[0] if allowed_sub else ([i for i in range(len(opts)) if i not in forbidden] or [0])[0]
+                    elif action == "select_one_of":
+                        allowed = [v for v in zero_vals if 0 <= v < len(opts)]
+                        allowed_sub = [i for i in allowed if not is_optout_option(opts[i].get("label", ""))]
+                        chosen_idx = allowed_sub[0] if allowed_sub else (allowed[0] if allowed else 0)
+                    elif action in ("select_exact", "country_logic"):
+                        if target_txt:
+                            for idx_opt, opt in enumerate(opts):
+                                if target_txt in opt.get("label", "").lower():
+                                    chosen_idx = idx_opt
+                                    break
+                        elif zero_vals and 0 <= zero_vals[0] < len(opts):
+                            chosen_idx = zero_vals[0]
 
                 if f_type == "radio":
                     res = self._execute_radio(f, {"selectedIndex": chosen_idx}, persona)
@@ -226,6 +251,41 @@ class ActionExecutor:
             field = field_map.get(f_idx)
             if not field:
                 continue
+
+            # Directive check on incoming answer before DOM execution
+            f_dir = next((d for d in self.scenario_directives if d.get("target_field_index") == f_idx), None)
+            if f_dir:
+                action = f_dir.get("action")
+                zero_vals = f_dir.get("zero_based_values") or [v - 1 for v in f_dir.get("action_values", []) if v >= 1]
+                target_txt = (f_dir.get("action_text") or "").strip().lower()
+                opts = field.get("options", [])
+
+                if action == "select_not_in":
+                    forbidden = set(zero_vals)
+                    if field.get("fieldType") in ("radio", "select"):
+                        sel = ans.get("selectedIndex")
+                        sel_lbl = opts[sel].get("label", "").lower() if (sel is not None and 0 <= sel < len(opts)) else ""
+                        if sel in forbidden or (target_txt and target_txt in sel_lbl):
+                            allowed = [i for i, o in enumerate(opts) if i not in forbidden and not is_optout_option(o.get("label", ""))]
+                            ans["selectedIndex"] = allowed[0] if allowed else 0
+                            print(f"[Executor] Scenario enforcement: overridden forbidden option #{sel + 1} to #{ans['selectedIndex'] + 1}")
+                    elif field.get("fieldType") == "checkbox":
+                        sels = ans.get("selectedIndices", [])
+                        clean = [s for s in sels if s not in forbidden and not (target_txt and target_txt in opts[s].get("label", "").lower())]
+                        ans["selectedIndices"] = clean if clean else [0]
+                elif action == "select_one_of":
+                    allowed = [v for v in zero_vals if 0 <= v < len(opts)]
+                    if allowed:
+                        if field.get("fieldType") in ("radio", "select"):
+                            sel = ans.get("selectedIndex")
+                            if sel not in allowed:
+                                allowed_sub = [i for i in allowed if not is_optout_option(opts[i].get("label", ""))]
+                                ans["selectedIndex"] = allowed_sub[0] if allowed_sub else allowed[0]
+                                print(f"[Executor] Scenario enforcement: overridden option #{sel + 1} to allowed #{ans['selectedIndex'] + 1}")
+                        elif field.get("fieldType") == "checkbox":
+                            sels = ans.get("selectedIndices", [])
+                            valid = [s for s in sels if s in allowed]
+                            ans["selectedIndices"] = valid if valid else [allowed[0]]
 
             f_type = field.get("fieldType")
             try:
