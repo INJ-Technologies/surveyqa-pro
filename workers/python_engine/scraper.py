@@ -744,6 +744,7 @@ class PageScraper:
                 if (cb.classList && cb.classList.contains('no-answer')) return;
 
                 // Group checkboxes belonging to the same question block into one multi-option question
+                const qBlock = cb.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], fieldset, table, [role="group"]');
                 const qInfo = getQuestionForControl(cb);
                 const qText = qInfo.fullText;
 
