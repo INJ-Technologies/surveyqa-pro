@@ -12,7 +12,7 @@ const getProjectScenarios = async (projectId) => {
        sess.id                                            AS source_session_id,
        (SELECT COUNT(*) FROM scenario_steps ss
         WHERE ss.scenario_id = s.id)::int                AS step_count,
-       ps.is_active                                       AS project_active
+       COALESCE(ps.is_active, s.is_active, true)         AS project_active
      FROM scenarios s
      LEFT JOIN users u         ON u.id    = s.created_by
      LEFT JOIN sessions sess   ON sess.id = s.source_session_id
@@ -194,16 +194,26 @@ const getActiveScenarios = async (projectId) => {
   const result = await pool.query(
     `SELECT s.*, ss_agg.steps
      FROM scenarios s
-     JOIN project_scenarios ps ON ps.scenario_id = s.id AND ps.project_id = $1 AND ps.is_active = true
+     LEFT JOIN project_scenarios ps ON ps.scenario_id = s.id AND ps.project_id = $1
      LEFT JOIN LATERAL (
        SELECT json_agg(ss ORDER BY ss.step_order) AS steps
        FROM scenario_steps ss WHERE ss.scenario_id = s.id
      ) ss_agg ON true
-     WHERE s.project_id = $1 AND s.is_active = true
+     WHERE s.project_id = $1
+       AND COALESCE(ps.is_active, s.is_active, true) = true
+       AND COALESCE(s.is_active, true) = true
      ORDER BY s.created_at ASC`,
     [projectId]
   );
-  return result.rows;
+  return result.rows.map(r => ({
+    ...r,
+    country_mapping: typeof r.country_mapping === 'string' ? JSON.parse(r.country_mapping) : r.country_mapping,
+    steps: Array.isArray(r.steps) ? r.steps.map(step => ({
+      ...step,
+      conditions: typeof step.conditions === 'string' ? JSON.parse(step.conditions) : step.conditions || [],
+      action_values: typeof step.action_values === 'string' ? JSON.parse(step.action_values) : step.action_values || [],
+    })) : [],
+  }));
 };
 
 const getScenariosByIds = async (ids) => {

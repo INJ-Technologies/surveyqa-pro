@@ -59,10 +59,17 @@ def calculate_quality_score(
 
 
 class SurveySessionRunner:
-    def __init__(self, session_id: str, survey_url: Optional[str] = None, internal_testing: Optional[bool] = None):
+    def __init__(
+        self,
+        session_id: str,
+        survey_url: Optional[str] = None,
+        internal_testing: Optional[bool] = None,
+        scenario_id: Optional[str] = None,
+    ):
         self.session_id = session_id
         self.survey_url = survey_url
         self.internal_testing = internal_testing
+        self.scenario_id = scenario_id
         self.db = DBClient()
         self.max_pages = 150
 
@@ -89,8 +96,9 @@ class SurveySessionRunner:
         elif str(session.get("proxy_provider") or "").lower() in ["none", "direct", "internal", "local"]:
             is_internal = True
 
-        # 2. Resolve Persona
+        # 2. Resolve Persona & Country
         proxy_country = session.get("proxy_country") or project.get("proxy_country")
+        country_name = self.db.get_country_name(proxy_country) if proxy_country else None
         persona_id = session.get("persona_id")
         persona = None
         if persona_id:
@@ -101,11 +109,44 @@ class SurveySessionRunner:
         persona_name = persona.get("name") if persona else "Automated QA Respondent"
         self.db.update_session_status(self.session_id, "in_progress", persona_name=persona_name)
 
-        # 3. Resolve Scenarios
-        scenario_id = session.get("scenario_id")
-        scenarios = self.db.get_scenarios(project_id, [str(scenario_id)] if scenario_id else None)
+        # 3. Resolve Scenarios & Country Logic
+        scenario_id = self.scenario_id or session.get("scenario_id")
+        scenarios = []
+        if scenario_id:
+            scenarios = self.db.get_scenarios(project_id, [str(scenario_id)])
+
+        if not scenarios:
+            all_active = self.db.get_scenarios(project_id, None)
+            custom_scenarios = [s for s in all_active if s.get("name") != "Country Logic" and not s.get("country_mapping")]
+            if custom_scenarios:
+                pos = self.db.get_session_position(project_id, self.session_id)
+                scenarios = [custom_scenarios[pos % len(custom_scenarios)]]
+            elif all_active:
+                scenarios = all_active
+
         active_scenario = scenarios[0] if scenarios else {}
-        scenario_matcher = ScenarioMatcher(active_scenario)
+        scenario_name = active_scenario.get("name") if active_scenario else None
+        if scenario_name:
+            self.db.update_session_status(self.session_id, "in_progress", scenario_name=scenario_name)
+            self.db.log_session_event(self.session_id, "scenario_assigned", {
+                "scenarioId": str(active_scenario.get("id")),
+                "scenarioName": scenario_name,
+                "stepCount": len(active_scenario.get("steps") or []),
+            })
+            print(f"[SessionRunner] Scenario assigned: '{scenario_name}' ({len(active_scenario.get('steps') or [])} steps)")
+        else:
+            print("[SessionRunner] No custom scenario assigned — using persona baseline")
+
+        country_logic = self.db.get_country_logic(project_id)
+        if country_logic:
+            print(f"[SessionRunner] Country Logic active for project {project_id}")
+
+        scenario_matcher = ScenarioMatcher(
+            scenario=active_scenario,
+            country_logic=country_logic,
+            proxy_country=proxy_country,
+            country_name=country_name,
+        )
 
         # 4. Resolve AI Model
         workspace_id = str(project.get("workspace_id") or session.get("workspace_id"))
@@ -125,7 +166,7 @@ class SurveySessionRunner:
             is_free_model = True
 
         # 5. Initialize Living Story Engine
-        story_state = StoryState(persona=persona, proxy_country=proxy_country)
+        story_state = StoryState(persona=persona, proxy_country=proxy_country, country_name=country_name)
         story_engine = StoryEngine(
             story_state=story_state,
             model_name=model_name,
@@ -220,6 +261,39 @@ class SurveySessionRunner:
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             )
 
+            # Discover public IP address
+            resolved_ip = None
+            try:
+                ip_resp = context.request.get("https://api64.ipify.org?format=json", timeout=5000)
+                if ip_resp.ok:
+                    resolved_ip = ip_resp.json().get("ip")
+            except Exception:
+                try:
+                    ip_resp = context.request.get("https://checkip.amazonaws.com", timeout=5000)
+                    if ip_resp.ok:
+                        resolved_ip = ip_resp.text().strip()
+                except Exception:
+                    pass
+
+            if not resolved_ip:
+                try:
+                    import urllib.request
+                    with urllib.request.urlopen("https://api.ipify.org", timeout=5) as r:
+                        resolved_ip = r.read().decode("utf-8").strip()
+                except Exception:
+                    pass
+
+            if resolved_ip:
+                print(f"[SessionRunner] Public exit IP: {resolved_ip}")
+                self.db.update_session_status(self.session_id, "in_progress", proxy_ip=resolved_ip)
+                self.db.log_session_event(self.session_id, "ip_assigned", {
+                    "ip": resolved_ip,
+                    "country": proxy_country,
+                })
+                self.db.record_used_ip(project_id, self.session_id, resolved_ip, country=proxy_country)
+            else:
+                print("[SessionRunner] Could not resolve public exit IP")
+
             page = context.new_page()
             page.set_default_timeout(30000)
 
@@ -233,6 +307,7 @@ class SurveySessionRunner:
                     "responseId": session.get("response_id"),
                     "surveyUrl": survey_url,
                     "scenarioName": active_scenario.get("name") if active_scenario else None,
+                    "ip": resolved_ip,
                 }
             )
 

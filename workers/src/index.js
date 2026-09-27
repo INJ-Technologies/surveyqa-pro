@@ -4500,7 +4500,7 @@ try {
   console.warn("[Worker] Could not initialize Redis abort subscriber:", redisSubErr.message);
 }
 
-const runPythonSession = (sessionId, surveyUrl = null, internalTesting = false, projectId = null) => {
+const runPythonSession = (sessionId, surveyUrl = null, internalTesting = false, projectId = null, scenarioId = null) => {
   return new Promise((resolve, reject) => {
     const pythonBin =
       process.env.PYTHON_BIN ||
@@ -4512,6 +4512,9 @@ const runPythonSession = (sessionId, surveyUrl = null, internalTesting = false, 
     }
     if (internalTesting) {
       args.push("--internal-testing");
+    }
+    if (scenarioId) {
+      args.push("--scenario-id", scenarioId);
     }
 
     console.log(
@@ -4629,6 +4632,7 @@ const processSession = async (job) => {
     proxyProvider,
     proxyCountry,
     deviceType,
+    scenarioId,
     scenarioIds,
     internalTesting,
     aiModelId,
@@ -4639,14 +4643,15 @@ const processSession = async (job) => {
   const resolvedModelId = aiModelId || aiProviderId || null;
 
   console.log(
-    `[Worker] Session ${sessionId} | Country: ${proxyCountry} | ResponseID: ${responseId}`,
+    `[Worker] Session ${sessionId} | Country: ${proxyCountry} | Scenario: ${scenarioId || (scenarioIds && scenarioIds[0]) || 'none'} | ResponseID: ${responseId}`,
   );
 
   // ── Dispatch to Python Story Engine (Default) ──────────────────────────────
   const usePythonEngine = process.env.USE_PYTHON_ENGINE !== "false";
   if (usePythonEngine) {
     try {
-      const res = await runPythonSession(sessionId, surveyUrl, internalTesting, projectId);
+      const effectiveScenarioId = scenarioId || (Array.isArray(scenarioIds) && scenarioIds.length > 0 ? scenarioIds[0] : null);
+      const res = await runPythonSession(sessionId, surveyUrl, internalTesting, projectId, effectiveScenarioId);
       if (res?.outcome === "terminated" || res?.manuallyStopped) {
         console.log(`[Worker] Session ${sessionId} stopped as requested.`);
         return res;

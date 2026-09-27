@@ -352,16 +352,23 @@ const getProjectSessions = async (projectId, { status, outcome, country, limit =
       s.input_tokens_total, s.output_tokens_total,
       s.model_used,
       p.name as persona_name,
-      (SELECT se.payload->>'scenarioName'
-        FROM session_events se
-        WHERE se.session_id = s.id
-          AND se.event_type = 'scenario_assigned'
-        LIMIT 1) as scenario_name,
-      (SELECT se.payload->>'ip'
-        FROM session_events se
-        WHERE se.session_id = s.id
-          AND se.event_type = 'ip_assigned'
-        LIMIT 1) as ip_address
+      COALESCE(
+        s.scenario_name,
+        (SELECT se.payload->>'scenarioName'
+         FROM session_events se
+         WHERE se.session_id = s.id
+           AND se.event_type = 'scenario_assigned'
+         LIMIT 1)
+      ) as scenario_name,
+      COALESCE(
+        s.proxy_ip,
+        (SELECT se.payload->>'ip'
+         FROM session_events se
+         WHERE se.session_id = s.id
+           AND se.event_type = 'ip_assigned'
+         LIMIT 1)
+      ) as ip_address,
+      s.proxy_ip
     FROM sessions s
     LEFT JOIN personas p ON p.id = s.persona_id
     WHERE ${conditions.join(' AND ')}

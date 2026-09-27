@@ -13,11 +13,14 @@ def main():
     parser.add_argument("--session-id", required=True, help="UUID of the session to execute")
     parser.add_argument("--survey-url", default=None, help="Direct survey URL to test")
     parser.add_argument("--internal-testing", action="store_true", default=False, help="Force direct execution without proxy for internal testing")
+    parser.add_argument("--scenario-id", default=None, help="Scenario UUID to execute")
     args = parser.parse_args()
 
     print(f"==================================================")
     print(f"  Starting SurveyQA Pro Python Engine")
     print(f"  Session: {args.session_id}")
+    if args.scenario_id:
+        print(f"  Scenario: {args.scenario_id}")
     if args.internal_testing:
         print(f"  Mode: INTERNAL TESTING (Direct Connection)")
     if args.survey_url:
@@ -29,6 +32,7 @@ def main():
             session_id=args.session_id,
             survey_url=args.survey_url,
             internal_testing=args.internal_testing,
+            scenario_id=args.scenario_id,
         )
         result = runner.run()
         print("\nSession Execution Result:")

@@ -20,9 +20,15 @@ from .optout_filter import (
 
 
 class StoryState:
-    def __init__(self, persona: Optional[Dict[str, Any]] = None, proxy_country: Optional[str] = None):
+    def __init__(
+        self,
+        persona: Optional[Dict[str, Any]] = None,
+        proxy_country: Optional[str] = None,
+        country_name: Optional[str] = None,
+    ):
         self.persona = persona or {}
         self.proxy_country = proxy_country
+        self.country_name = country_name
         self.established_facts: Dict[str, Any] = {}
         self.cumulative_story: str = ""
         self.survey_background: str = ""
@@ -34,24 +40,36 @@ class StoryState:
         if topic and topic.strip():
             self.survey_background = topic.strip()
             if "Professional respondent" in self.cumulative_story or not self.established_facts.get("job_title"):
-                country = self.established_facts.get("country") or self.proxy_country or "Singapore"
+                country = self.established_facts.get("country") or self.country_name or self.proxy_country or "Singapore"
                 self.cumulative_story = f"Industry professional based in {country} participating in {topic.strip()}."
         if section and section.strip():
             self.current_section = section.strip()
 
     def _init_initial_story(self):
-        """Construct the foundational story narrative from the persona."""
+        """Construct the foundational story narrative from the persona and country."""
+        # Resolve clean descriptive country string
+        p_c = (self.proxy_country or "").upper()
+        if p_c in ("GB", "UK") or (self.country_name and "united kingdom" in self.country_name.lower()):
+            country = "United Kingdom (UK, GB)"
+        elif self.country_name:
+            country = f"{self.country_name} ({p_c})" if p_c else self.country_name
+        elif self.persona.get("country"):
+            country = self.persona["country"]
+        elif self.proxy_country:
+            country = self.proxy_country
+        else:
+            country = "United States"
+
         if not self.persona:
-            country_str = f" in {self.proxy_country}" if self.proxy_country else ""
-            self.cumulative_story = f"Professional respondent{country_str} completing this survey."
+            self.cumulative_story = f"Professional respondent based in {country} completing this survey."
+            self.established_facts["country"] = country
             if self.proxy_country:
-                self.established_facts["country"] = self.proxy_country
+                self.established_facts["country_code"] = self.proxy_country
             return
 
         job = self.persona.get("job_title") or self.persona.get("role") or "Professional"
         industry = self.persona.get("industry") or "Technology"
         company_size = self.persona.get("company_size") or "Mid-size"
-        country = self.persona.get("country") or self.proxy_country or "United States"
 
         self.established_facts["country"] = country
         self.established_facts["job_title"] = job
@@ -199,6 +217,30 @@ class StoryEngine:
             if f_type == "radio":
                 substantive = [i for i, o in enumerate(raw_opts) if not is_optout_option(o.get("label", ""))]
                 chosen = substantive[0] if substantive else 0
+
+                # 1. Check scenario directives first
+                f_directive = next((d for d in scenario_directives if d.get("target_field_index") == f_idx), None)
+                if f_directive:
+                    target_txt = (f_directive.get("action_text") or "").strip().lower()
+                    if target_txt:
+                        for idx_opt, opt in enumerate(raw_opts):
+                            if target_txt in opt.get("label", "").lower():
+                                chosen = idx_opt
+                                break
+                    elif f_directive.get("action_values"):
+                        val_idx = f_directive["action_values"][0] - 1
+                        if 0 <= val_idx < len(raw_opts):
+                            chosen = val_idx
+                else:
+                    # 2. Check if this is a country/location question and matches persona country
+                    p_country = (self.story_state.established_facts.get("country") or self.story_state.proxy_country or "").strip().lower()
+                    aliases = ["uk", "united kingdom", "great britain"] if any(k in p_country for k in ("gb", "uk", "united kingdom")) else []
+                    for idx_opt, opt in enumerate(raw_opts):
+                        opt_lbl = opt.get("label", "").strip().lower()
+                        if opt_lbl == p_country or opt_lbl in aliases or (self.story_state.country_name and opt_lbl == self.story_state.country_name.lower()):
+                            chosen = idx_opt
+                            break
+
                 chosen_opt = raw_opts[chosen] if chosen < len(raw_opts) else {}
                 spec_text = None
                 if chosen_opt.get("hasSpecify"):
@@ -285,7 +327,21 @@ class StoryEngine:
                     substantive_cols = list(range(actual_num_cols))
                     if col_headers and is_optout_option(col_headers[-1]):
                         substantive_cols = substantive_cols[:-1]
+
+                # If columns represent countries/destinations, ensure respondent's home country is included
+                home_col_idx = None
+                p_code = (self.story_state.proxy_country or "").lower()
+                p_cname = (self.story_state.country_name or "").lower()
+                for ci, h in enumerate(col_headers):
+                    hl = h.strip().lower()
+                    if (p_code in ("gb", "uk") and hl in ("uk", "united kingdom", "great britain")) or (p_cname and hl == p_cname):
+                        home_col_idx = ci
+                        break
+
                 pos_cols = substantive_cols[len(substantive_cols)//2:] if len(substantive_cols) >= 3 else substantive_cols
+                if home_col_idx is not None and home_col_idx not in pos_cols:
+                    pos_cols = [home_col_idx] + pos_cols
+
                 grid_sels = []
                 for ri, row in enumerate(rows):
                     is_other = row.get("isOther") or bool(re.search(r"other|specify", row.get("rowLabel", ""), re.I))
@@ -301,6 +357,28 @@ class StoryEngine:
             elif f_type == "select":
                 substantive = [i for i, o in enumerate(raw_opts) if not is_optout_option(o.get("label", "")) and not re.search(r"select|choose|--", o.get("label", ""), re.I)]
                 chosen = substantive[0] if substantive else (1 if len(raw_opts) > 1 else 0)
+
+                f_directive = next((d for d in scenario_directives if d.get("target_field_index") == f_idx), None)
+                if f_directive:
+                    target_txt = (f_directive.get("action_text") or "").strip().lower()
+                    if target_txt:
+                        for idx_opt, opt in enumerate(raw_opts):
+                            if target_txt in opt.get("label", "").lower():
+                                chosen = idx_opt
+                                break
+                    elif f_directive.get("action_values"):
+                        val_idx = f_directive["action_values"][0] - 1
+                        if 0 <= val_idx < len(raw_opts):
+                            chosen = val_idx
+                else:
+                    p_country = (self.story_state.established_facts.get("country") or self.story_state.proxy_country or "").strip().lower()
+                    aliases = ["uk", "united kingdom", "great britain"] if any(k in p_country for k in ("gb", "uk", "united kingdom")) else []
+                    for idx_opt, opt in enumerate(raw_opts):
+                        opt_lbl = opt.get("label", "").strip().lower()
+                        if opt_lbl == p_country or opt_lbl in aliases or (self.story_state.country_name and opt_lbl == self.story_state.country_name.lower()):
+                            chosen = idx_opt
+                            break
+
                 answers.append({
                     "fieldIndex": f_idx,
                     "fieldType": "select",
@@ -482,7 +560,11 @@ class StoryEngine:
             "   - story_update: Maximum 1 short sentence (<12 words) describing ONLY concrete new facts established (or \"\" if none).\n"
             "   - qa_rationale: Maximum 1 crisp sentence (<12 words) stating the decision rationale (e.g. 'Selected senior IT role; avoided opt-out.').\n"
             "   - NEVER use filler like 'As a professional respondent...' or restate questions.\n"
-            "9. OUTPUT FORMAT: Respond ONLY with valid, raw JSON matching the requested schema. No markdown formatting, no conversational text."
+            "9. OUTPUT FORMAT: Respond ONLY with valid, raw JSON matching the requested schema. No markdown formatting, no conversational text.\n"
+            "10. COUNTRY & GEOGRAPHY ALIGNMENT:\n"
+            "    - Your country of residence / operations is explicitly defined in your RESPONDENT IDENTITY.\n"
+            "    - If any question asks for your country, nationality, residence, or primary location, you MUST select your designated country (e.g. 'United Kingdom' / 'UK' for GB).\n"
+            "    - When evaluating or selecting travel destinations, brands, or markets, give proper priority and familiarity to your home country/market if present in the choices."
         )
 
     def _build_prompt(
@@ -533,7 +615,7 @@ class StoryEngine:
 
             # Check if this field has a scenario directive
             f_directive = next((d for d in scenario_directives if d.get("target_field_index") == f_idx), None)
-            allow_optout = f_directive and f_directive.get("action") == "select_exact"
+            allow_optout = f_directive and f_directive.get("action") in ("select_exact", "country_logic")
 
             field_desc = {
                 "fieldIndex": f_idx,
@@ -562,6 +644,17 @@ class StoryEngine:
                         for orig_idx, opt in enumerate(raw_opts)
                     ]
                 field_desc["options"] = opts_for_ai
+
+                # If options contain respondent's country, add guidance
+                p_c = (self.story_state.established_facts.get("country") or self.story_state.proxy_country or "").lower()
+                c_aliases = ["uk", "united kingdom", "great britain"] if any(k in p_c for k in ("gb", "uk", "united kingdom")) else []
+                has_home_country = any(
+                    o.get("label", "").strip().lower() == p_c or o.get("label", "").strip().lower() in c_aliases
+                    for o in opts_for_ai
+                )
+                if has_home_country and not f_directive:
+                    field_desc["home_country_guidance"] = f"Your residence/country is {self.story_state.established_facts.get('country')}. Select your home country."
+
                 if f_type == "checkbox":
                     min_req = f.get("minSelections") or 1
                     field_desc["minSelections"] = min_req

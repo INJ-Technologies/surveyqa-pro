@@ -470,7 +470,7 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
       .then((res) => {
         // Exclude Country Logic — it runs globally on every session automatically
         const active = (res.data.scenarios || []).filter(
-          (s) => s.project_active && s.name !== "Country Logic",
+          (s) => (s.project_active ?? s.is_active ?? true) && s.name !== "Country Logic",
         );
         setAllScenarios(active);
         setSelectedScenarios(active.map((s) => s.id)); // default: all active selected
@@ -499,7 +499,10 @@ function RunSessionsModal({ project, surveys = [], onClose, onTriggered }) {
         proxyCountry: pickedCountryCodes.length > 0 ? pickedCountryCodes : null,
         targetDistribution:
           targetDistribution.length > 0 ? targetDistribution : null,
-        scenarioIds: selectedScenarios,
+        scenarioIds:
+          selectedScenarios && selectedScenarios.length > 0
+            ? selectedScenarios
+            : null,
         internalTesting: testingMode === "internal",
         aiModelId: selectedModel || null,
       });
@@ -6377,7 +6380,7 @@ function SessionsTab({
                           color: "#475569",
                         }}
                       >
-                        {session.ip_address || "—"}
+                        {session.ip_address || session.proxy_ip || "—"}
                       </span>
                     </td>
                     {/* 5. Persona */}

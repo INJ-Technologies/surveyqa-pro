@@ -4,10 +4,10 @@ const path    = require("path");
 const fs      = require("fs");
 const { pool } = require('../db');
 const { requireAuth, requireRole } = require("../middleware/auth");
-const { createSession, getLiveSessions, getProjectSessions, getSessionDetail } = require("../db/sessions");
+const { createSession, getLiveSessions, getProjectSessions, getSessionDetail, logSessionEvent } = require("../db/sessions");
 const { sessionQueue }   = require("../queues/index");
 const { getProjectById, getProjectSurveys } = require("../db/projects");
-const { getScenariosByIds } = require('../db/scenarios');
+const { getScenariosByIds, getActiveScenarios } = require('../db/scenarios');
 const { getDefaultModel } = require('../db/ai_models');
 
 // ── Quota-aware randomised session distribution ───────────────────────────────
@@ -162,24 +162,23 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
     }
 
     // ── Country Logic filter — restrict to mapped countries only ─────────────
-    if (scenarioIds && scenarioIds.length > 0) {
-      try {
-        const selectedScenarios = await getScenariosByIds(scenarioIds);
-        const countryLogic = selectedScenarios.find(s =>
-          s.name === 'Country Logic' && s.country_mapping?.mappings?.length > 0
-        );
-        if (countryLogic) {
-          const mappedCountries = countryLogic.country_mapping.mappings.map(m => m.country.toUpperCase());
-          if (countryList.length > 0) {
-            countryList = countryList.filter(c => mappedCountries.includes(c.toUpperCase()));
-          } else {
-            countryList = mappedCountries;
-          }
-          console.log(`[Trigger] Country Logic applied — allowed: ${countryList.join(', ')}`);
+    try {
+      const allActive = await getActiveScenarios(projectId);
+      const countryLogic = allActive.find(s =>
+        (s.name === 'Country Logic' || s.country_mapping) &&
+        s.country_mapping?.mappings?.length > 0
+      );
+      if (countryLogic) {
+        const mappedCountries = countryLogic.country_mapping.mappings.map(m => m.country.toUpperCase());
+        if (countryList.length > 0) {
+          countryList = countryList.filter(c => mappedCountries.includes(c.toUpperCase()));
+        } else {
+          countryList = mappedCountries;
         }
-      } catch (e) {
-        console.warn('[Trigger] Could not apply country logic:', e.message);
+        console.log(`[Trigger] Country Logic applied — allowed: ${countryList.join(', ')}`);
       }
+    } catch (e) {
+      console.warn('[Trigger] Could not apply country logic:', e.message);
     }
 
     // Fall back to countries from all surveys if none explicitly provided
@@ -215,10 +214,27 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
       distributedCountries = await buildCountryDistribution(countryList, projectId, sessionLimit);
     }
 
+    // ── Resolve custom scenarios to assign round-robin ───────────────────────
+    let candidateScenarios = [];
+    if (Array.isArray(scenarioIds) && scenarioIds.length > 0) {
+      const selected = await getScenariosByIds(scenarioIds);
+      candidateScenarios = selected.filter(s => s.name !== 'Country Logic' && !s.country_mapping);
+    } else {
+      const allActive = await getActiveScenarios(projectId);
+      candidateScenarios = allActive.filter(s => s.name !== 'Country Logic' && !s.country_mapping);
+    }
+    console.log(`[Trigger] Active custom scenarios available (${candidateScenarios.length}): ${candidateScenarios.map(s => s.name).join(', ') || 'none'}`);
+
     for (let i = 0; i < sessionLimit; i++) {
       const personaId = personaIds.length > 0 ? personaIds[i % personaIds.length] : null;
       const country = distributedCountries[i] || null;
       const targetItem = distributedTargets[i] || null;
+
+      const assignedScenario = candidateScenarios.length > 0
+        ? candidateScenarios[i % candidateScenarios.length]
+        : null;
+      const scenarioName = assignedScenario ? assignedScenario.name : null;
+      const scenarioId = assignedScenario ? assignedScenario.id : null;
 
       // Pick the survey URL that matches this target segment or country
       let survey = null;
@@ -240,7 +256,7 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
       const responseId = generateResponseId();
       const finalUrl   = survey.url.replace(/identifier/gi, responseId);
 
-      console.log(`[Sessions] Session ${i + 1}/${sessionLimit} → country: ${country || 'none'} | survey: ${survey.label} | url: ${finalUrl.slice(0, 60)}...`);
+      console.log(`[Sessions] Session ${i + 1}/${sessionLimit} → country: ${country || 'none'} | survey: ${survey.label} | scenario: ${scenarioName || 'default'} | url: ${finalUrl.slice(0, 60)}...`);
 
       const session = await createSession({
         projectId,
@@ -255,6 +271,7 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
         browserType:   'chrome',
         aiStrategy:    project.ai_strategy    || 'persona_true',
         internalTesting: !!internalTesting,
+        scenarioName:  scenarioName,
       });
 
       // Resolve AI model: explicit selection > workspace default AI model
@@ -269,7 +286,9 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
       await sessionQueue.add('run-session', {
         sessionId:       session.id,
         projectId,
-        scenarioIds:     scenarioIds || null,
+        scenarioId:      scenarioId,
+        scenarioName:    scenarioName,
+        scenarioIds:     candidateScenarios.length > 0 ? candidateScenarios.map(s => s.id) : null,
         internalTesting: !!internalTesting,
         personaId,
         surveyUrl:       finalUrl,
@@ -280,6 +299,14 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
         aiStrategy:      project.ai_strategy    || 'persona_true',
         aiModelId:       resolvedModelId,
       }, { jobId: `session-${session.id}`, priority: 1 });
+
+      if (assignedScenario) {
+        await logSessionEvent(session.id, 'scenario_assigned', {
+          scenarioId:   assignedScenario.id,
+          scenarioName: assignedScenario.name,
+          stepCount:    (assignedScenario.steps || []).length,
+        }).catch(() => {});
+      }
 
       created.push(session);
     }
@@ -355,7 +382,7 @@ router.get('/', async (req, res) => {
     const sessionsResult = await pool.query(
       `SELECT
          s.id, s.project_id, s.status, s.outcome,
-         s.response_id, s.proxy_country, s.proxy_ip,
+         s.response_id, s.proxy_country, s.proxy_ip, s.proxy_ip AS ip_address,
          s.proxy_provider, s.device_type, s.internal_testing,
          s.persona_id, s.scenario_name, s.quality_score,
          s.total_duration_s, s.question_count,

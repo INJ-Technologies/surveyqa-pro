@@ -19,9 +19,18 @@ def normalize_text(text: str) -> str:
 
 
 class ScenarioMatcher:
-    def __init__(self, scenario: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        scenario: Optional[Dict[str, Any]] = None,
+        country_logic: Optional[Dict[str, Any]] = None,
+        proxy_country: Optional[str] = None,
+        country_name: Optional[str] = None,
+    ):
         self.scenario = scenario or {}
         self.steps = self.scenario.get("steps", [])
+        self.country_logic = country_logic
+        self.proxy_country = (proxy_country or "").strip().upper()
+        self.country_name = (country_name or "").strip()
 
     def match_page_steps(
         self,
@@ -31,15 +40,94 @@ class ScenarioMatcher:
     ) -> List[Dict[str, Any]]:
         """
         Finds all scenario steps that match the current page, either by
-        page_number, question_contains, or always.
+        page_number, question_contains, or always, plus any Country Logic mapping.
         Returns a list of matched directives with target field bindings.
         """
-        if not self.steps:
-            return []
-
         matched_directives = []
         norm_questions = [normalize_text(q) for q in questions_on_page]
         combined_page_text = " ".join(norm_questions)
+
+        # 1. Match Country Logic (if configured for this project)
+        if self.country_logic and self.country_logic.get("country_mapping"):
+            cm = self.country_logic["country_mapping"]
+            mappings = cm.get("mappings") or []
+            q_contains = normalize_text(cm.get("questionContains") or "")
+
+            # Match country mapping entry by ISO code (e.g. GB), country name (e.g. United Kingdom), or alias
+            matched_mapping = None
+            alias_map = {
+                "GB": ["UK", "UNITED KINGDOM", "GREAT BRITAIN", "ENGLAND", "BRITAIN"],
+                "UK": ["GB", "UNITED KINGDOM", "GREAT BRITAIN", "ENGLAND", "BRITAIN"],
+                "US": ["USA", "UNITED STATES", "UNITED STATES OF AMERICA", "AMERICA"],
+                "USA": ["US", "UNITED STATES", "UNITED STATES OF AMERICA", "AMERICA"],
+                "CA": ["CANADA"],
+                "AU": ["AUSTRALIA"],
+                "DE": ["GERMANY", "DEUTSCHLAND"],
+                "FR": ["FRANCE"],
+                "IT": ["ITALY", "ITALIA"],
+                "ES": ["SPAIN", "ESPANA"],
+                "IN": ["INDIA"],
+            }
+            allowed_country_keys = set()
+            if self.proxy_country:
+                allowed_country_keys.add(self.proxy_country)
+                if self.proxy_country in alias_map:
+                    allowed_country_keys.update(alias_map[self.proxy_country])
+            if self.country_name:
+                allowed_country_keys.add(self.country_name.upper())
+
+            for m in mappings:
+                m_country = (m.get("country") or "").strip().upper()
+                if m_country in allowed_country_keys or (self.country_name and m_country.lower() == self.country_name.lower()):
+                    matched_mapping = m
+                    break
+
+            if matched_mapping:
+                country_patterns = [
+                    q_contains,
+                    "which country", "what country", "in which country",
+                    "country do you", "country are you", "country of residence",
+                    "country of operation", "primary market", "where is your",
+                    "where do you live", "where are you located", "where do you operate"
+                ]
+                country_patterns = [p for p in country_patterns if p]
+
+                has_country_q = False
+                matched_country_q = ""
+                for q in questions_on_page:
+                    norm_q = normalize_text(q)
+                    if any(p in norm_q for p in country_patterns):
+                        has_country_q = True
+                        matched_country_q = q
+                        break
+
+                if has_country_q:
+                    answer_text = matched_mapping.get("answer", "")
+                    target_field_index = None
+                    norm_mq = normalize_text(matched_country_q)
+                    for f in fields_on_page:
+                        f_q = normalize_text(f.get("questionLabel", ""))
+                        if f_q and (f_q in norm_mq or norm_mq in f_q):
+                            target_field_index = f.get("fieldIndex")
+                            break
+                    if target_field_index is None and len(fields_on_page) > 0:
+                        target_field_index = fields_on_page[0].get("fieldIndex")
+
+                    cl_directive = {
+                        "step_order": 0,
+                        "action": "country_logic",
+                        "action_mode": "exact",
+                        "action_text": answer_text,
+                        "action_values": [],
+                        "target_field_index": target_field_index,
+                        "matched_question": matched_country_q,
+                        "instruction": f"COUNTRY LOGIC: Select the option matching '{answer_text}'. Mandatory — do not deviate.",
+                    }
+                    matched_directives.append(cl_directive)
+                    print(f"[ScenarioMatcher] Country Logic matched on page {page_number}: '{matched_country_q[:40]}' -> '{answer_text}'")
+
+        if not self.steps:
+            return matched_directives
 
         for step in self.steps:
             when_type = step.get("when_type", "")
@@ -132,6 +220,10 @@ class ScenarioMatcher:
         # Formulate human/AI readable instruction
         if action == "select_exact" and vals:
             directive["instruction"] = f"Must select option #{vals[0]}"
+        elif action == "select_exact" and action_text:
+            directive["instruction"] = f"Must select option matching '{action_text}'"
+        elif action == "country_logic":
+            directive["instruction"] = f"COUNTRY LOGIC: Select the option matching '{action_text}'. Mandatory — do not deviate."
         elif action == "select_one_of" and vals:
             directive["instruction"] = f"Must select one of options: {vals}"
         elif action == "select_not_in" and vals:

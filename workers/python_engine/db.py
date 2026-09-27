@@ -108,20 +108,34 @@ class DBClient:
         scenarios = []
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             if scenario_ids and len(scenario_ids) > 0:
-                cur.execute("SELECT * FROM scenarios WHERE id = ANY(%s) AND is_active = true", (scenario_ids,))
+                cur.execute(
+                    "SELECT * FROM scenarios WHERE id = ANY(%s) AND COALESCE(is_active, true) = true",
+                    (scenario_ids,)
+                )
             else:
                 cur.execute(
                     """
                     SELECT s.* FROM scenarios s
-                    JOIN project_scenarios ps ON ps.scenario_id = s.id AND ps.project_id = %s
-                    WHERE ps.is_active = true AND s.is_active = true
+                    LEFT JOIN project_scenarios ps ON ps.scenario_id = s.id AND ps.project_id = %s
+                    WHERE s.project_id = %s
+                      AND COALESCE(ps.is_active, s.is_active, true) = true
+                      AND COALESCE(s.is_active, true) = true
                     ORDER BY s.created_at ASC
                     """,
-                    (project_id,),
+                    (project_id, project_id),
                 )
             rows = cur.fetchall()
             for r in rows:
                 scen = dict(r)
+                # Parse country_mapping if string
+                cm = scen.get("country_mapping")
+                if isinstance(cm, str):
+                    try:
+                        import json
+                        cm = json.loads(cm)
+                    except Exception:
+                        pass
+                scen["country_mapping"] = cm
                 # Fetch steps
                 cur.execute(
                     "SELECT * FROM scenario_steps WHERE scenario_id = %s ORDER BY step_order ASC",
@@ -130,6 +144,66 @@ class DBClient:
                 scen["steps"] = [dict(step) for step in cur.fetchall()]
                 scenarios.append(scen)
         return scenarios
+
+    def get_country_logic(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Fetches active Country Logic scenario with its country_mapping."""
+        conn = self.get_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT s.* FROM scenarios s
+                LEFT JOIN project_scenarios ps ON ps.scenario_id = s.id AND ps.project_id = %s
+                WHERE s.project_id = %s
+                  AND (s.name = 'Country Logic' OR s.country_mapping IS NOT NULL)
+                  AND COALESCE(ps.is_active, s.is_active, true) = true
+                  AND COALESCE(s.is_active, true) = true
+                LIMIT 1
+                """,
+                (project_id, project_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            scen = dict(row)
+            cm = scen.get("country_mapping")
+            if isinstance(cm, str):
+                try:
+                    import json
+                    cm = json.loads(cm)
+                except Exception:
+                    pass
+            scen["country_mapping"] = cm
+            return scen
+
+    def get_country_name(self, country_code: Optional[str]) -> Optional[str]:
+        """Resolves ISO code to full country name (e.g. GB -> United Kingdom)."""
+        if not country_code:
+            return None
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT country FROM proxy_countries WHERE UPPER(code) = UPPER(%s) LIMIT 1",
+                    (country_code,),
+                )
+                row = cur.fetchone()
+                return row[0] if row else None
+        except Exception:
+            return None
+
+    def get_session_position(self, project_id: str, session_id: str) -> int:
+        """Gets index of this session within project for round-robin assignment."""
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM sessions WHERE project_id = %s AND created_at <= (SELECT created_at FROM sessions WHERE id = %s)",
+                    (project_id, session_id)
+                )
+                row = cur.fetchone()
+                return max(0, int(row[0] or 1) - 1)
+        except Exception:
+            return 0
 
     def get_ai_model(self, workspace_id: str, model_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Fetches active AI model configuration (rates, reasoning level)."""
