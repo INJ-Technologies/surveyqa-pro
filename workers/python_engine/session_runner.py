@@ -65,11 +65,13 @@ class SurveySessionRunner:
         survey_url: Optional[str] = None,
         internal_testing: Optional[bool] = None,
         scenario_id: Optional[str] = None,
+        ai_model_id: Optional[str] = None,
     ):
         self.session_id = session_id
         self.survey_url = survey_url
         self.internal_testing = internal_testing
         self.scenario_id = scenario_id
+        self.ai_model_id = ai_model_id
         self.db = DBClient()
         self.max_pages = 150
 
@@ -149,9 +151,10 @@ class SurveySessionRunner:
         )
 
         # 4. Resolve AI Model
-        workspace_id = str(project.get("workspace_id") or session.get("workspace_id"))
-        ai_model_record = self.db.get_ai_model(workspace_id, session.get("ai_model_id"))
-        model_name = ai_model_record.get("model_id") if ai_model_record else "meta-llama/llama-3.3-70b-instruct"
+        workspace_id = str(project.get("workspace_id") or session.get("workspace_id") or "")
+        target_model_id = self.ai_model_id or session.get("ai_model_id")
+        ai_model_record = self.db.get_ai_model(workspace_id, target_model_id)
+        model_name = ai_model_record.get("model_id") if ai_model_record else (target_model_id or "meta-llama/llama-3.3-70b-instruct")
         raw_in_price = ai_model_record.get("input_price_per_1m") if ai_model_record else None
         raw_out_price = ai_model_record.get("output_price_per_1m") if ai_model_record else None
         input_price = float(raw_in_price) if raw_in_price is not None else 0.0
@@ -160,10 +163,16 @@ class SurveySessionRunner:
         is_free_model = False
         if ai_model_record and bool(ai_model_record.get("is_free")):
             is_free_model = True
-        elif ":free" in model_name.lower():
+        elif ":free" in (model_name or "").lower() or "free" in (model_name or "").lower().split(":")[-1]:
             is_free_model = True
         elif ai_model_record and raw_in_price is not None and input_price == 0.0 and output_price == 0.0:
             is_free_model = True
+
+        if is_free_model:
+            input_price = 0.0
+            output_price = 0.0
+
+        print(f"[SessionRunner] Resolved AI Model: '{model_name}' (free={is_free_model}, in=${input_price:.4f}/1M, out=${output_price:.4f}/1M)")
 
         # 5. Initialize Living Story Engine
         story_state = StoryState(persona=persona, proxy_country=proxy_country, country_name=country_name)

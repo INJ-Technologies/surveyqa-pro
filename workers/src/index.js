@@ -4500,7 +4500,7 @@ try {
   console.warn("[Worker] Could not initialize Redis abort subscriber:", redisSubErr.message);
 }
 
-const runPythonSession = (sessionId, surveyUrl = null, internalTesting = false, projectId = null, scenarioId = null) => {
+const runPythonSession = (sessionId, surveyUrl = null, internalTesting = false, projectId = null, scenarioId = null, aiModelId = null) => {
   return new Promise((resolve, reject) => {
     const pythonBin =
       process.env.PYTHON_BIN ||
@@ -4515,6 +4515,9 @@ const runPythonSession = (sessionId, surveyUrl = null, internalTesting = false, 
     }
     if (scenarioId) {
       args.push("--scenario-id", scenarioId);
+    }
+    if (aiModelId) {
+      args.push("--ai-model", aiModelId);
     }
 
     console.log(
@@ -4651,7 +4654,7 @@ const processSession = async (job) => {
   if (usePythonEngine) {
     try {
       const effectiveScenarioId = scenarioId || (Array.isArray(scenarioIds) && scenarioIds.length > 0 ? scenarioIds[0] : null);
-      const res = await runPythonSession(sessionId, surveyUrl, internalTesting, projectId, effectiveScenarioId);
+      const res = await runPythonSession(sessionId, surveyUrl, internalTesting, projectId, effectiveScenarioId, resolvedModelId);
       if (res?.outcome === "terminated" || res?.manuallyStopped) {
         console.log(`[Worker] Session ${sessionId} stopped as requested.`);
         return res;
@@ -4818,18 +4821,18 @@ const processSession = async (job) => {
         const m = modelResult.rows[0];
         const secretName = "openrouter_synthfield";
         const resolvedKey = readSecret(secretName);
-        if (resolvedKey) {
+          const isFree = Boolean(m.is_free) || (m.model_id || "").toLowerCase().includes(":free") || (m.model_id || "").toLowerCase().endsWith("/free");
           providerConfig = {
             provider_type: "openrouter",
             api_key: resolvedKey,
             model: m.model_id,
             base_url: null,
-            inputPricePer1m: parseFloat(m.input_price_per_1m || 0),
-            outputPricePer1m: parseFloat(m.output_price_per_1m || 0),
+            inputPricePer1m: isFree ? 0 : parseFloat(m.input_price_per_1m || 0),
+            outputPricePer1m: isFree ? 0 : parseFloat(m.output_price_per_1m || 0),
             _usage: { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 },
           };
           console.log(
-            `[Worker] ✓ AI model loaded: ${m.display_name} (${m.model_id}) — $${providerConfig.inputPricePer1m}/1M in, $${providerConfig.outputPricePer1m}/1M out`,
+            `[Worker] ✓ AI model loaded: ${m.display_name} (${m.model_id}) — $${providerConfig.inputPricePer1m}/1M in, $${providerConfig.outputPricePer1m}/1M out (free=${isFree})`,
           );
         } else {
           console.warn(`[Worker] ⚠️ Secret "${secretName}" not found`);
@@ -4879,19 +4882,20 @@ const processSession = async (job) => {
         if (defaultModel) {
           const resolvedKey = readSecret("openrouter_synthfield");
           if (resolvedKey) {
+            const isFree = Boolean(defaultModel.is_free) || (defaultModel.model_id || "").toLowerCase().includes(":free") || (defaultModel.model_id || "").toLowerCase().endsWith("/free");
             providerConfig = {
               provider_type: "openrouter",
               api_key: resolvedKey,
               model: defaultModel.model_id,
               base_url: null,
-              inputPricePer1m: parseFloat(defaultModel.input_price_per_1m || 0),
-              outputPricePer1m: parseFloat(
+              inputPricePer1m: isFree ? 0 : parseFloat(defaultModel.input_price_per_1m || 0),
+              outputPricePer1m: isFree ? 0 : parseFloat(
                 defaultModel.output_price_per_1m || 0,
               ),
               _usage: { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 },
             };
             console.log(
-              `[Worker] ✓ AI model (workspace default): ${defaultModel.display_name} — $${providerConfig.inputPricePer1m}/1M in, $${providerConfig.outputPricePer1m}/1M out`,
+              `[Worker] ✓ AI model (workspace default): ${defaultModel.display_name} — $${providerConfig.inputPricePer1m}/1M in, $${providerConfig.outputPricePer1m}/1M out (free=${isFree})`,
             );
           }
         }

@@ -206,35 +206,57 @@ class DBClient:
         except Exception:
             return 0
 
-    def get_ai_model(self, workspace_id: str, model_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_ai_model(self, workspace_id: Optional[str] = None, model_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Fetches active AI model configuration (rates, reasoning level)."""
         conn = self.get_connection()
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             if model_id:
+                if workspace_id:
+                    cur.execute(
+                        "SELECT * FROM ai_models WHERE workspace_id = %s AND (model_id = %s OR id::text = %s) LIMIT 1",
+                        (workspace_id, model_id, model_id),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        return dict(row)
+
+                # Global fallback: match model by model_id or id across any workspace
                 cur.execute(
-                    "SELECT * FROM ai_models WHERE workspace_id = %s AND (model_id = %s OR id::text = %s) LIMIT 1",
-                    (workspace_id, model_id, model_id),
+                    "SELECT * FROM ai_models WHERE (model_id = %s OR id::text = %s) AND is_active = true LIMIT 1",
+                    (model_id, model_id),
                 )
                 row = cur.fetchone()
                 if row:
                     return dict(row)
 
-            # Fallback to default active model
+            # Fallback to default active model for this workspace
+            if workspace_id:
+                cur.execute(
+                    "SELECT * FROM ai_models WHERE workspace_id = %s AND is_default = true AND is_active = true LIMIT 1",
+                    (workspace_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    return dict(row)
+
+                # Fallback to any active model in workspace
+                cur.execute(
+                    "SELECT * FROM ai_models WHERE workspace_id = %s AND is_active = true ORDER BY created_at ASC LIMIT 1",
+                    (workspace_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    return dict(row)
+
+            # Global fallback to default active model
             cur.execute(
-                "SELECT * FROM ai_models WHERE workspace_id = %s AND is_default = true AND is_active = true LIMIT 1",
-                (workspace_id,),
+                "SELECT * FROM ai_models WHERE is_default = true AND is_active = true LIMIT 1",
             )
             row = cur.fetchone()
             if row:
                 return dict(row)
 
-            # Fallback to any active model
-            cur.execute(
-                "SELECT * FROM ai_models WHERE workspace_id = %s AND is_active = true ORDER BY created_at ASC LIMIT 1",
-                (workspace_id,),
-            )
-            row = cur.fetchone()
-            return dict(row) if row else None
+            return None
 
     def get_proxy_config(self, country_code: Optional[str]) -> Optional[Dict[str, Any]]:
         if not country_code:

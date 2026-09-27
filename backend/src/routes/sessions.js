@@ -258,6 +258,17 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
 
       console.log(`[Sessions] Session ${i + 1}/${sessionLimit} → country: ${country || 'none'} | survey: ${survey.label} | scenario: ${scenarioName || 'default'} | url: ${finalUrl.slice(0, 60)}...`);
 
+      // Resolve AI model: explicit selection > workspace default AI model
+      let resolvedModelId = aiModelId || null;
+      if (!resolvedModelId) {
+        const wsId = req.user.workspace_id || null;
+        const defaultModel = await getDefaultModel(wsId);
+        resolvedModelId = defaultModel?.model_id || null;
+        console.log(`[Trigger] Default AI model: ${defaultModel ? defaultModel.display_name + ' / ' + defaultModel.model_id : 'NONE — env fallback'}`);
+      } else {
+        console.log(`[Trigger] Explicitly selected AI model: ${resolvedModelId}`);
+      }
+
       const session = await createSession({
         projectId,
         workspaceId:   req.user.workspace_id,
@@ -272,16 +283,8 @@ router.post('/trigger', requireRole('admin', 'project_manager'), async (req, res
         aiStrategy:    project.ai_strategy    || 'persona_true',
         internalTesting: !!internalTesting,
         scenarioName:  scenarioName,
+        aiModelId:     resolvedModelId,
       });
-
-      // Resolve AI model: explicit selection > workspace default AI model
-      let resolvedModelId = aiModelId || null;
-      if (!resolvedModelId) {
-        const wsId = req.user.workspace_id || null;
-        const defaultModel = await getDefaultModel(wsId);
-        resolvedModelId = defaultModel?.model_id || null;
-        console.log(`[Trigger] Default AI model: ${defaultModel ? defaultModel.display_name + ' / ' + defaultModel.model_id : 'NONE — env fallback'}`);
-      }
 
       await sessionQueue.add('run-session', {
         sessionId:       session.id,

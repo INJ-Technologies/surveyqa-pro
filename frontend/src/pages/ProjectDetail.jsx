@@ -4393,6 +4393,23 @@ function SessionReportModal({
                             👤 {session.persona_name}
                           </span>
                         )}
+                        {session.ai_model_id && (
+                          <span
+                            style={{
+                              fontSize: "0.72rem",
+                              background: "#f3e8ff",
+                              color: "#7e22ce",
+                              padding: "2px 8px",
+                              borderRadius: 12,
+                              fontWeight: 600,
+                              border: "1px solid #d8b4fe",
+                              fontFamily: FONT,
+                              marginLeft: 6,
+                            }}
+                          >
+                            🤖 {session.ai_model_id.split("/").pop().replace(":free", " (free)")}
+                          </span>
+                        )}
                       </div>
                       <p
                         style={{

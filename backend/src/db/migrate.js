@@ -278,6 +278,7 @@ const migrate = async () => {
         tags             TEXT[]       DEFAULT '{}',
         error_log        TEXT,
         trace_path       TEXT,
+        ai_model_id      VARCHAR(255),
         started_at       TIMESTAMPTZ,
         completed_at     TIMESTAMPTZ,
         created_at       TIMESTAMPTZ  DEFAULT NOW(),
@@ -441,6 +442,7 @@ const migrate = async () => {
     await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS platform_detected VARCHAR(50)`);
     await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS survey_map_id UUID REFERENCES survey_maps(id) ON DELETE SET NULL`);
     await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS living_story TEXT`);
+    await client.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ai_model_id VARCHAR(255)`);
 
     // ─── INDEXES ───────────────────────────────────────────────────────────
     const indexes = [

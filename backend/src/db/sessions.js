@@ -7,28 +7,43 @@ const createSession = async ({
   surveyUrl, surveyLabel, responseId,
   proxyCountry, proxyProvider,
   deviceType, browserType, aiStrategy, internalTesting = false,
-  scenarioName = null,
+  scenarioName = null, aiModelId = null,
 }) => {
   try {
-    // In the INSERT query, add internal_testing and scenario_name to columns and values:
     const result = await pool.query(
       `INSERT INTO sessions (
         project_id, workspace_id, persona_id, survey_url, survey_label,
         response_id, proxy_country, proxy_provider, device_type,
-        browser_type, ai_strategy, internal_testing, scenario_name, status
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'queued')
+        browser_type, ai_strategy, internal_testing, scenario_name, ai_model_id, status
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'queued')
       RETURNING *`,
       [
         projectId, workspaceId, personaId || null, surveyUrl, surveyLabel || null,
         responseId, proxyCountry || null, proxyProvider || null, deviceType || null,
         browserType || null, aiStrategy || null, internalTesting || false,
-        scenarioName || null,
+        scenarioName || null, aiModelId || null,
       ]
     );
     return result.rows[0];
   } catch (err) {
-    // Backward compatible insert for DBs missing the newer columns.
     const msg = (err && err.message) || '';
+    if (msg.includes('ai_model_id')) {
+      const fallbackResult = await pool.query(
+        `INSERT INTO sessions (
+          project_id, workspace_id, persona_id, survey_url, survey_label,
+          response_id, proxy_country, proxy_provider, device_type,
+          browser_type, ai_strategy, internal_testing, scenario_name, status
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'queued')
+        RETURNING *`,
+        [
+          projectId, workspaceId, personaId || null, surveyUrl, surveyLabel || null,
+          responseId, proxyCountry || null, proxyProvider || null, deviceType || null,
+          browserType || null, aiStrategy || null, internalTesting || false,
+          scenarioName || null,
+        ]
+      );
+      return fallbackResult.rows[0];
+    }
     if (!msg.includes('workspace_id') && !msg.includes('survey_url') && !msg.includes('response_id')) {
       throw err;
     }
