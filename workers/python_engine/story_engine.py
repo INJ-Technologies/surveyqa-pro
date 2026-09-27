@@ -279,9 +279,12 @@ class StoryEngine:
             elif f_type == "grid":
                 rows = f.get("rows", [])
                 col_headers = f.get("colHeaders", [])
+                actual_num_cols = max([len(r.get("columns", [])) for r in rows if r.get("columns")] or [len(col_headers)])
                 substantive_cols = [ci for ci, h in enumerate(col_headers) if not is_optout_option(h)]
-                if not substantive_cols:
-                    substantive_cols = list(range(len(col_headers))) if col_headers else [0]
+                if len(substantive_cols) <= 1 and actual_num_cols >= 2:
+                    substantive_cols = list(range(actual_num_cols))
+                    if col_headers and is_optout_option(col_headers[-1]):
+                        substantive_cols = substantive_cols[:-1]
                 pos_cols = substantive_cols[len(substantive_cols)//2:] if len(substantive_cols) >= 3 else substantive_cols
                 grid_sels = []
                 for ri, row in enumerate(rows):
@@ -603,9 +606,12 @@ class StoryEngine:
                     "Rows that are NOT selected MUST NOT be rated (omit from rowRatings)."
                 )
             elif f_type == "grid":
+                col_hdrs = f.get("colHeaders", [])
+                if not col_hdrs and f.get("rows") and f["rows"][0].get("columns"):
+                    col_hdrs = [c.get("label") or f"Col {ci+1}" for ci, c in enumerate(f["rows"][0]["columns"])]
                 field_desc["columnHeaders"] = [
                     {"colIndex": ci, "header": h}
-                    for ci, h in enumerate(f.get("colHeaders", []))
+                    for ci, h in enumerate(col_hdrs)
                 ]
                 substantive_rows = []
                 other_rows = []

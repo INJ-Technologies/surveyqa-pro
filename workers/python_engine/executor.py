@@ -195,9 +195,12 @@ class ActionExecutor:
                 elif f_type == "grid":
                     rows = f.get("rows", [])
                     cols = f.get("colHeaders", [])
+                    actual_num_cols = max([len(r.get("columns", [])) for r in rows if r.get("columns")] or [len(cols)])
                     sub_cols = [ci for ci, h in enumerate(cols) if not is_optout_option(h)]
-                    if not sub_cols:
-                        sub_cols = list(range(len(cols))) if cols else [0]
+                    if len(sub_cols) <= 1 and actual_num_cols >= 2:
+                        sub_cols = list(range(actual_num_cols))
+                        if cols and is_optout_option(cols[-1]):
+                            sub_cols = sub_cols[:-1]
                     grid_sels = [
                         {"rowIndex": ri, "colIndex": sub_cols[ri % len(sub_cols)]}
                         for ri, r in enumerate(rows)
@@ -924,16 +927,35 @@ class ActionExecutor:
            - If rated in gridSelections: Check selected column radio AND fill the specify input with contextual statement.
         """
         rows = field.get("rows", [])
-        col_headers = field.get("colHeaders", [])
+        col_headers = list(field.get("colHeaders", []))
         if not rows:
             return None
 
+        # Determine actual number of columns from rows
+        row_col_counts = [len(r.get("columns", [])) for r in rows if r.get("columns")]
+        actual_num_cols = max(row_col_counts) if row_col_counts else len(col_headers)
+
+        # If col_headers is empty or has fewer items than actual_num_cols, backfill from row 0's columns
+        if not col_headers and rows and rows[0].get("columns"):
+            col_headers = [c.get("label") or f"Col {ci+1}" for ci, c in enumerate(rows[0]["columns"])]
+
         # Filter substantive columns (exclude 'Don't know', 'Not applicable', etc.)
         substantive_cols = [ci for ci, h in enumerate(col_headers) if not is_optout_option(h)]
-        if not substantive_cols:
-            substantive_cols = list(range(len(col_headers))) if col_headers else [0]
+        if len(substantive_cols) <= 1 and actual_num_cols >= 2:
+            substantive_cols = list(range(actual_num_cols))
+            if col_headers and is_optout_option(col_headers[-1]):
+                substantive_cols = substantive_cols[:-1]
+            elif actual_num_cols >= 3:
+                last_h = (col_headers[-1] if col_headers else "").lower()
+                if any(w in last_h for w in ["not sure", "don't know", "none", "n/a", "neither"]):
+                    substantive_cols = substantive_cols[:-1]
 
-        grid_selections = ans.get("gridSelections", [])
+        grid_selections = ans.get("gridSelections") or ans.get("selections") or ans.get("ratings") or []
+        if isinstance(grid_selections, dict):
+            grid_selections = [{"rowIndex": k, "colIndex": v} for k, v in grid_selections.items()]
+        elif ans.get("selectedIndices") and isinstance(ans.get("selectedIndices"), list) and not grid_selections:
+            grid_selections = [{"rowIndex": ri, "colIndex": ci} for ri, ci in enumerate(ans["selectedIndices"])]
+
         col_map = {}
         spec_map = {}
         for gs in grid_selections:
@@ -941,16 +963,21 @@ class ActionExecutor:
                 continue
             r_idx = gs.get("rowIndex") if gs.get("rowIndex") is not None else gs.get("row")
             if isinstance(r_idx, str):
-                for ri, row in enumerate(rows):
-                    if r_idx.lower() in (row.get("rowLabel") or "").lower():
-                        r_idx = ri
-                        break
+                if r_idx.isdigit():
+                    r_idx = int(r_idx)
+                else:
+                    for ri, row in enumerate(rows):
+                        if r_idx.lower() in (row.get("rowLabel") or "").lower():
+                            r_idx = ri
+                            break
 
             c_idx = gs.get("colIndex") if gs.get("colIndex") is not None else gs.get("col")
-            if c_idx is None or isinstance(c_idx, str):
+            if c_idx is not None and isinstance(c_idx, str) and c_idx.isdigit():
+                c_idx = int(c_idx)
+            elif c_idx is None or isinstance(c_idx, str):
                 text_val = str(c_idx or gs.get("column") or gs.get("selected") or gs.get("rating") or gs.get("value") or "").strip().lower()
                 for ci, h in enumerate(col_headers):
-                    if text_val and (text_val in h.lower() or h.lower() in text_val):
+                    if text_val and (text_val == h.lower() or text_val in h.lower() or h.lower() in text_val):
                         c_idx = ci
                         break
 
@@ -977,13 +1004,13 @@ class ActionExecutor:
         if len(substantive_row_indices) >= 2:
             from collections import Counter
             chosen_cols = [col_map.get(ri) for ri in substantive_row_indices]
-            valid_chosen = [c for c in chosen_cols if c is not None]
+            valid_chosen = [c for c in chosen_cols if c is not None and c in substantive_cols]
             counts = Counter(valid_chosen)
 
-            # Check if all or >= 70% of rows have the exact same column
+            # Check if flat / straight-lined or missing valid selections
             is_flat = False
             most_common_col = None
-            if not valid_chosen or len(counts) <= 1:
+            if len(valid_chosen) < len(substantive_row_indices) or len(counts) <= 1:
                 is_flat = True
                 most_common_col = valid_chosen[0] if valid_chosen else None
             else:
@@ -994,23 +1021,50 @@ class ActionExecutor:
             if is_flat:
                 story_text = ((persona or {}).get("cumulative_story") or "").lower()
                 q_text = field.get("questionLabel", "").lower()
-                is_positive = any(w in story_text or w in q_text for w in ["increase", "agree", "positive", "high", "adopt", "likely", "effective", "benefit", "threat"])
+                headers_joined = " ".join(col_headers).lower()
 
-                if is_positive and len(substantive_cols) >= 3 and (most_common_col == 0 or most_common_col is None):
-                    # Flipped negative extreme to positive half
-                    primary_c = substantive_cols[-1]
-                    secondary_c = substantive_cols[-2]
-                elif most_common_col is not None and most_common_col in substantive_cols:
-                    primary_c = most_common_col
-                    pos = substantive_cols.index(primary_c)
-                    adj_pos = pos - 1 if pos > 0 else (pos + 1 if pos + 1 < len(substantive_cols) else pos)
-                    secondary_c = substantive_cols[adj_pos]
+                # Check if this grid is a standard rating scale
+                is_rating_scale = any(w in headers_joined for w in [
+                    "agree", "disagree", "satisf", "importan", "frequen", "never", "rarely", "often", "always",
+                    "likely", "rate", "poor", "fair", "good", "excellent", "low", "high", "increase", "decrease", "effective"
+                ]) or any(h.strip().isdigit() for h in col_headers if h.strip())
+
+                if is_rating_scale:
+                    # Determine scale orientation: is col 0 negative?
+                    first_col_label = (col_headers[0] if col_headers else "").lower()
+                    col_0_is_negative = any(w in first_col_label for w in [
+                        "disagree", "never", "rarely", "poor", "bad", "low", "decrease", "least", "not at all", "unlikely", "dissatisfied"
+                    ]) or (first_col_label.isdigit() and int(first_col_label) == 1)
+
+                    if col_0_is_negative:
+                        # High indices are positive!
+                        primary_c = substantive_cols[-1]
+                        secondary_c = substantive_cols[-2] if len(substantive_cols) >= 2 else primary_c
+                        neutral_c = substantive_cols[len(substantive_cols)//2]
+                        for i, ri in enumerate(substantive_row_indices):
+                            if i % 5 == 3 and neutral_c != primary_c:
+                                col_map[ri] = neutral_c
+                            elif i % 2 == 1:
+                                col_map[ri] = secondary_c
+                            else:
+                                col_map[ri] = primary_c
+                    else:
+                        # Col 0 is positive (e.g. 'Strongly agree' is col 0)
+                        primary_c = substantive_cols[0]
+                        secondary_c = substantive_cols[1] if len(substantive_cols) >= 2 else primary_c
+                        neutral_c = substantive_cols[len(substantive_cols)//2]
+                        for i, ri in enumerate(substantive_row_indices):
+                            if i % 5 == 3 and neutral_c != primary_c:
+                                col_map[ri] = neutral_c
+                            elif i % 2 == 1:
+                                col_map[ri] = secondary_c
+                            else:
+                                col_map[ri] = primary_c
                 else:
-                    primary_c = substantive_cols[-1] if len(substantive_cols) >= 2 else substantive_cols[0]
-                    secondary_c = substantive_cols[-2] if len(substantive_cols) >= 2 else primary_c
-
-                for i, ri in enumerate(substantive_row_indices):
-                    col_map[ri] = secondary_c if (i % 3 == 0) else primary_c
+                    # Categorical grid (e.g. destinations/countries, brands, products)
+                    # Distribute varied, authentic choices across substantive columns
+                    for i, ri in enumerate(substantive_row_indices):
+                        col_map[ri] = substantive_cols[(i * 2 + (i // len(substantive_cols))) % len(substantive_cols)]
 
         row_results = []
         for ri, row in enumerate(rows):
@@ -1115,20 +1169,28 @@ class ActionExecutor:
             col_opt = cols[target_col]
             radio_id = col_opt.get("id")
 
+            clicked = False
             if radio_id:
-                loc = locate_by_id(self.page, radio_id)
-                if loc.count() > 0:
-                    safe_click(loc)
-                    try:
-                        if not loc.is_checked():
-                            clean_id = radio_id.replace('"', '\\"')
-                            lbl = self.page.locator(f'label[for="{clean_id}"]')
-                            if lbl.count() > 0:
-                                safe_click(lbl)
-                            if not loc.is_checked():
-                                loc.evaluate("el => { el.checked = true; el.dispatchEvent(new Event('change', {bubbles: true})); }")
-                    except Exception:
-                        pass
+                clicked = self._check_input_element(
+                    opt_id=radio_id,
+                    opt_name=row_name,
+                    opt_val=col_opt.get("value"),
+                    is_radio=True
+                )
+                if not clicked:
+                    self.page.evaluate("""(id) => {
+                        const r = document.getElementById(id);
+                        if (r) {
+                            r.checked = true;
+                            const cell = r.closest('td, .cell-input, .fir-radio, label');
+                            if (cell) {
+                                cell.click();
+                                cell.classList.add('fir-selected', 'checked', 'selected');
+                            }
+                            r.dispatchEvent(new Event('input', { bubbles: true }));
+                            r.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    }""", radio_id)
             else:
                 if row_name:
                     all_radios = self.page.locator(f'input[type="radio"][name="{row_name}"]').all()
