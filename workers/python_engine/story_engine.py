@@ -245,10 +245,18 @@ class StoryEngine:
                 spec_text = None
                 if chosen_opt.get("hasSpecify"):
                     combo_text = f"{chosen_opt.get('label', '')} {chosen_opt.get('specifyPrompt', '')} {f.get('questionLabel', '')}"
-                    range_tuple = extract_numeric_range(chosen_opt.get("label", "")) or extract_numeric_range(chosen_opt.get("specifyPrompt", "")) or extract_numeric_range(f.get("questionLabel", ""))
+                    range_tuple = None
+                    for err in (error_banners or []):
+                        err_range = extract_numeric_range(err)
+                        if err_range:
+                            range_tuple = err_range
+                            break
+                    if not range_tuple:
+                        range_tuple = extract_numeric_range(chosen_opt.get("label", "")) or extract_numeric_range(chosen_opt.get("specifyPrompt", "")) or extract_numeric_range(f.get("questionLabel", ""))
                     if range_tuple or re.search(r"exact number|how many|amount|count|between|employees|headcount|enter a number", combo_text, re.I):
                         num_val = generate_humanized_number_in_range(range_tuple[0], range_tuple[1]) if range_tuple else 25000
                         spec_text = str(num_val)
+                        self.story_state.established_facts["exact_employees" if "employee" in combo_text.lower() else "exact_numeric"] = num_val
                     else:
                         spec_text = self.story_state.established_facts.get("job_title") or "Operations"
                 answers.append({
@@ -468,6 +476,61 @@ class StoryEngine:
             fallback_for_missing = self._generate_fallback_answers(missing_fields, scenario_directives, error_banners)
             answers.extend(fallback_for_missing)
 
+        # Enrich answers: ensure any selected option requiring specification (e.g. numeric range or other) has valid specifyText
+        field_by_idx = {f.get("fieldIndex"): f for f in fields}
+        for a in answers:
+            if not isinstance(a, dict):
+                continue
+            f = field_by_idx.get(a.get("fieldIndex"))
+            if not f:
+                continue
+            f_type = f.get("fieldType")
+            raw_opts = f.get("options", [])
+
+            if f_type == "radio":
+                sel_idx = a.get("selectedIndex", 0)
+                if 0 <= sel_idx < len(raw_opts):
+                    chosen_opt = raw_opts[sel_idx]
+                    is_other = bool(re.search(r"other|specify|please\s*state|explain|details|write[- ]in|qualify", chosen_opt.get("label", ""), re.I))
+                    if (chosen_opt.get("hasSpecify") or is_other) and not a.get("specifyText"):
+                        combo_text = f"{chosen_opt.get('label', '')} {chosen_opt.get('specifyPrompt', '')} {f.get('questionLabel', '')}"
+                        range_tuple = None
+                        for err in (error_banners or []):
+                            err_range = extract_numeric_range(err)
+                            if err_range:
+                                range_tuple = err_range
+                                break
+                        if not range_tuple:
+                            range_tuple = extract_numeric_range(chosen_opt.get("label", "")) or extract_numeric_range(chosen_opt.get("specifyPrompt", "")) or extract_numeric_range(f.get("questionLabel", ""))
+                        if range_tuple or re.search(r"exact number|how many|amount|count|between|employees|headcount|enter a number", combo_text, re.I):
+                            num_val = generate_humanized_number_in_range(range_tuple[0], range_tuple[1]) if range_tuple else 25000
+                            a["specifyText"] = str(num_val)
+                            self.story_state.established_facts["exact_employees" if "employee" in combo_text.lower() else "exact_numeric"] = num_val
+                        else:
+                            a["specifyText"] = self.story_state.established_facts.get("job_title") or "Operations"
+            elif f_type == "checkbox":
+                sel_indices = a.get("selectedIndices", [])
+                for s_idx in sel_indices:
+                    if 0 <= s_idx < len(raw_opts):
+                        chosen_opt = raw_opts[s_idx]
+                        is_other = bool(re.search(r"other|specify|please\s*state|explain|details|write[- ]in|qualify", chosen_opt.get("label", ""), re.I))
+                        if (chosen_opt.get("hasSpecify") or is_other) and not a.get("specifyText"):
+                            combo_text = f"{chosen_opt.get('label', '')} {chosen_opt.get('specifyPrompt', '')} {f.get('questionLabel', '')}"
+                            range_tuple = None
+                            for err in (error_banners or []):
+                                err_range = extract_numeric_range(err)
+                                if err_range:
+                                    range_tuple = err_range
+                                    break
+                            if not range_tuple:
+                                range_tuple = extract_numeric_range(chosen_opt.get("label", "")) or extract_numeric_range(chosen_opt.get("specifyPrompt", "")) or extract_numeric_range(f.get("questionLabel", ""))
+                            if range_tuple or re.search(r"exact number|how many|amount|count|between|employees|headcount|enter a number", combo_text, re.I):
+                                num_val = generate_humanized_number_in_range(range_tuple[0], range_tuple[1]) if range_tuple else 25000
+                                a["specifyText"] = str(num_val)
+                                self.story_state.established_facts["exact_employees" if "employee" in combo_text.lower() else "exact_numeric"] = num_val
+                            else:
+                                a["specifyText"] = self.story_state.established_facts.get("job_title") or "Operations"
+
         # Update StoryState
         self.story_state.update_story(story_update, new_facts)
         self.story_state.record_page_decision(page_number, answers, qa_rationale)
@@ -633,16 +696,26 @@ class StoryEngine:
                     lbl = opt.get("label", "")
                     if not allow_optout and is_optout_option(lbl):
                         continue
-                    opts_for_ai.append({
+                    has_spec = opt.get("hasSpecify", False)
+                    entry = {
                         "index": orig_idx,
                         "label": lbl,
-                        "hasSpecify": opt.get("hasSpecify", False)
-                    })
+                        "hasSpecify": has_spec
+                    }
+                    if has_spec and opt.get("specifyPrompt"):
+                        entry["specifyPrompt"] = opt.get("specifyPrompt")
+                    opts_for_ai.append(entry)
                 if not opts_for_ai:
-                    opts_for_ai = [
-                        {"index": orig_idx, "label": opt.get("label", ""), "hasSpecify": opt.get("hasSpecify", False)}
-                        for orig_idx, opt in enumerate(raw_opts)
-                    ]
+                    for orig_idx, opt in enumerate(raw_opts):
+                        has_spec = opt.get("hasSpecify", False)
+                        entry = {
+                            "index": orig_idx,
+                            "label": opt.get("label", ""),
+                            "hasSpecify": has_spec
+                        }
+                        if has_spec and opt.get("specifyPrompt"):
+                            entry["specifyPrompt"] = opt.get("specifyPrompt")
+                        opts_for_ai.append(entry)
                 field_desc["options"] = opts_for_ai
 
                 # If options contain respondent's country, add guidance

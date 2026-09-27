@@ -160,12 +160,14 @@ class ActionExecutor:
         self,
         fields: List[Dict[str, Any]],
         answers: List[Dict[str, Any]],
-        persona: Optional[Dict[str, Any]] = None
+        persona: Optional[Dict[str, Any]] = None,
+        error_banners: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """
         Executes all field decisions on the current page DOM.
         Returns a list of structured answer summary records.
         """
+        self.error_banners = error_banners or []
         # Always tick mandatory consent checkboxes first
         self.handle_consent_checkboxes()
 
@@ -291,18 +293,130 @@ class ActionExecutor:
         self._check_input_element(opt_id=opt_id, opt_name=opt_name, opt_val=opt_val, is_radio=True)
         time.sleep(0.15)
 
-        # Handle follow-up specify box if present (either explicitly marked hasSpecify or Other/Specify option)
-        has_specify = target_opt.get("hasSpecify")
+        # Live DOM inspection to detect any specify/follow-up input belonging to the checked radio
+        dom_specify_info = self.page.evaluate("""(data) => {
+            const r = document.querySelector(`input[type="radio"][name="${data.groupName}"]:checked`) || (data.optId ? document.getElementById(data.optId) : null);
+            if (!r) return { found: false };
+
+            const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+
+            const getInpPrompt = (inp, fallbackEl) => {
+                let prompt = '';
+                if (inp.id) {
+                    try {
+                        const lbl = document.querySelector(`label[for="${CSS.escape(inp.id)}"]`);
+                        if (lbl) prompt = clean(lbl.innerText || lbl.textContent);
+                    } catch(e) {}
+                }
+                if (!prompt && inp.closest('label')) {
+                    const clone = inp.closest('label').cloneNode(true);
+                    clone.querySelectorAll('input, select, textarea').forEach(n => n.remove());
+                    prompt = clean(clone.innerText || clone.textContent);
+                }
+                if (!prompt && fallbackEl) {
+                    const clone = fallbackEl.cloneNode(true);
+                    clone.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(n => n.remove());
+                    prompt = clean(clone.innerText || clone.textContent || '');
+                }
+                if (!prompt && inp.placeholder) {
+                    prompt = inp.placeholder;
+                }
+                return prompt;
+            };
+
+            // 1. Direct specifyId from target_opt if provided
+            if (data.specId) {
+                const el = document.getElementById(data.specId) || document.querySelector(`[name="${data.specId}"]`);
+                if (el && el.offsetParent !== null) {
+                    return { found: true, id: el.id || null, name: el.name || null, prompt: getInpPrompt(el, el.parentElement) };
+                }
+            }
+
+            // 2. Choice wrapper container
+            const choiceWrapper = r.closest('tr, .row, .choice, .element, [class*="choice"], [class*="option"], [class*="answer"], li, label');
+            if (choiceWrapper) {
+                const inp = choiceWrapper.querySelector('input[type="text"], input[type="search"], input[type="number"], textarea');
+                if (inp && inp !== r && inp.offsetParent !== null) {
+                    return { found: true, id: inp.id || null, name: inp.name || null, prompt: getInpPrompt(inp, choiceWrapper) };
+                }
+                // Check next siblings of choiceWrapper (e.g. Decipher separate row for OE)
+                let nextRow = choiceWrapper.nextElementSibling;
+                for (let s = 0; s < 3 && nextRow; s++) {
+                    if (nextRow.querySelector('input[type="radio"], input[type="checkbox"]')) break;
+                    const sibInp = (nextRow.matches && nextRow.matches('input[type="text"], input[type="search"], input[type="number"], textarea'))
+                        ? nextRow
+                        : nextRow.querySelector('input[type="text"], input[type="search"], input[type="number"], textarea');
+                    if (sibInp && sibInp.offsetParent !== null) {
+                        return { found: true, id: sibInp.id || null, name: sibInp.name || null, prompt: getInpPrompt(sibInp, nextRow) };
+                    }
+                    nextRow = nextRow.nextElementSibling;
+                }
+            }
+
+            // 3. Parent element siblings
+            let p = r.parentElement;
+            for (let i = 0; i < 4 && p; i++) {
+                let sib = p.nextElementSibling;
+                for (let s = 0; s < 2 && sib; s++) {
+                    if (sib.querySelector('input[type="radio"], input[type="checkbox"]')) break;
+                    const sibInp = (sib.matches && sib.matches('input[type="text"], input[type="search"], input[type="number"], textarea'))
+                        ? sib
+                        : sib.querySelector('input[type="text"], input[type="search"], input[type="number"], textarea');
+                    if (sibInp && sibInp.offsetParent !== null) {
+                        return { found: true, id: sibInp.id || null, name: sibInp.name || null, prompt: getInpPrompt(sibInp, sib) };
+                    }
+                    sib = sib.nextElementSibling;
+                }
+                p = p.parentElement;
+            }
+
+            // 4. In qBlock, check ID/name prefix or single unclaimed text input
+            const qBlock = r.closest('.question, .qblock, [class*="question"], fieldset, form');
+            if (qBlock) {
+                const inps = Array.from(qBlock.querySelectorAll('input[type="text"], input[type="search"], input[type="number"], textarea'))
+                    .filter(el => el.offsetParent !== null);
+                const rVal = (r.value || '').toLowerCase();
+                const rId = (r.id || '').toLowerCase();
+                for (const el of inps) {
+                    const cCombo = ((el.id || '') + ' ' + (el.name || '')).toLowerCase();
+                    if ((rId && cCombo.includes(rId)) || (rVal && rVal.length > 1 && cCombo.includes(rVal))) {
+                        return { found: true, id: el.id || null, name: el.name || null, prompt: getInpPrompt(el, el.parentElement) };
+                    }
+                }
+                // If only 1 text input in qBlock, or any error banner exists on page, and input is visible
+                if (inps.length === 1) {
+                    return { found: true, id: inps[0].id || null, name: inps[0].name || null, prompt: getInpPrompt(inps[0], inps[0].parentElement) };
+                }
+            }
+
+            return { found: false };
+        }""", {
+            "groupName": opt_name or group_name,
+            "optId": opt_id,
+            "specId": target_opt.get("specifyId")
+        })
+
+        has_specify = target_opt.get("hasSpecify") or dom_specify_info.get("found", False)
         is_other_opt = bool(re.search(r"other|specify|please\\s*state|explain|details|write[- ]in|qualify", opt_label, re.I))
 
         spec_text = None
         if has_specify or is_other_opt:
             spec_text = ans.get("specifyText")
-            spec_prompt = target_opt.get("specifyPrompt") or ""
+            spec_prompt = target_opt.get("specifyPrompt") or dom_specify_info.get("prompt") or ""
             q_label = field.get("questionLabel", "")
             combo_text = f"{opt_label} {spec_prompt} {q_label}"
 
-            range_tuple = extract_numeric_range(opt_label) or extract_numeric_range(spec_prompt) or extract_numeric_range(q_label)
+            # Range search: check error banners FIRST (they often state exact ranges like 'between 10000 and 49999')
+            range_tuple = None
+            for err in getattr(self, "error_banners", []):
+                err_range = extract_numeric_range(err)
+                if err_range:
+                    range_tuple = err_range
+                    break
+
+            if not range_tuple:
+                range_tuple = extract_numeric_range(opt_label) or extract_numeric_range(spec_prompt) or extract_numeric_range(q_label)
+
             is_numeric_specify = bool(range_tuple or re.search(r"exact number|how many|amount|count|between|employees|headcount|enter a number", combo_text, re.I))
 
             if is_numeric_specify:
@@ -329,84 +443,62 @@ class ActionExecutor:
                 else:
                     spec_text = "Standard operations"
 
-            spec_id = target_opt.get("specifyId")
-            if spec_id:
-                loc = locate_by_id(self.page, spec_id)
-                if loc.count() > 0:
-                    loc.first.evaluate("""(el, val) => {
-                        el.removeAttribute('disabled');
-                        el.disabled = false;
-                        el.value = val;
+            # Fill the target specify input element
+            fill_id = dom_specify_info.get("id") or target_opt.get("specifyId")
+            fill_name = dom_specify_info.get("name") or target_opt.get("specifyName")
+            self.page.evaluate("""(data) => {
+                let inp = null;
+                if (data.fillId) inp = document.getElementById(data.fillId);
+                if (!inp && data.fillName) inp = document.querySelector(`[name="${data.fillName}"]`);
+                if (!inp) {
+                    const r = document.querySelector(`input[type="radio"][name="${data.groupName}"]:checked`) || (data.optId ? document.getElementById(data.optId) : null);
+                    if (r) {
+                        const choiceWrapper = r.closest('tr, .row, .choice, .element, [class*="choice"], [class*="option"], [class*="answer"], li, label');
+                        if (choiceWrapper) {
+                            inp = choiceWrapper.querySelector('input[type="text"], input[type="search"], input[type="number"], textarea');
+                            if (!inp) {
+                                let nextRow = choiceWrapper.nextElementSibling;
+                                for (let s = 0; s < 3 && nextRow; s++) {
+                                    if (nextRow.querySelector('input[type="radio"], input[type="checkbox"]')) break;
+                                    inp = nextRow.querySelector('input[type="text"], input[type="search"], input[type="number"], textarea');
+                                    if (inp) break;
+                                    nextRow = nextRow.nextElementSibling;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (inp) {
+                    inp.removeAttribute('disabled');
+                    inp.disabled = false;
+                    inp.value = data.text;
+                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }""", {
+                "fillId": fill_id,
+                "fillName": fill_name,
+                "groupName": opt_name or group_name,
+                "optId": opt_id,
+                "text": spec_text
+            })
+
+        # Clear specify inputs ONLY for UNSELECTED options in this radio group
+        unselected_spec_ids = [
+            o.get("specifyId") for idx, o in enumerate(options)
+            if idx != sel_idx and o.get("specifyId")
+        ]
+        if unselected_spec_ids:
+            self.page.evaluate("""(ids) => {
+                for (let id of ids) {
+                    const el = document.getElementById(id);
+                    if (el) {
+                        el.value = '';
                         el.dispatchEvent(new Event('input', { bubbles: true }));
                         el.dispatchEvent(new Event('change', { bubbles: true }));
-                    }""", spec_text)
-            else:
-                self.page.evaluate("""(data) => {
-                    const r = document.querySelector(`input[type="radio"][name="${data.groupName}"]:checked`) || (data.optId ? document.getElementById(data.optId) : null);
-                    if (!r) return;
-                    let node = r.parentElement;
-                    for (let i = 0; i < 5; i++) {
-                        if (!node) break;
-                        const inp = node.querySelector('input[type="text"], input[type="search"], input[type="number"], textarea');
-                        if (inp && inp !== r) {
-                            inp.removeAttribute('disabled');
-                            inp.disabled = false;
-                            inp.value = data.text;
-                            inp.dispatchEvent(new Event('input', { bubbles: true }));
-                            inp.dispatchEvent(new Event('change', { bubbles: true }));
-                            return;
-                        }
-                        node = node.parentElement;
-                    }
-                    const qBlock = r.closest('.question, .qblock, [class*="question"], fieldset, form');
-                    if (qBlock) {
-                        const inps = Array.from(qBlock.querySelectorAll('input[type="text"], input[type="number"], textarea'));
-                        const oeInp = inps.find(inp => /(oe|specify|other)/i.test((inp.id || '') + ' ' + (inp.name || ''))) || inps[0];
-                        if (oeInp) {
-                            oeInp.removeAttribute('disabled');
-                            oeInp.disabled = false;
-                            oeInp.value = data.text;
-                            oeInp.dispatchEvent(new Event('input', { bubbles: true }));
-                            oeInp.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-                    }
-                }""", {"groupName": opt_name or group_name, "optId": opt_id, "text": spec_text})
-        else:
-            # CRITICAL: If target_opt is NOT "Other (specify)", we MUST CLEAR any specify/open-end text inputs in this question block!
-            # Decipher validates: "Since you specified extra information, please also select a corresponding answer. Please select one."
-            self.page.evaluate("""(data) => {
-                const r = document.querySelector(`input[type="radio"][name="${data.groupName}"]:checked`) || (data.optId ? document.getElementById(data.optId) : null);
-                let qBlock = r ? r.closest('.question, .qblock, [class*="question"], fieldset, form, table') : null;
-                if (!qBlock && r) {
-                    let p = r.parentElement;
-                    for (let i = 0; i < 6 && p; i++) {
-                        if (p.querySelector('input[type="text"], textarea')) {
-                            qBlock = p;
-                            break;
-                        }
-                        p = p.parentElement;
                     }
                 }
-                if (qBlock) {
-                    qBlock.querySelectorAll('input[type="text"], input[type="search"], textarea').forEach(inp => {
-                        inp.value = '';
-                        inp.dispatchEvent(new Event('input', { bubbles: true }));
-                        inp.dispatchEvent(new Event('change', { bubbles: true }));
-                    });
-                }
-                const gName = (data.groupName || '');
-                const m = gName.match(/\\d+/);
-                const qNum = m ? m[0] : '';
-                document.querySelectorAll('input[type="text"], textarea').forEach(inp => {
-                    const idOrName = ((inp.id || '') + ' ' + (inp.name || '')).toLowerCase();
-                    if ((qNum && idOrName.includes(qNum) && (idOrName.startsWith('oe') || idOrName.includes('oe'))) ||
-                        (r && r.closest('.question, [class*="question"]') && r.closest('.question, [class*="question"]').contains(inp))) {
-                        inp.value = '';
-                        inp.dispatchEvent(new Event('input', { bubbles: true }));
-                        inp.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
-                });
-            }""", {"groupName": opt_name or group_name, "optId": opt_id})
+            }""", unselected_spec_ids)
 
         return {
             "type": "radio",
@@ -518,9 +610,14 @@ class ActionExecutor:
                 spec_text = ans.get("specifyText")
                 spec_prompt = opt.get("specifyPrompt") or ""
                 q_label = field.get("questionLabel", "")
-                combo_text = f"{opt_label} {spec_prompt} {q_label}"
-
-                range_tuple = extract_numeric_range(opt_label) or extract_numeric_range(spec_prompt) or extract_numeric_range(q_label)
+                range_tuple = None
+                for err in getattr(self, "error_banners", []):
+                    err_range = extract_numeric_range(err)
+                    if err_range:
+                        range_tuple = err_range
+                        break
+                if not range_tuple:
+                    range_tuple = extract_numeric_range(opt_label) or extract_numeric_range(spec_prompt) or extract_numeric_range(q_label)
                 is_numeric_specify = bool(range_tuple or re.search(r"exact number|how many|amount|count|between|employees|headcount|enter a number", combo_text, re.I))
 
                 if is_numeric_specify:

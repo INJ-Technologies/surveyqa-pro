@@ -438,7 +438,8 @@ class SurveySessionRunner:
                     executed_answers = executor.execute_decisions(
                         fields=visible_fields,
                         answers=answers,
-                        persona=persona
+                        persona=persona,
+                        error_banners=detected_errors
                     )
 
                     # 6. Post-execution verification & screenshot

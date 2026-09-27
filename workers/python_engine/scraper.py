@@ -96,7 +96,7 @@ class PageScraper:
                 const errorSelectors = [
                     '.errMsg', '.error', '.err', '[class*="error"]',
                     '.validation-error', '.survey-err', '[role="alert"]',
-                    '.alert-danger', '.has-error'
+                    '.alert-danger', '.has-error', 'ul.errMsg li', '.instruction'
                 ];
                 for (const sel of errorSelectors) {
                     document.querySelectorAll(sel).forEach(el => {
@@ -104,7 +104,7 @@ class PageScraper:
                         const style = window.getComputedStyle(el);
                         if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return;
                         const text = (el.innerText || el.textContent || '').trim();
-                        if (text && text.length > 3 && text.length < 300 && !results.includes(text)) {
+                        if (text && text.length > 3 && text.length < 1000 && !results.includes(text)) {
                             results.push(text);
                         }
                     });
@@ -298,70 +298,128 @@ class PageScraper:
 
             // ── Helper to find specify/other input near a radio/checkbox ──
             const findSpecifyInput = (inputEl, optLabel) => {
-                // 1. Check immediate choice container or row:
-                // If the choice wrapper physically contains a text/number/search input, that input belongs to THIS choice!
                 const choiceWrapper = inputEl.closest('tr, .row, .choice, .element, [class*="choice"], [class*="option"], [class*="answer"], li, label');
+                
+                const getInpPrompt = (inp, fallbackEl) => {
+                    let prompt = '';
+                    if (inp.id) {
+                        try {
+                            const lbl = document.querySelector(`label[for="${CSS.escape(inp.id)}"]`);
+                            if (lbl) prompt = cleanText(lbl.innerText || lbl.textContent);
+                        } catch(e) {}
+                    }
+                    if (!prompt && inp.closest('label')) {
+                        const clone = inp.closest('label').cloneNode(true);
+                        clone.querySelectorAll('input, select, textarea').forEach(n => n.remove());
+                        prompt = cleanText(clone.innerText || clone.textContent);
+                    }
+                    if (!prompt && fallbackEl) {
+                        const clone = fallbackEl.cloneNode(true);
+                        clone.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(n => n.remove());
+                        prompt = cleanText(clone.innerText || clone.textContent || '');
+                    }
+                    if (!prompt && inp.placeholder) {
+                        prompt = inp.placeholder;
+                    }
+                    return prompt;
+                };
+
+                // 1. Check immediate choice container or row:
                 if (choiceWrapper) {
                     const inp = choiceWrapper.querySelector('input[type="text"], input[type="search"], input[type="number"], textarea');
                     if (inp && inp !== inputEl) {
                         claimedSpecifyInputs.add(inp);
-                        let promptText = '';
-                        if (inp.id) {
-                            try {
-                                const lbl = choiceWrapper.querySelector(`label[for="${CSS.escape(inp.id)}"]`);
-                                if (lbl) promptText = cleanText(lbl.innerText || lbl.textContent);
-                            } catch(e) {}
-                        }
-                        if (!promptText && inp.parentElement && inp.parentElement !== choiceWrapper) {
-                            promptText = cleanText(inp.parentElement.innerText || '');
-                        }
-                        if (!promptText && inp.placeholder) {
-                            promptText = inp.placeholder;
-                        }
                         return {
                             found: true,
                             id: inp.id || null,
                             name: inp.name || null,
                             placeholder: inp.placeholder || '',
                             value: inp.value || '',
-                            prompt: promptText
+                            prompt: getInpPrompt(inp, choiceWrapper)
                         };
+                    }
+
+                    // 2. Check next siblings of choiceWrapper (e.g. Decipher/FocusVision separate row for open-ended specify)
+                    let nextRow = choiceWrapper.nextElementSibling;
+                    for (let s = 0; s < 3 && nextRow; s++) {
+                        // Stop if sibling contains its own radio or checkbox
+                        if (nextRow.querySelector('input[type="radio"], input[type="checkbox"]')) break;
+                        const sibInp = (nextRow.matches && nextRow.matches('input[type="text"], input[type="search"], input[type="number"], textarea'))
+                            ? nextRow
+                            : nextRow.querySelector('input[type="text"], input[type="search"], input[type="number"], textarea');
+                        if (sibInp) {
+                            claimedSpecifyInputs.add(sibInp);
+                            return {
+                                found: true,
+                                id: sibInp.id || null,
+                                name: sibInp.name || null,
+                                placeholder: sibInp.placeholder || '',
+                                value: sibInp.value || '',
+                                prompt: getInpPrompt(sibInp, nextRow)
+                            };
+                        }
+                        nextRow = nextRow.nextElementSibling;
                     }
                 }
 
-                const isSpecifyOpt = /other|specify|please\\s*state|explain|details|write[- ]in|qualify/i.test(optLabel || '');
-
-                // 2. Next sibling of choice wrapper or cell (e.g. in table cell layout)
+                // 3. Check siblings of inputEl.parentElement
                 const parent = inputEl.parentElement;
                 if (parent) {
                     let sib = parent.nextElementSibling;
                     for (let j = 0; j < 3 && sib; j++) {
-                        const sibInp = (sib.matches && sib.matches('input[type="text"], input[type="search"], input[type="number"], textarea')) ? sib : sib.querySelector('input[type="text"], input[type="search"], input[type="number"], textarea');
+                        if (sib.querySelector('input[type="radio"], input[type="checkbox"]')) break;
+                        const sibInp = (sib.matches && sib.matches('input[type="text"], input[type="search"], input[type="number"], textarea'))
+                            ? sib
+                            : sib.querySelector('input[type="text"], input[type="search"], input[type="number"], textarea');
                         if (sibInp) {
-                            const sibText = cleanText(sib.innerText || '');
-                            if (isSpecifyOpt || /specify|exact|enter|detail/i.test(sibText) || /specify|exact|oe/i.test(sibInp.name || sibInp.id || '')) {
-                                claimedSpecifyInputs.add(sibInp);
-                                return {
-                                    found: true,
-                                    id: sibInp.id || null,
-                                    name: sibInp.name || null,
-                                    placeholder: sibInp.placeholder || '',
-                                    value: sibInp.value || '',
-                                    prompt: sibText
-                                };
-                            }
+                            claimedSpecifyInputs.add(sibInp);
+                            return {
+                                found: true,
+                                id: sibInp.id || null,
+                                name: sibInp.name || null,
+                                placeholder: sibInp.placeholder || '',
+                                value: sibInp.value || '',
+                                prompt: getInpPrompt(sibInp, sib)
+                            };
                         }
                         sib = sib.nextElementSibling;
                     }
                 }
 
-                // 3. Search question block for unclaimed oe... or specify... text input ONLY if this is an explicit other/specify option
-                if (isSpecifyOpt) {
-                    const qBlock = inputEl.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], [class*="question"], fieldset, form') || document;
-                    const allText = Array.from(qBlock.querySelectorAll('input[type="text"], input[type="search"], textarea'))
-                        .filter(inp => isVisible(inp) && !claimedSpecifyInputs.has(inp));
+                // 4. Search question block for ID / Name matching or specify text inputs
+                const qBlock = inputEl.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], [class*="question"], fieldset, form') || document;
+                const rId = inputEl.id || '';
+                const rName = inputEl.name || '';
+                const rVal = inputEl.value || '';
+                const isSpecifyOpt = /other|specify|please\\s*state|explain|details|write[- ]in|qualify/i.test(optLabel || '');
 
-                    const match = allText.find(inp => /(oe|specify|other)/i.test((inp.id || '') + ' ' + (inp.name || '')));
+                const candidateInps = Array.from(qBlock.querySelectorAll('input[type="text"], input[type="search"], input[type="number"], textarea'))
+                    .filter(inp => isVisible(inp) && !claimedSpecifyInputs.has(inp));
+
+                // 4a. Direct ID / Name match (e.g. S5_r3 -> S5_r3_oe, ans1.0.2 -> ans1.0.2.oe, etc.)
+                for (const cinp of candidateInps) {
+                    const cId = cinp.id || '';
+                    const cName = cinp.name || '';
+                    const cCombo = (cId + ' ' + cName).toLowerCase();
+                    const isIdMatch = (rId && (cId.startsWith(rId) || cName.startsWith(rId))) ||
+                                      (rVal && rVal.length > 1 && (cCombo.includes(rVal.toLowerCase()))) ||
+                                      (/(^|[._\\-])(oe|specify|open)($|[._\\-])/i.test(cCombo) && rVal && cCombo.includes(rVal.toLowerCase()));
+                    if (isIdMatch) {
+                        claimedSpecifyInputs.add(cinp);
+                        return {
+                            found: true,
+                            id: cinp.id || null,
+                            name: cinp.name || null,
+                            placeholder: cinp.placeholder || '',
+                            value: cinp.value || '',
+                            prompt: getInpPrompt(cinp, cinp.parentElement)
+                        };
+                    }
+                }
+
+                // 4b. Explicit Other/Specify or prompt match in question block
+                if (isSpecifyOpt) {
+                    const match = candidateInps.find(inp => /(oe|specify|other)/i.test((inp.id || '') + ' ' + (inp.name || '')));
                     if (match) {
                         claimedSpecifyInputs.add(match);
                         return {
@@ -370,7 +428,7 @@ class PageScraper:
                             name: match.name || null,
                             placeholder: match.placeholder || '',
                             value: match.value || '',
-                            prompt: ''
+                            prompt: getInpPrompt(match, match.parentElement)
                         };
                     }
                 }
@@ -839,6 +897,66 @@ class PageScraper:
                 });
             });
 
+            // Helper to attach an unclaimed input to a preceding radio/checkbox in fields
+            const attachToPrecedingControl = (inputNode) => {
+                const qBlock = inputNode.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], [class*="question"], fieldset, form') || document;
+                const radios = Array.from(qBlock.querySelectorAll('input[type="radio"]'));
+                const checkboxes = Array.from(qBlock.querySelectorAll('input[type="checkbox"]'));
+
+                const getPromptText = (node) => {
+                    if (node.id) {
+                        try {
+                            const lbl = document.querySelector(`label[for="${CSS.escape(node.id)}"]`);
+                            if (lbl) return cleanText(lbl.innerText || lbl.textContent);
+                        } catch(e) {}
+                    }
+                    const parentRow = node.closest('tr, .row, .choice, .element, label');
+                    return cleanText(parentRow?.innerText || node.placeholder || '');
+                };
+
+                // Check radios in this qBlock
+                if (radios.length > 0) {
+                    const precRadio = radios.filter(r => (r.compareDocumentPosition(inputNode) & Node.DOCUMENT_POSITION_FOLLOWING)).pop();
+                    const targetRadio = precRadio || radios[0];
+                    for (let f of fields) {
+                        if (f.fieldType === 'radio' && f.options) {
+                            for (let opt of f.options) {
+                                if ((targetRadio.id && opt.id === targetRadio.id) || (targetRadio.value && opt.value === targetRadio.value)) {
+                                    opt.hasSpecify = true;
+                                    opt.specifyId = inputNode.id || null;
+                                    opt.specifyName = inputNode.name || null;
+                                    opt.specifyPrompt = opt.specifyPrompt || getPromptText(inputNode);
+                                    claimedSpecifyInputs.add(inputNode);
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Check checkboxes in this qBlock
+                if (checkboxes.length > 0) {
+                    const precCb = checkboxes.filter(cb => (cb.compareDocumentPosition(inputNode) & Node.DOCUMENT_POSITION_FOLLOWING)).pop();
+                    const targetCb = precCb || checkboxes[0];
+                    for (let f of fields) {
+                        if (f.fieldType === 'checkbox' && f.options) {
+                            for (let opt of f.options) {
+                                if ((targetCb.id && opt.id === targetCb.id) || (targetCb.value && opt.value === targetCb.value)) {
+                                    opt.hasSpecify = true;
+                                    opt.specifyId = inputNode.id || null;
+                                    opt.specifyName = inputNode.name || null;
+                                    opt.specifyPrompt = opt.specifyPrompt || getPromptText(inputNode);
+                                    claimedSpecifyInputs.add(inputNode);
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return false;
+            };
+
             // ── 5. Text Areas & Open-Ends ──
             document.querySelectorAll('textarea').forEach((ta, ti) => {
                 if (!isVisible(ta)) return;
@@ -846,10 +964,8 @@ class PageScraper:
 
                 const qBlock = ta.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], [class*="question"], fieldset');
                 const hasRadiosOrCheckboxes = qBlock && qBlock.querySelectorAll('input[type="radio"], input[type="checkbox"]').length > 0;
-                const taNameId = ((ta.name || '') + ' ' + (ta.id || '')).toLowerCase();
-                if (/(^|[._\\-])oe(\\d+|[._\\-])/i.test(taNameId) || /specify|other/i.test(taNameId) || hasRadiosOrCheckboxes) {
-                    claimedSpecifyInputs.add(ta);
-                    return;
+                if (hasRadiosOrCheckboxes) {
+                    if (attachToPrecedingControl(ta)) return;
                 }
 
                 const qInfo = getQuestionForControl(ta);
@@ -870,24 +986,12 @@ class PageScraper:
             // ── 6. Numeric & Text Inputs ──
             document.querySelectorAll('input[type="text"], input[type="number"]').forEach((inp, ii) => {
                 if (!isVisible(inp)) return;
-                // Exclude if already attached to radio/checkbox/ranking as specify input
                 if (claimedSpecifyInputs.has(inp)) return;
 
-                // Exclude if inside an "other" or "specify" row/container, or Decipher oe format, or if inside a radio/checkbox question
-                const row = inp.closest('tr, [class*="row"], .other, [class*="other"], .specify, [class*="specify"], .oe, [class*="oe-"]');
-                const rowText = row ? cleanText(row.innerText || '') : '';
-                const inpNameId = ((inp.name || '') + ' ' + (inp.id || '')).toLowerCase();
-                const isOeOrSpecify = /(^|[._\\-])oe(\\d+|[._\\-])/i.test(inpNameId) ||
-                    /specify|other/i.test(inpNameId) ||
-                    /other\\s*\\(|please\\s*specify|^other$/i.test(rowText);
-
-                // Check if this input is inside a question container that has radio buttons or checkboxes
                 const qBlock = inp.closest('.qblock, .question, [class*="qblock"], [class*="question-block"], [class*="question"], fieldset, form');
                 const hasRadiosOrCheckboxes = qBlock && qBlock.querySelectorAll('input[type="radio"], input[type="checkbox"]').length > 0;
-
-                if (isOeOrSpecify || hasRadiosOrCheckboxes) {
-                    claimedSpecifyInputs.add(inp);
-                    return;
+                if (hasRadiosOrCheckboxes) {
+                    if (attachToPrecedingControl(inp)) return;
                 }
 
                 const fieldType = inp.type === 'number' || /percent|amount|allocation|count|revenue|budget/i.test(inp.name || inp.id || '') ? 'numeric' : 'text';
@@ -1055,11 +1159,8 @@ class PageScraper:
 
                     if (radio.checked) {
                         radioGroups[name].selected = labelText;
-                        const isOtherRadio = /other|specify|please\\s*state|explain|details|write[- ]in|qualify/i.test(labelText);
-                        if (isOtherRadio) {
-                            const spec = getSpecText(radio);
-                            if (spec) radioGroups[name].specText = spec;
-                        }
+                        const spec = getSpecText(radio);
+                        if (spec) radioGroups[name].specText = spec;
                     }
                 });
 
@@ -1114,13 +1215,10 @@ class PageScraper:
 
                     if (cb.checked) {
                         cbGroups[gKey].selected.push(labelText);
-                        const isOtherCb = /other|specify|please\\s*state|explain|details|write[- ]in|qualify/i.test(labelText);
-                        if (isOtherCb) {
-                            const spec = getSpecText(cb);
-                            if (spec) {
-                                if (!cbGroups[gKey].specText) cbGroups[gKey].specText = spec;
-                                else cbGroups[gKey].specText += `, ${spec}`;
-                            }
+                        const spec = getSpecText(cb);
+                        if (spec) {
+                            if (!cbGroups[gKey].specText) cbGroups[gKey].specText = spec;
+                            else cbGroups[gKey].specText += `, ${spec}`;
                         }
                     }
                 });
